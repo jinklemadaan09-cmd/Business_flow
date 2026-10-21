@@ -23,7 +23,7 @@
  *   Mail_Log, Zone_Emails, Settings
  */
 
-var APP_VERSION = 'v3.1 (21 Oct 2026)';   // shown on the form and admin page, to check the deployed version
+var APP_VERSION = 'v3.2 (21 Oct 2026)';   // shown on the form and admin page, to check the deployed version
 var CONFIG_SHEET = 'Form_Config';
 var CONFIG_HEADERS = ['Field_ID', 'Step', 'Order', 'Label', 'Type', 'Required', 'Options', 'Help', 'Active', 'Locked'];
 var STEP_NAMES = ['Customer Visit', 'Monthly Business Potential', 'Material Understanding',
@@ -40,6 +40,7 @@ var SETTING_DEFAULTS = [
   ['ADMIN_PIN', '', 'PIN for the admin page (<web app URL>?page=admin). Empty = admin page locked'],
   ['COSTING_HEAD_EMAIL', '', 'Head Costing email (second approval level, gets the Head Costing digest)'],
   ['DIGEST_ON', 'YES', 'YES = send the digest mails at DIGEST_TIMES'],
+  ['INSTANT_MAIL', 'NO', 'YES = also mail the RM / Head Costing the moment a visit reaches them (useful while testing)'],
   ['DIGEST_TIMES', '14:00, 17:00', 'Digest mail times (24h, comma separated). Google sends within that hour'],
   ['TAT_RM_DAYS', '2', 'Days the Regional Manager has to decide'],
   ['TAT_HO_DAYS', '2', 'Days Head Costing has to decide'],
@@ -453,8 +454,10 @@ function submitVisit(p) {
       'RM Email': rm.email, 'RM Status': rm.email ? 'PENDING' : 'NO RM EMAIL', 'HO Status': 'PENDING',
       'RM Token': tok(), 'HO Token': tok(), 'FR Token': tok() });
     writeResponseStatus_(ss, id, { 'Stage': stage });
-    ss.getSheetByName('Mail_Log').appendRow([now, a.customer, a.zone, '', 'NEW VISIT ' + id + ' > ' + stage + ' (goes out in the next digest)']);
-    return { id: id, status: stage + '. ' + (rm.email ? 'The Regional Manager' : 'Head Costing') + ' gets it in the next digest mail.' };
+    ss.getSheetByName('Mail_Log').appendRow([now, a.customer, a.zone, '', 'NEW VISIT ' + id + ' > ' + stage]);
+    var instant = isInstant_(settings);
+    if (instant) mailApprover_(ss, trackerRows_(ss).filter(function (x) { return String(x['Visit ID']) === id; })[0], rm.email ? 'RM' : 'HO');
+    return { id: id, status: stage + '. ' + (rm.email ? 'The Regional Manager' : 'Head Costing') + (instant ? ' has been mailed now.' : ' gets it in the next digest mail.') };
   } finally {
     lock.releaseLock();
   }
@@ -749,6 +752,7 @@ function approveSave(token, lanes, remark) {
       writeResponseStatus_(ss, id, { 'Stage': stage, 'RM Status': status, 'RM Remark': remark, 'RM At': now });
       setLanesStage_(ss, id, stage);
       if (stage === STAGE.RM_REJ) mailRep_(ss, t, 'RM_REJ');
+      else if (isInstant_(settings)) mailApprover_(ss, t, 'HO');
     } else {
       var rates = [];
       decided.forEach(function (d) {
@@ -815,7 +819,7 @@ function rs_(v) { return v === '' || v == null ? '-' : 'Rs ' + esc_(v); }
 
 function sendMail_(ss, m, what) {
   try {
-    m.name = MAIL_FROM_NAME;
+    m.name = m.name || MAIL_FROM_NAME;
     MailApp.sendEmail(m);
     ss.getSheetByName('Mail_Log').appendRow([new Date(), what, '', m.to + (m.cc ? ' | cc: ' + m.cc : ''), 'SENT']);
     return true;
@@ -854,8 +858,57 @@ function mailRep_(ss, t, kind) {
       '<p><b>Reason:</b> ' + esc_(kind === 'RM_REJ' ? t['RM Remark'] : t['HO Remark']) + '</p>' + table;
   }
   var m = { to: to, subject: subject, htmlBody: mailShell_(esc_(t['Customer']), sub, body) };
-  if (settings.COSTING_HEAD_EMAIL) m.replyTo = settings.COSTING_HEAD_EMAIL;
+  if (kind === 'RM_REJ') {
+    var rm = rmOf_(ss, t);
+    m.name = fromName_(rm.name || 'Regional Manager');
+    if (rm.email) m.replyTo = rm.email;
+  } else {
+    m.name = fromName_('Head Costing');
+    if (settings.COSTING_HEAD_EMAIL) m.replyTo = settings.COSTING_HEAD_EMAIL;
+  }
   sendMail_(ss, m, 'Field rep mail (' + kind + ', ' + id + ')');
+}
+
+/** Sender name shown in the inbox, e.g. "Ravi Kumar via Sugam Onboarding". The address is always the deployer's. */
+function fromName_(who) { return String(who || '').trim() ? String(who).trim() + ' via Sugam Onboarding' : MAIL_FROM_NAME; }
+
+function isInstant_(settings) { return String(settings.INSTANT_MAIL).toUpperCase() === 'YES'; }
+
+/** RM of the visit's customer zone (current Zone_Emails, else the email saved on the visit). */
+function rmOf_(ss, t) {
+  var z = findZone_(ss, String(t['Customer Zone'] || ''));
+  return { name: z.name, email: z.email || String(t['RM Email'] || ''), cc: z.cc };
+}
+
+/**
+ * Instant mail (INSTANT_MAIL = YES) to the next approver of one visit.
+ * RM: sent as the field rep (name + reply-to). Head Costing: sent as the RM, or as the field rep when the zone has no RM.
+ */
+function mailApprover_(ss, t, role) {
+  if (!t) return;
+  var settings = settingsWithDefaults_(ss), id = String(t['Visit ID']), rm = rmOf_(ss, t);
+  var to = role === 'RM' ? rm.email : String(settings.COSTING_HEAD_EMAIL || '').trim();
+  if (!to) return;
+  var fromRm = role === 'HO' && t['RM Status'] && t['RM Status'] !== 'NO RM EMAIL';
+  var rows = visitLanes_(ss, id).filter(function (l) { return role === 'RM' || l.rmDec !== 'REJECTED'; }).map(function (l) {
+    return '<tr>' + td_(esc_(laneName_(l))) + td_(rs_(l.suggested)) + (role === 'HO' ? td_(rs_(l.rmRate)) : '') + '</tr>';
+  }).join('');
+  var body = '<p>Dear ' + esc_(role === 'RM' ? (rm.name || 'Regional Manager') : 'Head Costing') + ',</p><p>' +
+    (fromRm ? esc_(rm.name || 'The Regional Manager') + ' has approved' : esc_(t['Field Rep']) + ' (Employee ID ' + esc_(t['Employee ID'] || '-') + ') has submitted') +
+    ' a customer visit for <b>' + esc_(t['Customer']) + '</b>. Please approve or reject each lane within <b>' + tat_(settings, role) + ' days</b>.</p>' +
+    '<table style="border-collapse:collapse;margin:6px 0 14px"><tr>' + th_('Visit ID') + th_('Field rep') + th_('Employee ID') + th_('Customer') + th_('Zone') + th_('Potential / month') + '</tr><tr>' +
+    td_(esc_(id)) + td_(esc_(t['Field Rep'])) + td_(esc_(t['Employee ID'])) + td_('<b>' + esc_(t['Customer']) + '</b>') + td_(esc_(t['Customer Zone'])) + td_(rs_(t['Potential / month'])) + '</tr></table>' +
+    '<table style="border-collapse:collapse;width:100%"><tr>' + th_('Lane') + th_('Field rep price') + (role === 'HO' ? th_('RM rate') : '') + '</tr>' + rows + '</table>' +
+    (fromRm && t['RM Remark'] ? '<p><b>RM remark:</b> ' + esc_(t['RM Remark']) + '</p>' : '') +
+    '<p style="margin-top:16px">' + btn_(linkFor_(t, role), 'Open &amp; approve &rarr;') + '</p>';
+  var m = { to: to, subject: (role === 'RM' ? 'Approval needed: ' : 'Head Costing approval needed: ') + t['Customer'] + ' (' + id + ')',
+    htmlBody: mailShell_(esc_(t['Customer']), esc_(t['Customer Zone']) + ' &middot; Visit ID ' + esc_(id), body),
+    name: fromName_(fromRm ? (rm.name || 'Regional Manager') : t['Field Rep']) };
+  var reply = fromRm ? rm.email : String(t['Rep Email'] || '').trim();
+  if (reply) m.replyTo = reply;
+  if (role === 'RM' && rm.cc) m.cc = rm.cc;
+  if (role === 'HO' && settings.ALWAYS_CC) m.cc = settings.ALWAYS_CC;
+  sendMail_(ss, m, 'Instant ' + role + ' mail (' + id + ')');
 }
 
 /* ----------------------------------------------------------------- digest */
@@ -1066,7 +1119,7 @@ function adminSaveConfig(pin, fields) {
 }
 
 var ADMIN_SETTINGS = ['COSTING_HEAD_EMAIL', 'ALWAYS_CC', 'GR_MASTER_SHEET', 'GR_MASTER_TAB',
-  'DIGEST_ON', 'DIGEST_TIMES', 'TAT_RM_DAYS', 'TAT_HO_DAYS', 'TAT_FR_DAYS'];
+  'DIGEST_ON', 'INSTANT_MAIL', 'DIGEST_TIMES', 'TAT_RM_DAYS', 'TAT_HO_DAYS', 'TAT_FR_DAYS'];
 
 /** Saves zone emails, approval and digest settings, GR master link; re-creates the digest triggers. */
 function adminSaveMail(pin, zones, settings) {

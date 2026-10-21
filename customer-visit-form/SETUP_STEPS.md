@@ -29,7 +29,15 @@ Check **Project Settings > Time zone** is `(GMT+05:30) India Standard Time` so t
 
 ## 3. Who sends the mails
 Every mail is sent from the Google account that deployed the web app ("Execute as: Me"), never from the
-field rep's account. Replies come back to that account, except the field rep mails, which reply to the Head Costing email.
+field rep's account (Google does not let a script send from someone else's address).
+The inbox shows who acted, and Reply goes to that person:
+
+| Mail | Shown as | Reply goes to |
+|---|---|---|
+| New visit to RM (instant mail) | "<field rep> via Sugam Onboarding" | Field rep |
+| RM approved, to Head Costing (instant mail) | "<RM name> via Sugam Onboarding" | RM |
+| HO rates / rejection to field rep | "Head Costing via Sugam Onboarding" (or the RM when the RM rejects) | Head Costing / RM |
+| Digests | "Sugam Customer Onboarding" | Deployer |
 Google limit: about 100 mails a day from a personal Gmail, about 1,500 from Google Workspace.
 
 ## 4. Flow
@@ -47,6 +55,8 @@ Pending at Customer, Customer Refused, Finalized. A pending stage past its TAT s
 
 ## 5. Digest mails (default 2:00 pm and 5:00 pm)
 One list per person instead of one mail per visit. Nobody gets a mail when nothing is pending.
+**Instant mail** (Admin > Approvals & mails, tick box): the RM gets a mail the moment a visit is submitted, and Head Costing
+the moment the RM approves. Use it while testing; it works together with the digests or on its own.
 
 | Goes to | Contains |
 |---|---|

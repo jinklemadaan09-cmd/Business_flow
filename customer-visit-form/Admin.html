@@ -328,9 +328,11 @@ function mailHtml() {
     '<div class="copy"><input readonly value="' + esc(D.trackerUrl) + '" onclick="this.select()"><a class="btn sec" style="text-decoration:none" href="' + esc(D.trackerUrl) + '" target="_blank">Open</a></div></section>' +
     '<section class="card"><div class="tag">DIGEST MAILS</div><h2>Daily digest</h2>' +
     '<p class="hint">Approvers get one list per digest instead of one mail per visit. RM: their zones only. Head Costing: everything pending at Head Costing. ' +
-    'Field rep: visits with HO rates to discuss. Nobody gets a mail when nothing is pending. All mails go from the Google account that deployed the web app.</p>' +
+    'Field rep: visits with HO rates to discuss. Nobody gets a mail when nothing is pending. All mails go from the Google account that deployed the web app; the inbox shows the person who acted (e.g. "Ravi via Sugam Onboarding") and Reply goes to that person.</p>' +
     '<div class="grid"><label class="tog full"><input type="checkbox"' + (on ? ' checked' : '') +
       ' onchange="settings.DIGEST_ON=this.checked?\'YES\':\'NO\';setDirty(true)"> Send digest mails</label>' +
+    '<label class="tog full"><input type="checkbox"' + (String(settings.INSTANT_MAIL).toUpperCase() === 'YES' ? ' checked' : '') +
+      ' onchange="settings.INSTANT_MAIL=this.checked?\'YES\':\'NO\';setDirty(true)"> Instant mail: also mail the RM / Head Costing the moment a visit reaches them (good for testing)</label>' +
     sInput('DIGEST_TIMES', 'Digest times (24 hour, comma separated, e.g. 14:00, 17:00)', 1) + '</div>' +
     '<p class="hint" style="margin:10px 0">' + (D.digestHours.length ? 'Scheduled daily at <b>' + D.digestHours.map(function (h) { return (h % 12 || 12) + ':00 ' + (h < 12 ? 'am' : 'pm'); }).join(' and ') +
       '</b> (' + esc(D.timeZone) + '). Google sends within that hour.' : '<b style="color:var(--crimson)">Not scheduled yet.</b> Press Save to schedule.') + '</p>' +
