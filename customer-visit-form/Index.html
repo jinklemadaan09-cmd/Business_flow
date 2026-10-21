@@ -186,6 +186,7 @@
 
 <script>
 var BOOT = <?!= boot ?>;
+document.addEventListener('DOMContentLoaded', function () { var o = document.querySelector('.org span'); if (o && BOOT.version) o.textContent += ' \u00b7 ' + BOOT.version; });
 var M = BOOT.masters;
 var ORIGIN_ZONES = Object.keys(M.origins).sort();
 var DEST_ZONES = Object.keys(M.dests).sort();

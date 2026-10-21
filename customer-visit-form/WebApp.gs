@@ -23,6 +23,7 @@
  *   Mail_Log, Zone_Emails, Settings
  */
 
+var APP_VERSION = 'v3.1 (21 Oct 2026)';   // shown on the form and admin page, to check the deployed version
 var CONFIG_SHEET = 'Form_Config';
 var CONFIG_HEADERS = ['Field_ID', 'Step', 'Order', 'Label', 'Type', 'Required', 'Options', 'Help', 'Active', 'Locked'];
 var STEP_NAMES = ['Customer Visit', 'Monthly Business Potential', 'Material Understanding',
@@ -133,13 +134,13 @@ function doGet(e) {
   if (file === 'Index') {
     var ss = responseSheet_();
     var m = getMasters_(ss);
-    boot = { steps: STEP_NAMES, fields: activeFields_(readConfig_(ss)), masters: { origins: m.origins, dests: m.dests } };
+    boot = { steps: STEP_NAMES, fields: activeFields_(readConfig_(ss)), masters: { origins: m.origins, dests: m.dests }, version: APP_VERSION };
   } else if (file === 'Approve') {
     boot = approvalView_(e.parameter.t);
   } else if (file === 'Tracker') {
     boot = trackerView_(e.parameter.k);
   } else {
-    boot = { steps: STEP_NAMES, types: FIELD_TYPES };
+    boot = { steps: STEP_NAMES, types: FIELD_TYPES, version: APP_VERSION };
   }
   t.boot = JSON.stringify(boot).replace(/</g, '\\u003c');
   return t.evaluate()
@@ -474,7 +475,7 @@ var LANE_TABS = [CL_TAB, 'Visit_Lanes', 'Visit_Lanes_v2', 'Visit_Lanes_v3'];   /
 
 function customerLanesSheet_(ss) {
   var sh = ss.getSheetByName(CL_TAB);
-  if (sh) return sh;
+  if (sh) { dropOldLaneColumns_(sh); return sh; }
   sh = ss.insertSheet(CL_TAB);
   sh.getRange(1, 1, 1, CL_HEADERS.length).setValues([CL_HEADERS]).setFontWeight('bold').setBackground('#2a3273').setFontColor('#ffffff');
   CL_HEADERS.forEach(function (h, i) { if (CL_COLORS[h]) sh.getRange(1, i + 1).setBackground(CL_COLORS[h]); });
@@ -482,6 +483,14 @@ function customerLanesSheet_(ss) {
   sh.setFrozenColumns(1);
   sh.getRange(1, 1, sh.getMaxRows(), CL_HEADERS.length).createFilter();
   return sh;
+}
+
+/** Card rate and via border were removed from the form: drop their old columns from Customer_Lanes. */
+function dropOldLaneColumns_(sh) {
+  var head = sh.getRange(1, 1, 1, Math.max(sh.getLastColumn(), 1)).getValues()[0];
+  for (var i = head.length - 1; i >= 0; i--) {
+    if (['Card Rate', 'Via Border', 'CH Decision', 'Costing Head Rate', 'Overall Status'].indexOf(String(head[i])) >= 0) sh.deleteColumn(i + 1);
+  }
 }
 
 /** Appends lane rows by header name; columns missing in an older tab are added at the end. */
