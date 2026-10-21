@@ -28,7 +28,7 @@ var CONFIG_HEADERS = ['Field_ID', 'Step', 'Order', 'Label', 'Type', 'Required', 
 var STEP_NAMES = ['Customer Visit', 'Monthly Business Potential', 'Material Understanding',
   'Origin & Destination Mapping', 'Indicative Rate Discussion'];
 var FIELD_TYPES = ['text', 'textarea', 'number', 'money', 'date', 'email', 'tel', 'single', 'multi', 'dropdown', 'zone', 'flows'];
-var MASTER_CACHE_KEY = 'visit_masters_v6';
+var MASTER_CACHE_KEY = 'visit_masters_v7';
 var FLOWS_HELP = 'One block per origin. Tick all its destinations in one go, then add a new block for the next origin.';
 var OLD_FLOWS_HELP = 'One card per flow. Add stops in order: origin, then every place the material goes next.';
 
@@ -194,21 +194,19 @@ function yes_(v) { return /^(yes|y|true|1)$/i.test(String(v).trim()); }
 /* ---------------------------------------------------------------- masters */
 
 /**
- * Unique places from the GR PNL data master:
- *   origins: { originZone: [origin, ...] }
- *   dests:   { destZone: { destination: [deliveryPoint, ...] } }
- * Cached 10 minutes (split in parts, the cache holds 100 KB per key).
+ * Zones and places for the form, fast: script cache (6 h) > saved copy in the hidden tab Master_Cache >
+ * live read of the GR master (slow, big sheet). The hourly trigger runMasterRefresh keeps the copy fresh,
+ * so a field rep never waits for the live read. fresh = read the GR master now (Admin > Reload master now).
  */
+var MASTER_TAB = 'Master_Cache';
+var MASTER_CELL = 45000;   // characters per cell (a cell holds up to 50,000)
+
 function getMasters_(ss, fresh) {
-  var cache = CacheService.getScriptCache();
   if (!fresh) {
-    var n = Number(cache.get(MASTER_CACHE_KEY + '_n') || 0);
-    if (n) {
-      var keys = []; for (var i = 0; i < n; i++) keys.push(MASTER_CACHE_KEY + '_' + i);
-      var got = cache.getAll(keys), str = '';
-      for (var k = 0; k < n; k++) { if (got[keys[k]] == null) { str = null; break; } str += got[keys[k]]; }
-      if (str) return JSON.parse(str);
-    }
+    var hit = masterFromCache_();
+    if (hit) return hit;
+    var saved = masterFromTab_(ss);
+    if (saved) { masterToCache_(saved.json); return saved.m; }
   }
   var settings = settingsWithDefaults_(ss), m;
   try {
@@ -217,11 +215,50 @@ function getMasters_(ss, fresh) {
     m = fallbackMasters_();
     m.error = String(err.message || err);
   }
-  var json = JSON.stringify(m), parts = {}, size = 90000, count = Math.ceil(json.length / size);
+  m.readAt = new Date().toISOString();
+  var json = JSON.stringify(m);
+  masterToCache_(json);
+  if (!m.error) masterToTab_(ss, json);
+  return m;
+}
+
+function masterFromCache_() {
+  var cache = CacheService.getScriptCache(), n = Number(cache.get(MASTER_CACHE_KEY + '_n') || 0);
+  if (!n) return null;
+  var keys = []; for (var i = 0; i < n; i++) keys.push(MASTER_CACHE_KEY + '_' + i);
+  var got = cache.getAll(keys), str = '';
+  for (var k = 0; k < n; k++) { if (got[keys[k]] == null) return null; str += got[keys[k]]; }
+  return JSON.parse(str);
+}
+
+function masterToCache_(json) {
+  var parts = {}, size = 90000, count = Math.ceil(json.length / size);
   for (var p = 0; p < count; p++) parts[MASTER_CACHE_KEY + '_' + p] = json.substr(p * size, size);
   parts[MASTER_CACHE_KEY + '_n'] = String(count);
-  try { cache.putAll(parts, 600); } catch (err) { /* too big to cache, read next time */ }
-  return m;
+  try { CacheService.getScriptCache().putAll(parts, 21600); } catch (err) { /* too big for the cache; the tab copy is used */ }
+}
+
+function masterFromTab_(ss) {
+  var sh = ss.getSheetByName(MASTER_TAB);
+  if (!sh || sh.getLastRow() < 2) return null;
+  var v = sh.getRange(1, 1, sh.getLastRow(), 1).getValues(), json = '';
+  for (var i = 1; i < v.length; i++) json += String(v[i][0]);
+  try { return { m: JSON.parse(json), json: json }; } catch (err) { return null; }
+}
+
+function masterToTab_(ss, json) {
+  var sh = ss.getSheetByName(MASTER_TAB);
+  if (!sh) { sh = ss.insertSheet(MASTER_TAB); sh.hideSheet(); }
+  var rows = [['Copy of the GR master zones and places for the form. Written automatically, do not edit. Updated ' + new Date()]];
+  for (var p = 0; p < json.length; p += MASTER_CELL) rows.push([json.substr(p, MASTER_CELL)]);
+  sh.clearContents();
+  sh.getRange(1, 1, rows.length, 1).setValues(rows);
+}
+
+/** Hourly trigger: re-reads the GR master in the background so the form always opens fast. */
+function runMasterRefresh(e) {
+  if (!e || !e.triggerUid) return;
+  getMasters_(responseSheet_(), true);
 }
 
 function readGrMaster_(settings) {
@@ -909,9 +946,12 @@ function digestHours_(txt) {
   return out.sort(function (a, b) { return a - b; });
 }
 
-/** Recreates the digest triggers from Settings. Returns the hours in use. */
+/** Recreates the digest triggers from Settings and the hourly master refresh. Returns the digest hours in use. */
 function installDigestTriggers_(ss) {
-  ScriptApp.getProjectTriggers().forEach(function (tr) { if (tr.getHandlerFunction() === 'runDigest') ScriptApp.deleteTrigger(tr); });
+  ScriptApp.getProjectTriggers().forEach(function (tr) {
+    if (['runDigest', 'runMasterRefresh'].indexOf(tr.getHandlerFunction()) >= 0) ScriptApp.deleteTrigger(tr);
+  });
+  ScriptApp.newTrigger('runMasterRefresh').timeBased().everyHours(1).create();
   var s = settingsWithDefaults_(ss);
   if (String(s.DIGEST_ON).toUpperCase() !== 'YES') return [];
   var hours = digestHours_(s.DIGEST_TIMES);
@@ -957,9 +997,11 @@ function adminLoad(pin, fresh) {
   Object.keys(masters.origins).sort().forEach(function (z) {
     if (have.indexOf(z.toUpperCase()) < 0) ze.appendRow([z, '', '', '']);
   });
+  var hasRefresh = ScriptApp.getProjectTriggers().some(function (tr) { return tr.getHandlerFunction() === 'runMasterRefresh'; });
+  if (!hasRefresh) installDigestTriggers_(ss);   // first admin visit after this update schedules the digest + hourly refresh
   var s = settingsWithDefaults_(ss);
   var c = masterCounts_(masters);
-  c.source = masters.source; c.error = masters.error || '';
+  c.source = masters.source; c.error = masters.error || ''; c.readAt = masters.readAt || '';
   return {
     config: readConfig_(ss),
     zones: ze.getDataRange().getValues().slice(1).filter(function (r) { return String(r[0]).trim(); })
@@ -1050,7 +1092,7 @@ function adminSendDigest(pin) {
     (r.rm + r.ho + r.fr ? '' : ' (nothing is pending)');
 }
 
-/** Re-reads the GR master now (otherwise it refreshes every 10 minutes). */
+/** Re-reads the GR master now (otherwise the hourly trigger does it). */
 function adminRefreshMasters(pin) {
   return adminLoad(pin, true);
 }

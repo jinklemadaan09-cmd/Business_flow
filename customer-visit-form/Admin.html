@@ -357,7 +357,8 @@ function sInput(k, label, full) {
 function masterHtml() {
   var m = D.masters;
   return '<section class="card"><div class="tag">MASTER</div><h2>Zones & places (GR PNL data master)</h2>' +
-    '<p class="hint">Unique Origin Zone &rsaquo; Origin and Destination Zone &rsaquo; Destination &rsaquo; Delivery Point from the GR data, the same fields the dashboard filters on. The form reads it again every 10 minutes.</p>' +
+    '<p class="hint">Unique Origin Zone &rsaquo; Origin and Destination Zone &rsaquo; Destination &rsaquo; Delivery Point from the GR data, the same fields the dashboard filters on. A copy is refreshed every hour in the background so the form opens fast. Use Reload master now after a big change.</p>' +
+    (m.readAt ? '<p class="hint" style="margin:0 0 8px">Last read: <b>' + esc(new Date(m.readAt).toLocaleString()) + '</b></p>' : '') +
     (m.error ? '<div class="card" style="margin:0 0 12px;border-color:#f3c2c6;background:#fdf0f1;padding:12px 14px;box-shadow:none"><b style="color:var(--crimson)">Could not read the GR master.</b> ' + esc(m.error) + '<br><span class="hint">Using the old lane file copy until this is fixed.</span></div>' : '') +
     '<p class="hint" style="margin:0">Source: <b>' + esc(m.source) + '</b></p>' +
     '<div class="stat"><div><b>' + m.originZones + '</b><span>Origin zones</span></div><div><b>' + m.origins + '</b><span>Origins</span></div>' +

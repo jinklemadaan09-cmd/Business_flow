@@ -60,7 +60,7 @@ The field rep also gets an immediate mail when Head Costing approves (or a rejec
 ## 6. Admin panel
 - **Questions**: add, edit, delete and reorder questions. Sheet columns follow automatically.
 - **Approvals & mails**: Head Costing email, CC, TAT days per level, digest on/off, digest times, **Send now**, tracker link, RM per zone.
-- **Master data**: GR PNL data master link and tab; zones and places reload every 10 minutes.
+- **Master data**: GR PNL data master link and tab; a copy of the zones and places is refreshed every hour in the background (hidden tab `Master_Cache`), so the form opens fast. Use Reload master now after a big change.
 
 ## 7. Sheet tabs
 - `Web_Responses`: one row per visit, one column per question, then Stage, RM Status, RM Remark, RM At,
