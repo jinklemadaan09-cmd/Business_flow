@@ -92,17 +92,23 @@
   .flow { border: 1.5px solid var(--line); border-radius: 12px; padding: 14px; margin-top: 12px; background: #fbfcfe; }
   .flow.err { border-color: var(--crimson); }
   .route { font-size: 12px; color: var(--navy); background: var(--soft); border-radius: 8px; padding: 7px 10px; margin-bottom: 12px; font-weight: 600; word-break: break-word; }
-  .stops { position: relative; margin-left: 6px; }
-  .stop { position: relative; padding: 0 0 14px 26px; }
-  .stop::before { content: ''; position: absolute; left: 6px; top: 22px; bottom: -4px; width: 2px; background: var(--line); }
-  .stop:last-child::before { display: none; }
-  .dot { position: absolute; left: 0; top: 8px; width: 14px; height: 14px; border-radius: 50%; background: #fff; border: 3px solid var(--navy-2); }
-  .stop.first .dot { background: var(--navy); border-color: var(--navy); }
-  .stop.last .dot { border-color: var(--crimson); background: var(--crimson); }
-  .stop-h { display: flex; justify-content: space-between; align-items: center; font-size: 12px; font-weight: 700; letter-spacing: .06em; color: var(--muted); margin-bottom: 6px; }
   .two { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
   @media (max-width: 560px) { .two { grid-template-columns: 1fr; } }
-  .addstop { border: 0; background: none; color: var(--navy-2); font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; padding: 4px 0 4px 26px; }
+  .sec-h { font-size: 12px; font-weight: 700; letter-spacing: .06em; color: var(--muted); margin: 4px 0 6px; }
+  .picker { border: 1.5px solid var(--line); border-radius: 10px; background: #fff; margin-top: 8px; }
+  .picker .list { max-height: 260px; overflow: auto; border-top: 1px solid var(--line); }
+  .opt { display: flex; align-items: center; gap: 10px; padding: 9px 12px; cursor: pointer; font-size: 14px; border-bottom: 1px solid #f1f3f7; }
+  .opt:last-child { border-bottom: 0; }
+  .opt input { width: 18px; height: 18px; flex: 0 0 auto; accent-color: var(--navy); }
+  .opt span { flex: 1; }
+  .opt small { color: var(--muted); font-size: 12px; }
+  .opt.zone span { font-weight: 700; color: var(--navy); }
+  .opt:hover { background: var(--soft); }
+  .picker .bar2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 8px; }
+  @media (max-width: 560px) { .picker .bar2 { grid-template-columns: 1fr; } }
+  .addstop { border: 0; background: none; color: var(--navy-2); font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; padding: 6px 0; }
+  .cnt { font-size: 12px; color: var(--muted); margin-top: 8px; }
+  .clear { border: 0; background: none; color: var(--crimson); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
   .empty { color: var(--muted); padding: 30px 0; text-align: center; }
 </style>
 </head>
@@ -140,14 +146,14 @@ var BOOT = <?!= boot ?>;
 var M = BOOT.masters;
 var ORIGIN_ZONES = Object.keys(M.origins).sort();
 var DEST_ZONES = Object.keys(M.dests).sort();
-var SHORT = ['Visit', 'Business', 'Material', 'Flows', 'Rate'];
+var SHORT = ['Visit', 'Business', 'Material', 'Lanes', 'Rate'];
 
 var STEPS = BOOT.steps.map(function (name, i) {
   return { tag: 'STEP 0' + (i + 1), title: name, short: SHORT[i] || ('Step ' + (i + 1)),
     fields: BOOT.fields.filter(function (f) { return f.step === i + 1; }) };
 }).concat([{ tag: 'REVIEW', title: 'Check & submit', short: 'Submit', review: true, fields: [] }]);
 
-var DRAFT_KEY = 'sugamVisitDraft2';
+var DRAFT_KEY = 'sugamVisitDraft3';
 var data = {}, flows = [], cur = 0, maxSeen = 0;
 var FREQS = ['Daily', '2-3 times a week', 'Weekly', 'Fortnightly', 'Monthly'];
 
@@ -162,7 +168,7 @@ function fieldHtml(f) {
   if (f.type === 'flows') {
     return '<div class="full" id="w_' + f.id + '"><label class="f">' + esc(f.label) + (f.required ? ' <span class="req">*</span>' : '') + '</label>' +
       (f.help ? '<div class="hint" style="margin:0 0 4px">' + esc(f.help) + '</div>' : '') +
-      '<div id="flows"></div><button type="button" class="linkbtn" onclick="addFlow()">+ Add another flow</button></div>';
+      '<div id="flows"></div><button type="button" class="linkbtn" onclick="addFlow()">+ Add another origin</button></div>';
   }
   var k = f.id, v = data[k] == null ? '' : data[k], t = f.type;
   var full = t === 'textarea' || t === 'single' || t === 'multi' || (f.options && f.options.length > 4);
@@ -221,52 +227,103 @@ document.addEventListener('click', function (e) {
 });
 function clearErr(k) { var w = document.getElementById('w_' + k); if (w) w.classList.remove('err'); }
 
-// ---- flows: origin > stop > stop ... ------------------------------------
-function newStop() { return { zone: '', place: '' }; }
+// ---- flows: one origin > many destinations, one block per origin ------
+var pick = {};   // per block picker state: { zone, q }
 function addFlow(silent) {
   var z = '';
   var zf = BOOT.fields.filter(function (f) { return f.type === 'zone'; })[0];
   if (zf && data[zf.id]) z = data[zf.id];
-  flows.push({ stops: [{ zone: z, place: '' }, newStop()], mt: '', freq: '', note: '' });
+  flows.push({ origin: { zone: z, place: '' }, dests: [], mt: '', freq: '', note: '' });
   renderFlows(); save();
-  if (!silent) { var c = document.querySelectorAll('.flow'); c[c.length - 1].scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+  if (!silent) { var c = document.querySelectorAll('.flow'); c[c.length - 1].scrollIntoView({ behavior: 'smooth', block: 'start' }); }
 }
-function removeFlow(i) { flows.splice(i, 1); if (!flows.length) addFlow(true); renderFlows(); save(); }
-function addStop(i) { flows[i].stops.push(newStop()); renderFlows(); save(); }
-function removeStop(i, k) { flows[i].stops.splice(k, 1); renderFlows(); save(); }
-function setStop(i, k, key, v) {
-  flows[i].stops[k][key] = v;
-  if (key === 'zone') flows[i].stops[k].place = '';
+function removeFlow(i) { flows.splice(i, 1); pick = {}; if (!flows.length) addFlow(true); renderFlows(); save(); }
+function setOrigin(i, key, v) {
+  flows[i].origin[key] = v;
+  if (key === 'zone') flows[i].origin.place = '';
   renderFlows(); save();
 }
 function setFlow(i, key, v) { flows[i][key] = v; save(); }
-function stopName(s) { return s.place || (s.zone ? 'ALL OF ' + s.zone : '?'); }
+function placeName(s) { return s.place || ('ALL OF ' + s.zone); }
+function hasDest(i, zone, place) { return flows[i].dests.some(function (d) { return d.zone === zone && d.place === place; }); }
+function toggleDest(i, zone, place) {
+  var ds = flows[i].dests, k = -1;
+  ds.forEach(function (d, j) { if (d.zone === zone && d.place === place) k = j; });
+  if (k >= 0) ds.splice(k, 1);
+  else {
+    if (!place) flows[i].dests = ds = ds.filter(function (d) { return d.zone !== zone; });   // whole zone replaces its cities
+    else if (hasDest(i, zone, '')) return toast('Whole ' + zone + ' is already selected');
+    ds.push({ zone: zone, place: place });
+  }
+  renderList(i); renderChips(i); save();
+}
+function selectAllShown(i) {
+  var items = listItems(i).filter(function (it) { return it.place; });
+  items.forEach(function (it) { if (!hasDest(i, it.zone, it.place) && !hasDest(i, it.zone, '')) flows[i].dests.push({ zone: it.zone, place: it.place }); });
+  renderList(i); renderChips(i); save();
+}
+function clearDests(i) { flows[i].dests = []; renderList(i); renderChips(i); save(); }
+function setPick(i, key, v) { pick[i] = pick[i] || { zone: '', q: '' }; pick[i][key] = v; renderList(i); }
 
+/** What the destination list shows: zone chosen = whole zone + its places; search = matches; else = all zones. */
+function listItems(i) {
+  var p = pick[i] || { zone: '', q: '' }, q = p.q.trim().toUpperCase(), out = [];
+  if (p.zone) {
+    if (!q) out.push({ zone: p.zone, place: '' });
+    (M.dests[p.zone] || []).forEach(function (c) { if (!q || c.indexOf(q) >= 0) out.push({ zone: p.zone, place: c }); });
+  } else if (q.length >= 2) {
+    DEST_ZONES.forEach(function (z) { if (z.indexOf(q) >= 0) out.push({ zone: z, place: '' }); });
+    DEST_ZONES.forEach(function (z) { M.dests[z].forEach(function (c) { if (c.indexOf(q) >= 0) out.push({ zone: z, place: c }); }); });
+  } else {
+    DEST_ZONES.forEach(function (z) { out.push({ zone: z, place: '' }); });
+  }
+  return out.slice(0, 400);
+}
+function renderList(i) {
+  var el = document.getElementById('list' + i); if (!el) return;
+  var items = listItems(i), p = pick[i] || { zone: '', q: '' };
+  el.innerHTML = items.length ? items.map(function (it) {
+    var on = hasDest(i, it.zone, it.place), covered = it.place && hasDest(i, it.zone, '');
+    var zEsc = esc(it.zone).replace(/'/g, "\\'"), pEsc = esc(it.place).replace(/'/g, "\\'");
+    return '<label class="opt' + (it.place ? '' : ' zone') + '"><input type="checkbox"' + (on || covered ? ' checked' : '') + (covered ? ' disabled' : '') +
+      ' onchange="toggleDest(' + i + ',\'' + zEsc + '\',\'' + pEsc + '\')"><span>' + (it.place ? esc(it.place) : 'Whole ' + esc(it.zone)) + '</span><small>' +
+      (it.place ? (p.zone ? '' : esc(it.zone)) : (M.dests[it.zone] || []).length + ' places') + '</small></label>';
+  }).join('') : '<div class="opt"><span class="hint" style="margin:0">No match</span></div>';
+}
+function renderChips(i) {
+  var el = document.getElementById('chips' + i); if (!el) return;
+  var ds = flows[i].dests;
+  el.innerHTML = (ds.length ? '<div class="cnt">' + ds.length + ' destination' + (ds.length > 1 ? 's' : '') + ' selected <button class="clear" onclick="clearDests(' + i + ')">Clear all</button></div>' : '') +
+    '<div class="chips">' + ds.map(function (d) {
+      var zEsc = esc(d.zone).replace(/'/g, "\\'"), pEsc = esc(d.place).replace(/'/g, "\\'");
+      return '<span class="chip">' + esc(placeName(d)) + (d.place ? ' <small>' + esc(d.zone) + '</small>' : '') +
+        '<button onclick="toggleDest(' + i + ',\'' + zEsc + '\',\'' + pEsc + '\')">&times;</button></span>'; }).join('') + '</div>';
+}
 function renderFlows() {
   var el = document.getElementById('flows'); if (!el) return;
   el.innerHTML = flows.map(function (fl, i) {
-    var n = fl.stops.length;
-    return '<div class="flow" id="flow' + i + '"><div class="lane-h"><b>Flow ' + (i + 1) + '</b>' +
-      (flows.length > 1 ? '<button class="x" onclick="removeFlow(' + i + ')">Remove flow</button>' : '') + '</div>' +
-      '<div class="route">' + fl.stops.map(function (s) { return esc(stopName(s)); }).join(' &rarr; ') + '</div>' +
-      '<div class="stops">' + fl.stops.map(function (s, k) {
-        var first = k === 0, zones = first ? ORIGIN_ZONES : DEST_ZONES;
-        var places = s.zone ? ((first ? M.origins : M.dests)[s.zone] || []) : [];
-        return '<div class="stop' + (first ? ' first' : '') + (k === n - 1 && !first ? ' last' : '') + '"><span class="dot"></span>' +
-          '<div class="stop-h"><span>' + (first ? 'ORIGIN (BOOKING)' : (k === n - 1 ? 'GOES TO (FINAL)' : 'THEN GOES TO (STOP ' + k + ')')) + '</span>' +
-          (!first && n > 2 ? '<button class="x" onclick="removeStop(' + i + ',' + k + ')">Remove</button>' : '') + '</div>' +
-          '<div class="two"><select onchange="setStop(' + i + ',' + k + ',\'zone\',this.value)">' + opts(zones, s.zone, first ? 'Origin zone...' : 'Destination zone...') + '</select>' +
-          '<select onchange="setStop(' + i + ',' + k + ',\'place\',this.value)"' + (s.zone ? '' : ' disabled') + '>' +
-          '<option value="">' + (s.zone ? (first ? 'Any branch in zone' : 'Whole zone') : 'Pick zone first') + '</option>' + opts(places, s.place) + '</select></div></div>';
-      }).join('') + '</div>' +
-      '<button type="button" class="addstop" onclick="addStop(' + i + ')">+ Add next stop</button>' +
-      '<div class="two" style="margin-top:10px"><div><label class="f">MT / month on this flow</label><input type="number" inputmode="decimal" min="0" step="any" value="' + esc(fl.mt) + '" oninput="setFlow(' + i + ',\'mt\',this.value)"></div>' +
+    var p = pick[i] || { zone: '', q: '' }, branches = fl.origin.zone ? (M.origins[fl.origin.zone] || []) : [];
+    return '<div class="flow" id="flow' + i + '"><div class="lane-h"><b>Origin ' + (i + 1) + '</b>' +
+      (flows.length > 1 ? '<button class="x" onclick="removeFlow(' + i + ')">Remove</button>' : '') + '</div>' +
+      '<div class="sec-h">FROM (ORIGIN)</div>' +
+      '<div class="two"><select onchange="setOrigin(' + i + ',\'zone\',this.value)">' + opts(ORIGIN_ZONES, fl.origin.zone, 'Origin zone...') + '</select>' +
+      '<select onchange="setOrigin(' + i + ',\'place\',this.value)"' + (fl.origin.zone ? '' : ' disabled') + '>' +
+      '<option value="">' + (fl.origin.zone ? 'Any branch in zone' : 'Pick zone first') + '</option>' + opts(branches, fl.origin.place) + '</select></div>' +
+      '<div class="sec-h" style="margin-top:14px">TO (DESTINATIONS) &middot; tick as many as needed</div>' +
+      '<div class="picker"><div class="bar2"><select onchange="setPick(' + i + ',\'zone\',this.value)">' + opts(DEST_ZONES, p.zone, 'All zones') + '</select>' +
+      '<input placeholder="Search city..." value="' + esc(p.q) + '" oninput="setPick(' + i + ',\'q\',this.value)"></div>' +
+      '<div class="list" id="list' + i + '"></div></div>' +
+      (p.zone ? '<button type="button" class="addstop" style="padding-left:0" onclick="selectAllShown(' + i + ')">Select all places shown</button>' : '') +
+      '<div id="chips' + i + '"></div>' +
+      '<div class="two" style="margin-top:12px"><div><label class="f">MT / month from this origin</label><input type="number" inputmode="decimal" min="0" step="any" value="' + esc(fl.mt) + '" oninput="setFlow(' + i + ',\'mt\',this.value)"></div>' +
       '<div><label class="f">Frequency</label><select onchange="setFlow(' + i + ',\'freq\',this.value)">' + opts(FREQS, fl.freq, 'Select...') + '</select></div></div>' +
-      '<div style="margin-top:8px"><label class="f">Note (optional)</label><input value="' + esc(fl.note) + '" oninput="setFlow(' + i + ',\'note\',this.value)" placeholder="e.g. transshipment at Siliguri"></div>' +
-      '<span class="msg" style="margin-top:8px">Pick a zone for every stop</span></div>';
+      '<div style="margin-top:8px"><label class="f">Note (optional)</label><input value="' + esc(fl.note) + '" oninput="setFlow(' + i + ',\'note\',this.value)"></div>' +
+      '<span class="msg" style="margin-top:8px">Pick the origin zone and at least one destination</span></div>';
   }).join('');
+  flows.forEach(function (fl, i) { renderList(i); renderChips(i); });
 }
-function flowsOk() { return flows.length && flows.every(function (fl) { return fl.stops.length >= 2 && fl.stops.every(function (s) { return s.zone; }); }); }
+function flowOk(fl) { return fl.origin && fl.origin.zone && fl.dests && fl.dests.length; }
+function flowsOk() { return flows.length && flows.every(flowOk); }
 
 // ---- validation & navigation ------------------------------------------
 function badField(f) {
@@ -284,7 +341,7 @@ function valid(step) {
     var bad = badField(f), w = document.getElementById('w_' + f.id);
     if (f.type === 'flows') {
       flows.forEach(function (fl, i) {
-        var b = !(fl.stops.length >= 2 && fl.stops.every(function (s) { return s.zone; }));
+        var b = !flowOk(fl);
         var el = document.getElementById('flow' + i);
         if (el) { el.classList.toggle('err', b); el.querySelector(':scope > .msg').style.display = b ? 'block' : 'none'; if (b) first = first || el; }
       });
@@ -307,7 +364,7 @@ function reviewHtml() {
     s.fields.forEach(function (f) {
       if (f.type === 'flows') {
         flows.forEach(function (fl, i) {
-          h += '<dt>Flow ' + (i + 1) + '</dt><dd>' + fl.stops.map(function (x) { return esc(stopName(x)); }).join(' &rarr; ') +
+          h += '<dt>From ' + esc(placeName(fl.origin)) + '</dt><dd>To ' + fl.dests.map(function (x) { return esc(placeName(x)); }).join(', ') +
             (fl.mt ? ' &middot; ' + esc(fl.mt) + ' MT/month' : '') + (fl.freq ? ' &middot; ' + esc(fl.freq) : '') + '</dd>';
         });
         return;
@@ -345,7 +402,7 @@ function submit() {
 }
 function newVisit() {
   data = { repName: data.repName, repEmail: data.repEmail, visitDate: new Date().toISOString().slice(0, 10) };
-  flows = []; cur = 0; maxSeen = 0;
+  flows = []; pick = {}; cur = 0; maxSeen = 0;
   ['pages', 'stepper', 'bar'].forEach(function (id) { document.getElementById(id).classList.remove('hidden'); });
   document.getElementById('donePage').classList.add('hidden');
   save(); render();

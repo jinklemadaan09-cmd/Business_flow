@@ -62,7 +62,7 @@ Same response sheet, same Zone_Emails / Settings, same mail. Extra:
   naam badla = header badla, delete = column pe "(removed)", purana data safe).
 - **Zones dashboard master se**: engine spreadsheet ke `LANE_ORIGIN` (Booking Lane) aur `LANE_DEST`
   (Broader Lane L2) tabs se unique zones aur locations. Link Admin > Master data me daalo.
-- **Multi-stop flows**: har flow me Origin > Stop 1 > Stop 2 > ... > Final, aur jitne chahe utne flows.
+- **Origin > multiple destinations**: ek origin block me saare destinations ek saath tick karo (poora zone ya cities), naye origin ke liye naya block.
 
 ## Setup (setup() pehle chal chuka hona chahiye)
 Apps Script project me ye 3 files honi chahiye (purani WebApp.gs / Index.html ho to unka content replace karo):
@@ -79,7 +79,7 @@ Apps Script project me ye 3 files honi chahiye (purani WebApp.gs / Index.html ho
 ## Sheet me kya aayega
 - `Form_Config` - saare sawaal (admin panel isi ko badalta hai)
 - `Web_Responses` - ek visit = ek row, har sawaal ka column
-- `Visit_Flows` - har flow ke har leg ki alag row (From zone / From > To zone / To, MT, frequency)
+- `Visit_Lanes` - har origin > destination ki alag row (Origin zone / Origin > Destination zone / Destination, MT, frequency)
 - `Visit_Summary`, `Mail_Log` - pehle jaise
 
 Note: "Customer zone", naam, email, customer, potential aur flows "Core" sawaal hain (mail inhi se banta hai),

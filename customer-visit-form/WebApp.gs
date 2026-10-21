@@ -12,7 +12,7 @@
  * Tabs it uses in the response sheet:
  *   Form_Config    every question (admin edits it from the admin page)
  *   Web_Responses  one row per visit; one column per question, kept in sync with Form_Config
- *   Visit_Flows    one row per leg of every material flow (A > B > C)
+ *   Visit_Lanes    one row per origin > destination (one origin can have many destinations)
  *   Visit_Summary, Mail_Log, Zone_Emails, Settings   (same as the Google Form)
  *
  * Zones and locations come from the dashboard master (engine spreadsheet tabs LANE_ORIGIN,
@@ -23,9 +23,11 @@
 var CONFIG_SHEET = 'Form_Config';
 var CONFIG_HEADERS = ['Field_ID', 'Step', 'Order', 'Label', 'Type', 'Required', 'Options', 'Help', 'Active', 'Locked'];
 var STEP_NAMES = ['Customer Visit', 'Monthly Business Potential', 'Material Understanding',
-  'Origin & Destination Flows', 'Indicative Rate Discussion'];
+  'Origin & Destination Mapping', 'Indicative Rate Discussion'];
 var FIELD_TYPES = ['text', 'textarea', 'number', 'money', 'date', 'email', 'tel', 'single', 'multi', 'dropdown', 'zone', 'flows'];
 var MASTER_CACHE_KEY = 'visit_masters_v2';
+var FLOWS_HELP = 'One block per origin. Tick all its destinations in one go, then add a new block for the next origin.';
+var OLD_FLOWS_HELP = 'One card per flow. Add stops in order: origin, then every place the material goes next.';
 
 var SETTING_DEFAULTS = [
   ['DASHBOARD_MASTER_SHEET', '', 'Link (or ID) of the dashboard engine spreadsheet with tabs LANE_ORIGIN and LANE_DEST'],
@@ -65,7 +67,7 @@ var DEFAULT_FIELDS = [
   ['packing', 3, 'Packing type', 'multi', 0, 'Carton\nBags / Bora\nBundles\nDrums\nWooden crate\nPallet\nLoose', '', 0],
   ['handling', 3, 'Special handling needs', 'textarea', 0, '', '', 0],
   ['risk', 3, 'Special risks / restrictions', 'textarea', 0, '', 'Hazardous, fragile, high value, permits', 0],
-  ['flows', 4, 'Material flows', 'flows', 1, '', 'One card per flow. Add stops in order: origin, then every place the material goes next.', 1],
+  ['flows', 4, 'Origin & destination lanes', 'flows', 1, '', FLOWS_HELP, 1],
   ['coverage', 4, 'Branch coverage & feasibility', 'single', 0, 'All lanes covered\nPartly covered\nNot covered / new arrangement', '', 0],
   ['rateBasis', 5, 'Rate basis', 'single', 0, 'Per kg\nPer package\nPer vehicle (FTL)', '', 0],
   ['curRate', 5, 'Customer current rate', 'money', 0, '', '', 0],
@@ -136,7 +138,15 @@ function readConfig_(ss) {
     sh.getRange(2, 1, rows.length, CONFIG_HEADERS.length).setValues(rows);
     sh.setFrozenRows(1);
   }
-  return sh.getDataRange().getValues().slice(1).filter(function (r) { return String(r[0]).trim(); }).map(function (r) {
+  var vals = sh.getDataRange().getValues();
+  vals.forEach(function (r, i) {   // one-time update of the old multi-stop wording
+    if (String(r[0]).trim() === 'flows' && String(r[7]) === OLD_FLOWS_HELP) {
+      sh.getRange(i + 1, 4).setValue('Origin & destination lanes');
+      sh.getRange(i + 1, 8).setValue(FLOWS_HELP);
+      r[3] = 'Origin & destination lanes'; r[7] = FLOWS_HELP;
+    }
+  });
+  return vals.slice(1).filter(function (r) { return String(r[0]).trim(); }).map(function (r) {
     return {
       id: String(r[0]).trim(), step: Number(r[1]) || 1, order: Number(r[2]) || 0, label: String(r[3]),
       type: String(r[4]).trim() || 'text', required: yes_(r[5]),
@@ -248,13 +258,13 @@ function syncResponseColumns_(ss, config) {
 function submitVisit(p) {
   var ss = responseSheet_();
   var fields = activeFields_(readConfig_(ss));
-  var flows = (p.flows || []).filter(function (fl) { return fl.stops && fl.stops.length; });
+  var flows = (p.flows || []).filter(function (fl) { return fl.origin && (fl.origin.zone || (fl.dests && fl.dests.length)); });
 
   fields.forEach(function (f) {
     if (!f.required) return;
     if (f.type === 'flows') {
-      if (!flows.length || flows.some(function (fl) { return fl.stops.length < 2 || fl.stops.some(function (s) { return !s.zone; }); }))
-        throw new Error('Each flow needs an origin and at least one next stop');
+      if (!flows.length || flows.some(function (fl) { return !fl.origin.zone || !fl.dests || !fl.dests.length; }))
+        throw new Error('Each origin needs a zone and at least one destination');
       return;
     }
     var v = p[f.id];
@@ -266,9 +276,9 @@ function submitVisit(p) {
   try {
     var now = new Date();
     var id = 'SV-' + Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyyMMdd-HHmmss') + '-' + Math.floor(Math.random() * 900 + 100);
-    var stopName = function (s) { return s.place || ('ALL OF ' + s.zone); };
-    var flowText = flows.map(function (fl, i) {
-      return 'Flow ' + (i + 1) + ': ' + fl.stops.map(stopName).join(' > ') +
+    var placeName = function (s) { return s.place || ('ALL OF ' + s.zone); };
+    var flowText = flows.map(function (fl) {
+      return placeName(fl.origin) + ' > ' + fl.dests.map(placeName).join(', ') +
         (fl.mt ? ' | ' + fl.mt + ' MT/month' : '') + (fl.freq ? ' | ' + fl.freq : '') + (fl.note ? ' | ' + fl.note : '');
     }).join('\n');
 
@@ -287,23 +297,22 @@ function submitVisit(p) {
     fields.forEach(function (f) { if (cols.colOf[f.id]) row[cols.colOf[f.id] - 1] = a[f.id]; });
     cols.sheet.appendRow(row);
 
-    // Visit_Flows: one row per leg
-    var vf = ss.getSheetByName('Visit_Flows');
-    var FH = ['Submitted At', 'Visit ID', 'Customer', 'Customer Zone', 'Flow #', 'Leg #', 'From Zone', 'From',
-      'To Zone', 'To', 'Full Route', 'Flow MT / month', 'Frequency', 'Flow Note'];
+    // Visit_Lanes: one row per origin > destination
+    var FH = ['Submitted At', 'Visit ID', 'Customer', 'Customer Zone', 'Origin #', 'Origin Zone', 'Origin',
+      'Destination Zone', 'Destination', 'Origin MT / month', 'Frequency', 'Note'];
+    var laneTab = 'Visit_Lanes', vf = ss.getSheetByName(laneTab);
+    if (vf && vf.getRange(1, 5).getValue() !== 'Origin #') { laneTab = 'Visit_Lanes_v2'; vf = ss.getSheetByName(laneTab); }   // older layout
     if (!vf) {
-      vf = ss.insertSheet('Visit_Flows');
+      vf = ss.insertSheet(laneTab);
       vf.getRange(1, 1, 1, FH.length).setValues([FH]).setFontWeight('bold').setBackground('#1f3864').setFontColor('#ffffff');
       vf.setFrozenRows(1);
     }
     var legs = [];
     flows.forEach(function (fl, i) {
-      var route = fl.stops.map(stopName).join(' > ');
-      for (var k = 1; k < fl.stops.length; k++) {
-        var s0 = fl.stops[k - 1], s1 = fl.stops[k];
-        legs.push([now, id, a.customer || '', a.zone || '', i + 1, k, s0.zone, stopName(s0), s1.zone, stopName(s1),
-          route, fl.mt || '', fl.freq || '', fl.note || '']);
-      }
+      fl.dests.forEach(function (d) {
+        legs.push([now, id, a.customer || '', a.zone || '', i + 1, fl.origin.zone, placeName(fl.origin),
+          d.zone, placeName(d), fl.mt || '', fl.freq || '', fl.note || '']);
+      });
     });
     if (legs.length) vf.getRange(vf.getLastRow() + 1, 1, legs.length, FH.length).setValues(legs);
 
@@ -313,9 +322,8 @@ function submitVisit(p) {
     var origins = [], finals = [], finalZones = [];
     var addU = function (arr, v) { if (v && arr.indexOf(v) < 0) arr.push(v); };
     flows.forEach(function (fl) {
-      addU(origins, stopName(fl.stops[0]));
-      var last = fl.stops[fl.stops.length - 1];
-      addU(finals, stopName(last)); addU(finalZones, last.zone);
+      addU(origins, placeName(fl.origin));
+      fl.dests.forEach(function (d) { addU(finals, placeName(d)); addU(finalZones, d.zone); });
     });
     var vs = ss.getSheetByName('Visit_Summary');
     if (vs) vs.appendRow([now, a.visitDate || '', a.repName || '', a.repEmail || '', a.customer || '', a.zone || '',
