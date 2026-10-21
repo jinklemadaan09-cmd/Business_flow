@@ -26,7 +26,7 @@ env:
   # Apps Script > Project Settings > IDs > Script ID
   SCRIPT_ID: "1StEG6mHR8AGY_VBWBnteZR4mcm1vX6Eoq8veuoAAYXe4eULciqMMnROz"
   # Apps Script > Deploy > Manage deployments > the web app > Deployment ID
-  DEPLOYMENT_ID: ""
+  DEPLOYMENT_ID: "AKfycbz5uqcsPZIDNTqUbaEoRzIHhiPlkuFvC0FFLQ2zzJk_EBzS-5Aw6sW8TqN2GsOuwBkt0A"
 
 jobs:
   deploy:
