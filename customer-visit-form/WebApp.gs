@@ -40,7 +40,7 @@ var SETTING_DEFAULTS = [
   ['ADMIN_PIN', '', 'PIN for the admin page (<web app URL>?page=admin). Empty = admin page locked'],
   ['COSTING_HEAD_EMAIL', '', 'Head Costing email (second approval level, gets the Head Costing digest)'],
   ['DIGEST_ON', 'YES', 'YES = send the digest mails at DIGEST_TIMES'],
-  ['INSTANT_MAIL', 'NO', 'YES = also mail the RM / Head Costing the moment a visit reaches them (useful while testing)'],
+  ['INSTANT_MAIL', 'YES', 'YES = also mail the RM / Head Costing the moment a visit reaches them (useful while testing)'],
   ['DIGEST_TIMES', '14:00, 17:00', 'Digest mail times (24h, comma separated). Google sends within that hour'],
   ['TAT_RM_DAYS', '2', 'Days the Regional Manager has to decide'],
   ['TAT_HO_DAYS', '2', 'Days Head Costing has to decide'],
