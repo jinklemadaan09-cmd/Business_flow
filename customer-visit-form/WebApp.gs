@@ -27,7 +27,7 @@ var CONFIG_HEADERS = ['Field_ID', 'Step', 'Order', 'Label', 'Type', 'Required', 
 var STEP_NAMES = ['Customer Visit', 'Monthly Business Potential', 'Material Understanding',
   'Origin & Destination Mapping', 'Indicative Rate Discussion'];
 var FIELD_TYPES = ['text', 'textarea', 'number', 'money', 'date', 'email', 'tel', 'single', 'multi', 'dropdown', 'zone', 'flows'];
-var MASTER_CACHE_KEY = 'visit_masters_v4';
+var MASTER_CACHE_KEY = 'visit_masters_v5';
 var FLOWS_HELP = 'One block per origin. Tick all its destinations in one go, then add a new block for the next origin.';
 var OLD_FLOWS_HELP = 'One card per flow. Add stops in order: origin, then every place the material goes next.';
 
@@ -45,10 +45,11 @@ var GR_COLS = {
   destZone: ['destzone', 'destinationzone', 'dstzone'],
   dest: ['destname', 'destination', 'destinationname', 'destcity'],
   deliveryPoint: ['deliverypoint', 'delpoint', 'deliverypointname', 'dp'],
+  viaBorder: ['viaborder', 'via', 'border', 'viaborderpoint', 'borderpoint'],
   cardRate: ['cardrate', 'cardratekg', 'cardrateperkg', 'cardratepkg', 'tariffrate', 'card'],
   grDate: ['grdt', 'grdate', 'bookingdate', 'date']
 };
-var GR_OPTIONAL = ['deliveryPoint', 'cardRate', 'grDate'];
+var GR_OPTIONAL = ['deliveryPoint', 'viaBorder', 'cardRate', 'grDate'];
 
 var SUMMARY_APPROVAL_HEADERS = ['Visit ID', 'Costing Head Status', 'Costing Head Rate', 'Costing Head Remark', 'Costing Head Time',
   'RM Status', 'RM Rate', 'RM Remark', 'RM Time', 'Overall Status'];
@@ -236,10 +237,11 @@ function readGrMaster_(settings) {
   if (missing.length) throw new Error('Columns not found in ' + tab + ': ' + missing.join(', '));
   var read = function (k) { return col[k] < 0 ? null : sh.getRange(2, col[k] + 1, lastRow - 1, 1).getValues(); };
   var oz = read('originZone'), o = read('origin'), dz = read('destZone'), d = read('dest'), dp = read('deliveryPoint');
-  var cr = read('cardRate'), gd = read('grDate'), card = {}, cardAt = {};
-  // Card rate per lane: newest GR date wins, then the higher rate.
-  var putCard = function (key, rate, t) {
-    if (!(key in card) || t > cardAt[key] || (t === cardAt[key] && rate > card[key])) { card[key] = rate; cardAt[key] = t; }
+  var cr = read('cardRate'), gd = read('grDate'), vb = read('viaBorder'), card = {}, cardAt = {};
+  // Card rate per lane and via border ('' = no border): newest GR date wins, then the higher rate.
+  var putCard = function (key, via, rate, t) {
+    var c = card[key] = card[key] || {}, at = key + '|' + via;
+    if (!(via in c) || t > cardAt[at] || (t === cardAt[at] && rate > c[via])) { c[via] = rate; cardAt[at] = t; }
   };
   var timeOf = function (v) { if (v instanceof Date) return v.getTime(); var t = Date.parse(v); return isNaN(t) ? 0 : t; };
   var clean = function (v) { v = String(v == null ? '' : v).trim(); return v && v.toUpperCase() !== 'UNSPECIFIED' ? v : ''; };
@@ -255,15 +257,15 @@ function readGrMaster_(settings) {
     }
     var rate = cr ? Number(cr[r][0]) : 0;
     if (on && rate > 0) {
-      var t = gd ? timeOf(gd[r][0]) : 0;
-      if (p) putCard(cardKey_(on, '', p), Math.round(rate * 100) / 100, t);
-      if (dn) putCard(cardKey_(on, dn, ''), Math.round(rate * 100) / 100, t);
+      var t = gd ? timeOf(gd[r][0]) : 0, via = vb ? clean(vb[r][0]).toUpperCase() : '';
+      if (p) putCard(cardKey_(on, '', p), via, Math.round(rate * 100) / 100, t);
+      if (dn) putCard(cardKey_(on, dn, ''), via, Math.round(rate * 100) / 100, t);
     }
   }
   Object.keys(origins).forEach(function (z) { origins[z].sort(); });
   Object.keys(dests).forEach(function (z) { Object.keys(dests[z]).forEach(function (n) { dests[z][n].sort(); }); });
   return { source: 'GR PNL data master: ' + file.getName() + ' / ' + tab + ' (' + (lastRow - 1) + ' GR rows)', origins: origins, dests: dests, card: card,
-    cardNote: cr ? '' : 'No card rate column found in ' + tab + ' (looked for: CARD RATE)' };
+    cardNote: (cr ? '' : 'No card rate column found in ' + tab + ' (looked for: CARD RATE). ') + (vb ? '' : 'No via border column found (looked for: VIA BORDER), card rates ignore the border.') };
 }
 
 /**
@@ -275,11 +277,19 @@ function cardKey_(origin, dest, dp) {
   return u(dp) ? 'P|' + u(origin) + '|' + u(dp) : 'D|' + u(origin) + '|' + u(dest);
 }
 
-/** Card rate for one lane, '' when the origin is a whole zone or no rate is known. */
+/**
+ * Card rate for one lane, '' when the origin is a whole zone or no rate is known.
+ * Via border: the picked border's rate, else the rate with no border, else the only border there is.
+ * Same order as cardPick() in Index.html.
+ */
 function cardRateOf_(m, origin, d) {
   if (!m || !m.card || !origin || !origin.place || !d.place) return '';
-  var v = m.card[cardKey_(origin.place, d.place, d.dp)];
-  return v == null ? '' : v;
+  var c = m.card[cardKey_(origin.place, d.place, d.dp)];
+  if (!c) return '';
+  var via = String(d.via || '').trim().toUpperCase(), vias = Object.keys(c);
+  if (via && via in c) return c[via];
+  if ('' in c) return c[''];
+  return vias.length === 1 ? c[vias[0]] : '';
 }
 
 /** Lane master copy inside the script, used only when the GR master cannot be read. */
@@ -391,7 +401,7 @@ function submitVisit(p) {
     flows.forEach(function (fl) { fl.dests.forEach(function (d) { d.card = cardRateOf_(masters, fl.origin, d); }); });
     var id = 'SV-' + Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyyMMdd-HHmmss') + '-' + Math.floor(Math.random() * 900 + 100);
     var flowText = flows.map(function (fl) {
-      return originName_(fl.origin) + ' > ' + fl.dests.map(function (d) { return destName_(d) + (priceOf_(d) !== '' ? ' (Rs ' + priceOf_(d) + ')' : ''); }).join(', ') +
+      return originName_(fl.origin) + ' > ' + fl.dests.map(function (d) { return destName_(d) + (d.via ? ' via ' + d.via : '') + (priceOf_(d) !== '' ? ' (Rs ' + priceOf_(d) + ')' : ''); }).join(', ') +
         (fl.mt ? ' | ' + fl.mt + ' MT/month' : '') + (fl.freq ? ' | ' + fl.freq : '') + (fl.note ? ' | ' + fl.note : '');
     }).join('\n');
 
@@ -418,7 +428,7 @@ function submitVisit(p) {
         lanes.push({ 'Customer': a.customer || '', 'Customer Zone': a.zone || '', 'Visit ID': id, 'Visit Date': a.visitDate || '', 'Submitted At': now,
           'Field Rep': a.repName || '', 'Lane': n + ' of ' + total, 'Origin #': i + 1, 'Origin Zone': fl.origin.zone, 'Origin': originName_(fl.origin),
           'Destination Zone': d.zone, 'Destination': d.place || ('ALL OF ' + d.zone), 'Delivery Point': d.dp || '',
-          'Lane (From > To)': originName_(fl.origin) + ' > ' + destName_(d), 'Card Rate': d.card, 'Suggested Price (Field Rep)': priceOf_(d),
+          'Lane (From > To)': originName_(fl.origin) + ' > ' + destName_(d) + (d.via ? ' (via ' + d.via + ')' : ''), 'Via Border': d.via || '', 'Card Rate': d.card, 'Suggested Price (Field Rep)': priceOf_(d),
           'Origin MT / month': fl.mt || '', 'Frequency': fl.freq || '', 'Note': fl.note || '', 'Lane Status': 'PENDING', 'Overall Status': 'PENDING' });
       });
     });
@@ -454,7 +464,7 @@ function submitVisit(p) {
 var CL_TAB = 'Customer_Lanes';
 var CL_HEADERS = ['Customer', 'Customer Zone', 'Visit ID', 'Visit Date', 'Submitted At', 'Field Rep', 'Lane',
   'Origin #', 'Origin Zone', 'Origin', 'Destination Zone', 'Destination', 'Delivery Point', 'Lane (From > To)',
-  'Card Rate', 'Suggested Price (Field Rep)', 'Origin MT / month', 'Frequency', 'Note',
+  'Via Border', 'Card Rate', 'Suggested Price (Field Rep)', 'Origin MT / month', 'Frequency', 'Note',
   'CH Decision', 'Costing Head Rate', 'RM Decision', 'RM Rate', 'Lane Status', 'Overall Status'];
 var LANE_DEC_HEADERS = { 'Costing Head': 'CH Decision', 'Regional Manager': 'RM Decision' };
 var CL_COLORS = { 'Card Rate': '#3b45a3', 'Suggested Price (Field Rep)': '#127a43', 'CH Decision': '#e9622b', 'Costing Head Rate': '#e9622b',
@@ -566,7 +576,7 @@ function visitMailHtml_(ss, id, a, rows, flows, link, greetName, roleLabel) {
     fl.dests.forEach(function (d) {
       laneRows.push('<tr><td style="' + td + '">' + esc_(fl.origin.zone) + '</td><td style="' + td + '">' + esc_(originName_(fl.origin)) +
         '</td><td style="' + td + '">' + esc_(d.zone) + '</td><td style="' + td + '">' + esc_(d.place || 'ALL') + '</td><td style="' + td + '">' +
-        esc_(d.dp || '') + '</td><td style="' + td + '">' + (d.card !== '' && d.card != null ? 'Rs ' + d.card : '-') + '</td><td style="' + td + 'font-weight:bold;color:#127a43">' + (priceOf_(d) !== '' ? 'Rs ' + priceOf_(d) : '-') + '</td><td style="' + td + '">' + esc_(fl.mt || '') + '</td><td style="' + td + '">' + esc_(fl.freq || '') + '</td></tr>');
+        esc_(d.dp || '') + (d.via ? '<br><small>via ' + esc_(d.via) + '</small>' : '') + '</td><td style="' + td + '">' + (d.card !== '' && d.card != null ? 'Rs ' + d.card : '-') + '</td><td style="' + td + 'font-weight:bold;color:#127a43">' + (priceOf_(d) !== '' ? 'Rs ' + priceOf_(d) : '-') + '</td><td style="' + td + '">' + esc_(fl.mt || '') + '</td><td style="' + td + '">' + esc_(fl.freq || '') + '</td></tr>');
     });
   });
   var th = function (t) { return '<th style="' + td + 'background:#2a3273;color:#fff;text-align:left;font-size:12px">' + t + '</th>'; };
@@ -634,7 +644,7 @@ function approvalView_(token) {
       lanes.push({ tab: n, row: i + 1, oz: r[ix('Origin Zone')], o: r[ix('Origin')], dz: r[ix('Destination Zone')], d: r[ix('Destination')],
         dp: ix('Delivery Point') >= 0 ? r[ix('Delivery Point')] : '', mt: r[ix('Origin MT / month')], fq: r[ix('Frequency')],
         rate: mine >= 0 ? r[mine] : '', otherRate: other >= 0 ? r[other] : '', suggested: sug >= 0 ? r[sug] : '', card: card >= 0 ? r[card] : '',
-        dec: myDec >= 0 ? r[myDec] : '', otherDec: otherDec >= 0 ? r[otherDec] : '' });
+        via: ix('Via Border') >= 0 ? r[ix('Via Border')] : '', dec: myDec >= 0 ? r[myDec] : '', otherDec: otherDec >= 0 ? r[otherDec] : '' });
     });
   });
   var others = f.all.slice(1).filter(function (r) { return String(r[0]) === id && String(r[6]) !== String(token); })

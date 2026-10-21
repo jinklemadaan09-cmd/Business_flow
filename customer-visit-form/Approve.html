@@ -94,7 +94,7 @@
 
   .done { text-align: center; padding: 36px 20px; }
   .done .ic { width: 64px; height: 64px; border-radius: 50%; background: #e6f4ec; color: var(--ok); display: grid; place-items: center; margin: 0 auto 12px; font-size: 32px; }
-  .toast { position: fixed; left: 50%; bottom: 84px; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 10px 16px; border-radius: 10px; font-size: 13px; display: none; z-index: 20; max-width: 90%; }
+  .toast { pointer-events: none; position: fixed; left: 50%; bottom: 84px; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 10px 16px; border-radius: 10px; font-size: 13px; display: none; z-index: 20; max-width: 90%; }
   .hidden { display: none !important; }
 </style>
 
@@ -210,7 +210,7 @@ function render() {
     B.lanes.map(function (l, k) {
       var d = DEC[k];
       return '<tr class="' + (d === 'APPROVED' ? 'ya' : d === 'REJECTED' ? 'yr' : '') + '" id="lr' + k + '"><td><b>' + esc(l.o) + ' &rarr; ' + esc(l.d) + (l.dp ? ' &rsaquo; ' + esc(l.dp) : '') + '</b>' +
-        '<small>' + esc(l.dz) + (l.mt ? ' &middot; ' + esc(l.mt) + ' MT/mo' : '') + '</small></td>' +
+        '<small>' + esc(l.dz) + (l.via ? ' &middot; via ' + esc(l.via) : '') + (l.mt ? ' &middot; ' + esc(l.mt) + ' MT/mo' : '') + '</small></td>' +
         '<td class="n" data-l="Card rate">' + money(l.card) + '</td><td class="n sg" data-l="Field rep">' + money(l.suggested) + '</td>' +
         (hasOther ? '<td class="n" data-l="' + esc(otherShort) + '">' + (l.otherDec ? '<span class="dot ' + esc(l.otherDec) + '"></span>' : '') + money(l.otherRate) + '</td>' : '') +
         '<td class="n ip" data-l="Approved price"><div class="pre lr-i"><span>&#8377;</span><input class="lrate" data-k="' + k + '" type="number" inputmode="decimal" min="0" step="any" placeholder="Price" value="' + esc(l.rate) + '"></div></td>' +

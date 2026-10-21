@@ -70,7 +70,7 @@ Code badalne ke baad hamesha: **Deploy > Manage deployments > pencil > Version: 
 
 ## Kya hota hai
 1. Field rep form bharta hai (zones / origin / destination / delivery point GR PNL data master se, unique). List table jaisi hai: **Destination / delivery point | Card rate | Your price**. Har destination aur har delivery point alag se tick / untick hota hai (har ek apni lane). Tick karte hi usi line me price box aata hai.
-2. **Card rate** GR PNL master ke CARD RATE column se: delivery point chuna = origin + delivery point, warna origin + destination. Ek lane ke kai GR hon to sabse naya GR DT wala rate, barabar ho to zyada wala. Origin "Any branch in zone" ho to card rate "–".
+2. **Card rate** GR PNL master ke CARD RATE column se: delivery point chuna = origin + delivery point, warna origin + destination. Ek lane ke kai GR hon to sabse naya GR DT wala rate, barabar ho to zyada wala. Origin "Any branch in zone" ho to card rate "–". **Via border**: master me VIA BORDER column ho aur ek lane ke rate border ke hisaab se alag hon, to tick ki hui line ke neeche "Via ..." dropdown aata hai (har border ka rate saath me). Na chuno to bina border wala rate, warna akela border ho to wahi. Chuna hua border `Customer_Lanes` > "Via Border" me save hota hai.
 3. **Costing Head** aur zone ke **Regional Manager** ko alag-alag mail jata hai: upar "Approve / Reject & enter rate" button, neeche lanes (card rate + field rep price ke saath) aur poori visit details.
 4. Approval page pe har lane ki row: Card rate | Field rep | doosre approver ka rate | Approved price | ✓ / ✗. Upar "Approve all" / "Reject all" aur "same price for all". Har lane ka decision dena zaroori hai.
 5. Sheet me save hota hai:
@@ -81,7 +81,7 @@ Code badalne ke baad hamesha: **Deploy > Manage deployments > pencil > Version: 
 
 ## Zones & places (GR PNL data master)
 Settings me `GR_MASTER_SHEET` (default: GR PNL mirror sheet) aur `GR_MASTER_TAB` (default `DASHBOARD_MASTER`).
-Columns jo padhe jaate hain: Origin Zone, Origin, Dest Zone, Destname, Delivery Point, Card Rate, GR DT (naam me space/underscore/case
+Columns jo padhe jaate hain: Origin Zone, Origin, Dest Zone, Destname, Delivery Point, Via Border, Card Rate, GR DT (naam me space/underscore/case
 se farak nahi padta). "UNSPECIFIED" values chhod di jaati hain. Har 10 minute me refresh, ya Admin > Master data >
 Reload master now. Agar padh nahi paya to Admin me error dikhega aur purani lane file copy use hogi.
 
