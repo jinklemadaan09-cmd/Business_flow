@@ -371,9 +371,18 @@ function masterHtml() {
     sInput('GR_MASTER_TAB', 'Tab name') + '</div>' +
     '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px"><button class="btn pri" onclick="saveMaster()">Save & reload master</button>' +
     '<button class="btn sec" onclick="refreshMaster()">Reload master now</button>' +
-    '<a class="btn sec" style="text-decoration:none" href="' + esc(D.sheetUrl) + '" target="_blank">Open response sheet</a></div></section>';
+    '<a class="btn sec" style="text-decoration:none" href="' + esc(D.sheetUrl) + '" target="_blank">Open response sheet</a></div></section>' +
+    '<section class="card"><div class="tag">CLEAN UP</div><h2>Old tabs</h2>' +
+    (D.oldTabs && D.oldTabs.length ?
+      '<p class="hint">These tabs are from earlier versions (old Google Form and old approval flow). The web form no longer uses them: <b>' + esc(D.oldTabs.join(', ')) + '</b>.</p>' +
+      '<button class="btn sec" onclick="removeOldTabs()">Remove old tabs</button>' :
+      '<p class="hint">No old tabs left. The sheet has only the tabs the web form uses.</p>') + '</section>';
 }
 function refreshMaster() { run('adminRefreshMasters', [pin], function (d) { load(d); toast('Master reloaded'); }); }
+function removeOldTabs() {
+  if (!confirm('Delete these tabs and their data from the sheet?\n\n' + D.oldTabs.join('\n') + '\n\nThis cannot be undone.')) return;
+  run('adminRemoveOldTabs', [pin], function (d) { load(d); toast(d.removed.length ? 'Removed: ' + d.removed.join(', ') : 'Nothing to remove'); });
+}
 function saveMaster() { run('adminSaveMail', [pin, zones, settings, true], function (d) { load(d); toast('Saved. Master reloaded'); }); }
 
 // ---- save -------------------------------------------------------------

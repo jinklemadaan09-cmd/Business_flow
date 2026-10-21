@@ -23,7 +23,7 @@
  *   Mail_Log, Zone_Emails, Settings
  */
 
-var APP_VERSION = 'v3.3 (21 Oct 2026)';   // shown on the form and admin page, to check the deployed version
+var APP_VERSION = 'v3.4 (21 Oct 2026)';   // shown on the form and admin page, to check the deployed version
 var CONFIG_SHEET = 'Form_Config';
 var CONFIG_HEADERS = ['Field_ID', 'Step', 'Order', 'Label', 'Type', 'Required', 'Options', 'Help', 'Active', 'Locked'];
 var STEP_NAMES = ['Customer Visit', 'Monthly Business Potential', 'Material Understanding',
@@ -1084,7 +1084,8 @@ function adminLoad(pin, fresh) {
     sheetUrl: ss.getUrl(),
     trackerUrl: trackerUrl_(ss),
     digestHours: triggers.filter(function (tr) { return tr.getHandlerFunction() === 'runDigest'; }).length ? digestHours_(s.DIGEST_TIMES) : [],
-    timeZone: Session.getScriptTimeZone()
+    timeZone: Session.getScriptTimeZone(),
+    oldTabs: oldTabs_(ss)
   };
 }
 
@@ -1171,6 +1172,21 @@ function adminSaveMail(pin, zones, settings, fresh) {
   try { installDigestTriggers_(ss); } catch (err) { warning = 'Saved, but the digest schedule could not be set: ' + err.message; }
   var out = adminLoad(pin, !!fresh);
   out.warning = warning;
+  return out;
+}
+
+/** Tabs from earlier versions (old Google Form and old approval flow). The web form does not write to them. */
+var OLD_TABS = ['Visit_Lanes', 'Visit_Lanes_v2', 'Visit_Lanes_v3', 'Visit_Flows', 'Approvals', 'Visit_Summary', 'Masters'];
+function oldTabs_(ss) { return OLD_TABS.filter(function (n) { return ss.getSheetByName(n); }); }
+
+/** "Remove old tabs" in Admin. */
+function adminRemoveOldTabs(pin) {
+  var ss = responseSheet_();
+  checkPin_(ss, pin);
+  var gone = oldTabs_(ss);
+  gone.forEach(function (n) { ss.deleteSheet(ss.getSheetByName(n)); });
+  var out = adminLoad(pin, false);
+  out.removed = gone;
   return out;
 }
 
