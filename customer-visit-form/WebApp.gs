@@ -1,23 +1,25 @@
 /**
- * SUGAM GROUP - Customer Visit web app (custom HTML form + admin panel)
+ * SUGAM GROUP - Customer Visit web app (custom HTML form, admin panel, approvals)
  *
- * Lives in the SAME Apps Script project as Sugam_Customer_Visit_Form.gs
- * (setup() must have been run there once). Files in the project:
- *   Sugam_Customer_Visit_Form.gs (or Code.gs), WebApp.gs, Index.html, Admin.html
+ * Lives in the SAME Apps Script project as Code.gs (setup() must have been run there once).
+ * Files in the project: Code.gs, WebApp.gs, Index.html, Admin.html, Approve.html
  *
  * Deploy > New deployment > Web app > Execute as: Me > Who has access: Anyone.
  *   Field reps:  <web app URL>
  *   Admin:       <web app URL>?page=admin   (PIN = ADMIN_PIN in tab Settings)
+ *   Approvers:   get their own link in the visit mail (<web app URL>?page=approve&t=<token>)
  *
  * Tabs it uses in the response sheet:
  *   Form_Config    every question (admin edits it from the admin page)
  *   Web_Responses  one row per visit; one column per question, kept in sync with Form_Config
  *   Visit_Lanes    one row per origin > destination (one origin can have many destinations)
- *   Visit_Summary, Mail_Log, Zone_Emails, Settings   (same as the Google Form)
+ *   Visit_Summary  one row per visit, with Costing Head / RM approval, rate and overall status
+ *   Approvals      one row per approver per visit (token, status, rate, remark, time)
+ *   Mail_Log, Zone_Emails, Settings
  *
- * Zones and locations come from the dashboard master (engine spreadsheet tabs LANE_ORIGIN,
- * LANE_DEST). Put its link in Settings > DASHBOARD_MASTER_SHEET. Until then the lane master
- * copy inside this script is used.
+ * Zones and places come from the GR PNL data master (tab DASHBOARD_MASTER of the spreadsheet in
+ * Settings > GR_MASTER_SHEET): unique Origin Zone > Origin and Destination Zone > Destination >
+ * Delivery Point, the same fields the dashboard filters on.
  */
 
 var CONFIG_SHEET = 'Form_Config';
@@ -25,16 +27,29 @@ var CONFIG_HEADERS = ['Field_ID', 'Step', 'Order', 'Label', 'Type', 'Required', 
 var STEP_NAMES = ['Customer Visit', 'Monthly Business Potential', 'Material Understanding',
   'Origin & Destination Mapping', 'Indicative Rate Discussion'];
 var FIELD_TYPES = ['text', 'textarea', 'number', 'money', 'date', 'email', 'tel', 'single', 'multi', 'dropdown', 'zone', 'flows'];
-var MASTER_CACHE_KEY = 'visit_masters_v2';
+var MASTER_CACHE_KEY = 'visit_masters_v3';
 var FLOWS_HELP = 'One block per origin. Tick all its destinations in one go, then add a new block for the next origin.';
 var OLD_FLOWS_HELP = 'One card per flow. Add stops in order: origin, then every place the material goes next.';
 
 var SETTING_DEFAULTS = [
-  ['DASHBOARD_MASTER_SHEET', '', 'Link (or ID) of the dashboard engine spreadsheet with tabs LANE_ORIGIN and LANE_DEST'],
-  ['ORIGIN_ZONE_COLUMN', 'Booking Lane', 'Column of LANE_ORIGIN used as origin zone'],
-  ['DEST_ZONE_COLUMN', 'Broader Lane (L2)', 'Column of LANE_DEST used as destination zone'],
+  ['GR_MASTER_SHEET', 'https://docs.google.com/spreadsheets/d/1bX6umTLJ88weATME31MhC0SiGRinnLIF9cX9aIMOF2o/edit',
+    'GR PNL data master spreadsheet (zones and places for the form)'],
+  ['GR_MASTER_TAB', 'DASHBOARD_MASTER', 'Tab in that spreadsheet'],
   ['ADMIN_PIN', '', 'PIN for the admin page (<web app URL>?page=admin). Empty = admin page locked']
 ];
+
+// Column names accepted in the GR master (compared without spaces, _ or case)
+var GR_COLS = {
+  originZone: ['originzone', 'orgzone', 'bookingzone'],
+  origin: ['origin', 'originname', 'origincity', 'bookingbranch', 'branch'],
+  destZone: ['destzone', 'destinationzone', 'dstzone'],
+  dest: ['destname', 'destination', 'destinationname', 'destcity'],
+  deliveryPoint: ['deliverypoint', 'delpoint', 'deliverypointname', 'dp']
+};
+
+var SUMMARY_APPROVAL_HEADERS = ['Visit ID', 'Costing Head Status', 'Costing Head Rate', 'Costing Head Remark', 'Costing Head Time',
+  'RM Status', 'RM Rate', 'RM Remark', 'RM Time', 'Overall Status'];
+var ROLES = { CH: 'Costing Head', RM: 'Regional Manager' };
 
 // Field_ID, Step, Label, Type, Required, Options (one per line), Help, Locked
 var DEFAULT_FIELDS = [
@@ -105,17 +120,22 @@ var DEST_BY_ZONE_FALLBACK = {
 /* ------------------------------------------------------------------ pages */
 
 function doGet(e) {
-  var admin = e && e.parameter && e.parameter.page === 'admin';
-  var t = HtmlService.createTemplateFromFile(admin ? 'Admin' : 'Index');
-  if (!admin) {
+  var page = (e && e.parameter && e.parameter.page) || '';
+  var file = page === 'admin' ? 'Admin' : page === 'approve' ? 'Approve' : 'Index';
+  var t = HtmlService.createTemplateFromFile(file);
+  var boot;
+  if (file === 'Index') {
     var ss = responseSheet_();
-    t.boot = JSON.stringify({ steps: STEP_NAMES, fields: activeFields_(readConfig_(ss)), masters: getMasters_(ss) })
-      .replace(/</g, '\\u003c');
+    var m = getMasters_(ss);
+    boot = { steps: STEP_NAMES, fields: activeFields_(readConfig_(ss)), masters: { origins: m.origins, dests: m.dests } };
+  } else if (file === 'Approve') {
+    boot = approvalView_(e.parameter.t);
   } else {
-    t.boot = JSON.stringify({ steps: STEP_NAMES, types: FIELD_TYPES });
+    boot = { steps: STEP_NAMES, types: FIELD_TYPES };
   }
+  t.boot = JSON.stringify(boot).replace(/</g, '\\u003c');
   return t.evaluate()
-    .setTitle(admin ? 'Sugam - Visit Form Admin' : 'Sugam - Customer Visit')
+    .setTitle(file === 'Admin' ? 'Sugam - Visit Form Admin' : file === 'Approve' ? 'Sugam - Visit Approval' : 'Sugam - Customer Visit')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
@@ -161,47 +181,91 @@ function yes_(v) { return /^(yes|y|true|1)$/i.test(String(v).trim()); }
 
 /* ---------------------------------------------------------------- masters */
 
-/** Unique origin zones > branches and destination zones > places, from the dashboard master. */
-function getMasters_(ss) {
+/**
+ * Unique places from the GR PNL data master:
+ *   origins: { originZone: [origin, ...] }
+ *   dests:   { destZone: { destination: [deliveryPoint, ...] } }
+ * Cached 10 minutes (split in parts, the cache holds 100 KB per key).
+ */
+function getMasters_(ss, fresh) {
   var cache = CacheService.getScriptCache();
-  var hit = cache.get(MASTER_CACHE_KEY);
-  if (hit) return JSON.parse(hit);
-  var settings = settingsWithDefaults_(ss);
-  var m = null;
-  var id = sheetIdFrom_(settings.DASHBOARD_MASTER_SHEET);
-  if (id) {
-    try {
-      var eng = SpreadsheetApp.openById(id);
-      m = {
-        source: 'Dashboard master: ' + eng.getName(),
-        origins: groupBy_(eng.getSheetByName('LANE_ORIGIN'), 'Origin', settings.ORIGIN_ZONE_COLUMN),
-        dests: groupBy_(eng.getSheetByName('LANE_DEST'), 'Destination', settings.DEST_ZONE_COLUMN)
-      };
-    } catch (err) {
-      m = null;
-      Logger.log('Dashboard master not readable: ' + err.message);
+  if (!fresh) {
+    var n = Number(cache.get(MASTER_CACHE_KEY + '_n') || 0);
+    if (n) {
+      var keys = []; for (var i = 0; i < n; i++) keys.push(MASTER_CACHE_KEY + '_' + i);
+      var got = cache.getAll(keys), str = '';
+      for (var k = 0; k < n; k++) { if (got[keys[k]] == null) { str = null; break; } str += got[keys[k]]; }
+      if (str) return JSON.parse(str);
     }
   }
-  if (!m) m = { source: 'Built-in lane master copy (set DASHBOARD_MASTER_SHEET in Settings)', origins: ORIGINS_BY_ZONE, dests: DEST_BY_ZONE_FALLBACK };
-  try { cache.put(MASTER_CACHE_KEY, JSON.stringify(m), 600); } catch (err) { /* too big to cache */ }
+  var settings = settingsWithDefaults_(ss), m;
+  try {
+    m = readGrMaster_(settings);
+  } catch (err) {
+    m = fallbackMasters_();
+    m.error = String(err.message || err);
+  }
+  var json = JSON.stringify(m), parts = {}, size = 90000, count = Math.ceil(json.length / size);
+  for (var p = 0; p < count; p++) parts[MASTER_CACHE_KEY + '_' + p] = json.substr(p * size, size);
+  parts[MASTER_CACHE_KEY + '_n'] = String(count);
+  try { cache.putAll(parts, 600); } catch (err) { /* too big to cache, read next time */ }
   return m;
 }
 
-function groupBy_(sh, nameCol, zoneCol) {
-  if (!sh) throw new Error('Tab missing in dashboard master');
-  var v = sh.getDataRange().getValues();
-  var h = v[0].map(function (x) { return String(x).trim().toUpperCase(); });
-  var ni = h.indexOf(nameCol.toUpperCase()), zi = h.indexOf(String(zoneCol).trim().toUpperCase());
-  if (ni < 0 || zi < 0) throw new Error('Column ' + nameCol + ' / ' + zoneCol + ' not found in ' + sh.getName());
-  var out = {};
-  v.slice(1).forEach(function (r) {
-    var n = String(r[ni]).trim(), z = String(r[zi]).trim() || 'OTHER';
-    if (!n) return;
-    out[z] = out[z] || [];
-    if (out[z].indexOf(n) < 0) out[z].push(n);
+function readGrMaster_(settings) {
+  var id = sheetIdFrom_(settings.GR_MASTER_SHEET);
+  if (!id) throw new Error('GR_MASTER_SHEET is empty in Settings');
+  var file = SpreadsheetApp.openById(id);
+  var tab = String(settings.GR_MASTER_TAB || 'DASHBOARD_MASTER').trim();
+  var sh = file.getSheetByName(tab);
+  if (!sh) throw new Error('Tab ' + tab + ' not found in ' + file.getName());
+  var lastRow = sh.getLastRow(), lastCol = sh.getLastColumn();
+  if (lastRow < 2) throw new Error('Tab ' + tab + ' is empty');
+  var head = sh.getRange(1, 1, 1, lastCol).getValues()[0].map(function (h) { return String(h).toLowerCase().replace(/[^a-z0-9]/g, ''); });
+  var col = {}, missing = [];
+  Object.keys(GR_COLS).forEach(function (k) {
+    var idx = -1;
+    GR_COLS[k].some(function (alias) { idx = head.indexOf(alias); return idx >= 0; });
+    if (idx < 0 && k !== 'deliveryPoint') missing.push(GR_COLS[k][0]);
+    col[k] = idx;
   });
-  Object.keys(out).forEach(function (z) { out[z].sort(); });
-  return out;
+  if (missing.length) throw new Error('Columns not found in ' + tab + ': ' + missing.join(', '));
+  var read = function (k) { return col[k] < 0 ? null : sh.getRange(2, col[k] + 1, lastRow - 1, 1).getValues(); };
+  var oz = read('originZone'), o = read('origin'), dz = read('destZone'), d = read('dest'), dp = read('deliveryPoint');
+  var clean = function (v) { v = String(v == null ? '' : v).trim(); return v && v.toUpperCase() !== 'UNSPECIFIED' ? v : ''; };
+  var origins = {}, dests = {}, seenO = {}, seenD = {};
+  for (var r = 0; r < lastRow - 1; r++) {
+    var z = clean(oz[r][0]), on = clean(o[r][0]);
+    if (z && on && !seenO[z + '|' + on]) { seenO[z + '|' + on] = 1; (origins[z] = origins[z] || []).push(on); }
+    var z2 = clean(dz[r][0]), dn = clean(d[r][0]), p = dp ? clean(dp[r][0]) : '';
+    if (z2 && dn) {
+      dests[z2] = dests[z2] || {};
+      dests[z2][dn] = dests[z2][dn] || [];
+      if (p && p !== dn && !seenD[z2 + '|' + dn + '|' + p]) { seenD[z2 + '|' + dn + '|' + p] = 1; dests[z2][dn].push(p); }
+    }
+  }
+  Object.keys(origins).forEach(function (z) { origins[z].sort(); });
+  Object.keys(dests).forEach(function (z) { Object.keys(dests[z]).forEach(function (n) { dests[z][n].sort(); }); });
+  return { source: 'GR PNL data master: ' + file.getName() + ' / ' + tab + ' (' + (lastRow - 1) + ' GR rows)', origins: origins, dests: dests };
+}
+
+/** Lane master copy inside the script, used only when the GR master cannot be read. */
+function fallbackMasters_() {
+  var dests = {};
+  Object.keys(DEST_BY_ZONE_FALLBACK).forEach(function (z) {
+    dests[z] = {};
+    DEST_BY_ZONE_FALLBACK[z].forEach(function (n) { dests[z][n] = []; });
+  });
+  return { source: 'Built-in lane master copy (GR master not readable)', origins: ORIGINS_BY_ZONE, dests: dests };
+}
+
+function masterCounts_(m) {
+  var c = { originZones: Object.keys(m.origins).length, origins: 0, destZones: Object.keys(m.dests).length, dests: 0, deliveryPoints: 0 };
+  Object.keys(m.origins).forEach(function (z) { c.origins += m.origins[z].length; });
+  Object.keys(m.dests).forEach(function (z) {
+    Object.keys(m.dests[z]).forEach(function (n) { c.dests += 1; c.deliveryPoints += m.dests[z][n].length; });
+  });
+  return c;
 }
 
 function sheetIdFrom_(s) {
@@ -254,6 +318,9 @@ function syncResponseColumns_(ss, config) {
 
 /* ----------------------------------------------------------------- submit */
 
+function destName_(d) { return d.dp ? d.place + ' > ' + d.dp : (d.place || 'ALL OF ' + d.zone); }
+function originName_(o) { return o.place || ('ALL OF ' + o.zone); }
+
 /** Called from the form page with google.script.run */
 function submitVisit(p) {
   var ss = responseSheet_();
@@ -276,9 +343,8 @@ function submitVisit(p) {
   try {
     var now = new Date();
     var id = 'SV-' + Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyyMMdd-HHmmss') + '-' + Math.floor(Math.random() * 900 + 100);
-    var placeName = function (s) { return s.place || ('ALL OF ' + s.zone); };
     var flowText = flows.map(function (fl) {
-      return placeName(fl.origin) + ' > ' + fl.dests.map(placeName).join(', ') +
+      return originName_(fl.origin) + ' > ' + fl.dests.map(destName_).join(', ') +
         (fl.mt ? ' | ' + fl.mt + ' MT/month' : '') + (fl.freq ? ' | ' + fl.freq : '') + (fl.note ? ' | ' + fl.note : '');
     }).join('\n');
 
@@ -299,78 +365,252 @@ function submitVisit(p) {
 
     // Visit_Lanes: one row per origin > destination
     var FH = ['Submitted At', 'Visit ID', 'Customer', 'Customer Zone', 'Origin #', 'Origin Zone', 'Origin',
-      'Destination Zone', 'Destination', 'Origin MT / month', 'Frequency', 'Note'];
-    var laneTab = 'Visit_Lanes', vf = ss.getSheetByName(laneTab);
-    if (vf && vf.getRange(1, 5).getValue() !== 'Origin #') { laneTab = 'Visit_Lanes_v2'; vf = ss.getSheetByName(laneTab); }   // older layout
-    if (!vf) {
-      vf = ss.insertSheet(laneTab);
-      vf.getRange(1, 1, 1, FH.length).setValues([FH]).setFontWeight('bold').setBackground('#1f3864').setFontColor('#ffffff');
-      vf.setFrozenRows(1);
-    }
-    var legs = [];
+      'Destination Zone', 'Destination', 'Delivery Point', 'Origin MT / month', 'Frequency', 'Note'];
+    var vf = laneSheet_(ss, FH);
+    var lanes = [];
     flows.forEach(function (fl, i) {
       fl.dests.forEach(function (d) {
-        legs.push([now, id, a.customer || '', a.zone || '', i + 1, fl.origin.zone, placeName(fl.origin),
-          d.zone, placeName(d), fl.mt || '', fl.freq || '', fl.note || '']);
+        lanes.push([now, id, a.customer || '', a.zone || '', i + 1, fl.origin.zone, originName_(fl.origin),
+          d.zone, d.place || ('ALL OF ' + d.zone), d.dp || '', fl.mt || '', fl.freq || '', fl.note || '']);
       });
     });
-    if (legs.length) vf.getRange(vf.getLastRow() + 1, 1, legs.length, FH.length).setValues(legs);
+    if (lanes.length) vf.getRange(vf.getLastRow() + 1, 1, lanes.length, FH.length).setValues(lanes);
 
-    // Mail + summary
+    // Approvals + mail
     var rows = fields.map(function (f) { return [f.label, a[f.id]]; });
-    var status = sendVisitMail_(ss, a, rows);
+    var sent = sendVisitMails_(ss, id, now, a, rows, flows);
+
+    // Visit_Summary
     var origins = [], finals = [], finalZones = [];
     var addU = function (arr, v) { if (v && arr.indexOf(v) < 0) arr.push(v); };
     flows.forEach(function (fl) {
-      addU(origins, placeName(fl.origin));
-      fl.dests.forEach(function (d) { addU(finals, placeName(d)); addU(finalZones, d.zone); });
+      addU(origins, originName_(fl.origin));
+      fl.dests.forEach(function (d) { addU(finals, destName_(d)); addU(finalZones, d.zone); });
     });
-    var vs = ss.getSheetByName('Visit_Summary');
-    if (vs) vs.appendRow([now, a.visitDate || '', a.repName || '', a.repEmail || '', a.customer || '', a.zone || '',
+    var vs = summarySheet_(ss);
+    var base = [now, a.visitDate || '', a.repName || '', a.repEmail || '', a.customer || '', a.zone || '',
       a.city || '', a.contact || '', a.phone || '', a.commodity || '', a.mValue || '', a.mVolume || '',
-      a.potValue || '', origins.join(', '), finalZones.join(', '), finals.join(', '), a.expRate || '',
-      status + ' (web ' + id + ')']);
-    return { id: id, status: status };
+      a.potValue || '', origins.join(', '), finalZones.join(', '), finals.join(', '), a.expRate || '', sent.status];
+    vs.appendRow(base.concat([id, sent.roles.CH ? 'PENDING' : 'NO EMAIL', '', '', '', sent.roles.RM ? 'PENDING' : 'NO EMAIL', '', '', '',
+      (sent.roles.CH || sent.roles.RM) ? 'PENDING' : 'NO APPROVER']));
+    return { id: id, status: sent.status };
   } finally {
     lock.releaseLock();
   }
 }
 
-function sendVisitMail_(ss, a, rows) {
+/** Visit_Lanes, or Visit_Lanes_v2 / _v3 when an older tab has different columns. */
+function laneSheet_(ss, headers) {
+  var names = ['Visit_Lanes', 'Visit_Lanes_v2', 'Visit_Lanes_v3'];
+  for (var i = 0; i < names.length; i++) {
+    var sh = ss.getSheetByName(names[i]);
+    if (!sh) {
+      sh = ss.insertSheet(names[i]);
+      sh.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold').setBackground('#2a3273').setFontColor('#ffffff');
+      sh.setFrozenRows(1);
+      return sh;
+    }
+    if (sh.getRange(1, 1, 1, headers.length).getValues()[0].join('|') === headers.join('|')) return sh;
+  }
+  throw new Error('Rename the old Visit_Lanes tabs, their columns do not match');
+}
+
+/** Visit_Summary with the approval columns from column 19 on. */
+function summarySheet_(ss) {
+  var vs = ss.getSheetByName('Visit_Summary');
+  var cell = vs.getRange(1, 19);
+  if (cell.getValue() !== SUMMARY_APPROVAL_HEADERS[0]) {
+    vs.getRange(1, 19, 1, SUMMARY_APPROVAL_HEADERS.length).setValues([SUMMARY_APPROVAL_HEADERS])
+      .setFontWeight('bold').setBackground('#2a3273').setFontColor('#ffffff');
+  }
+  return vs;
+}
+
+/* ------------------------------------------------------------------- mail */
+
+/** One mail to the Costing Head and one to the zone RM, each with its own approval link on top. */
+function sendVisitMails_(ss, id, now, a, rows, flows) {
   var settings = readSettings_(ss);
   var rm = findZone_(ss, a.zone || '');
-  var to = [settings.COSTING_HEAD_EMAIL, rm.email].filter(String).join(',');
-  var cc = [rm.cc, settings.ALWAYS_CC, (String(settings.CC_FIELD_REP).toUpperCase() === 'YES' ? a.repEmail : '')]
-    .filter(String).join(',');
-  var status;
-  if (!to) {
-    status = 'NOT SENT - fill COSTING_HEAD_EMAIL in Settings / RM email for ' + a.zone + ' in Zone_Emails';
-  } else {
-    var subject = 'New Customer Visit: ' + (a.customer || '-') + ' | ' + (a.zone || '-') + ' | Potential Rs ' + (a.potValue || '-') + '/month';
-    var html = '<div style="font-family:Arial;font-size:13px;color:#1b2333">' +
-      '<div style="background:#1f3864;color:#fff;padding:14px 18px;border-radius:8px 8px 0 0">' +
-      '<div style="font-size:12px;opacity:.8">SUGAM GROUP - CUSTOMER VISIT</div>' +
-      '<div style="font-size:18px;font-weight:bold">' + esc_(a.customer) + '</div>' +
-      '<div>' + esc_(a.city) + ' | Zone ' + esc_(a.zone) + ' | Potential Rs ' + esc_(a.potValue) + '/month</div></div>' +
-      '<p>Visited by <b>' + esc_(a.repName) + '</b> on ' + esc_(a.visitDate) +
-      '. Please review for HO costing &amp; P&amp;L (Step 06).</p>' +
-      '<table cellpadding="6" style="border-collapse:collapse">' +
-      rows.filter(function (r) { return r[1]; }).map(function (r, i) {
-        return '<tr style="background:' + (i % 2 ? '#ffffff' : '#f2f5fa') + '"><td style="border:1px solid #d0d7e2;width:260px"><b>' +
-          esc_(r[0]) + '</b></td><td style="border:1px solid #d0d7e2">' + esc_(r[1]).replace(/\n/g, '<br>') + '</td></tr>';
-      }).join('') + '</table>' +
-      '<p>Full data: <a href="' + ss.getUrl() + '">' + SHEET_NAME + '</a></p></div>';
+  var url = ScriptApp.getService().getUrl();
+  var ap = ss.getSheetByName('Approvals');
+  var AH = ['Visit ID', 'Submitted At', 'Customer', 'Customer Zone', 'Role', 'Approver Email', 'Token', 'Status',
+    'Approved Rate', 'Remark', 'Decided At'];
+  if (!ap) {
+    ap = ss.insertSheet('Approvals');
+    ap.getRange(1, 1, 1, AH.length).setValues([AH]).setFontWeight('bold').setBackground('#2a3273').setFontColor('#ffffff');
+    ap.setFrozenRows(1);
+  }
+  var repCc = String(settings.CC_FIELD_REP).toUpperCase() === 'YES' ? a.repEmail : '';
+  var targets = [
+    { role: 'CH', to: settings.COSTING_HEAD_EMAIL, cc: [settings.ALWAYS_CC, repCc], name: 'Costing Head' },
+    { role: 'RM', to: rm.email, cc: [rm.cc], name: rm.name || 'Regional Manager' }
+  ];
+  var roles = {}, log = [];
+  targets.forEach(function (t) {
+    var to = String(t.to || '').trim();
+    if (!to) { log.push(ROLES[t.role] + ': no email'); return; }
+    var token = Utilities.getUuid().replace(/-/g, '');
+    ap.appendRow([id, now, a.customer || '', a.zone || '', ROLES[t.role], to, token, 'PENDING', '', '', '']);
+    roles[t.role] = true;
+    var link = url + '?page=approve&t=' + token;
+    var subject = 'Approval needed: ' + (a.customer || '-') + ' | ' + (a.zone || '-') + ' | Potential Rs ' + (a.potValue || '-') + '/month';
     try {
-      var mail = { to: to, cc: cc, subject: subject, htmlBody: html, name: 'Sugam Customer Visit' };
+      var mail = { to: to, subject: subject, htmlBody: visitMailHtml_(ss, id, a, rows, flows, link, t.name, ROLES[t.role]), name: 'Sugam Customer Visit' };
+      var cc = t.cc.filter(function (x) { return x && String(x).trim(); }).join(',');
+      if (cc) mail.cc = cc;
       if (a.repEmail) mail.replyTo = a.repEmail;
       MailApp.sendEmail(mail);
-      status = 'SENT' + (rm.email ? '' : ' (no RM email for ' + a.zone + ', only Costing Head)');
+      log.push(ROLES[t.role] + ': SENT');
+      ss.getSheetByName('Mail_Log').appendRow([new Date(), a.customer, a.zone, to + (cc ? ' | cc: ' + cc : ''), 'SENT (' + ROLES[t.role] + ', ' + id + ')']);
     } catch (err) {
-      status = 'FAILED: ' + err.message;
+      log.push(ROLES[t.role] + ': FAILED ' + err.message);
+      ss.getSheetByName('Mail_Log').appendRow([new Date(), a.customer, a.zone, to, 'FAILED: ' + err.message]);
     }
+  });
+  var status = log.join(' | ');
+  if (!roles.CH && !roles.RM) status = 'NOT SENT - fill Costing Head email / RM email for ' + a.zone + ' (Admin > Zone emails)';
+  return { status: status, roles: roles };
+}
+
+function visitMailHtml_(ss, id, a, rows, flows, link, greetName, roleLabel) {
+  var td = 'border:1px solid #dfe4ec;padding:7px 10px;vertical-align:top;font-size:13px;';
+  var kv = function (label, v) { return '<td style="padding:4px 18px 4px 0"><div style="font-size:11px;color:#667085">' + label + '</div><div style="font-weight:bold;font-size:14px">' + esc_(v || '-') + '</div></td>'; };
+  var laneRows = [];
+  flows.forEach(function (fl) {
+    fl.dests.forEach(function (d) {
+      laneRows.push('<tr><td style="' + td + '">' + esc_(fl.origin.zone) + '</td><td style="' + td + '">' + esc_(originName_(fl.origin)) +
+        '</td><td style="' + td + '">' + esc_(d.zone) + '</td><td style="' + td + '">' + esc_(d.place || 'ALL') + '</td><td style="' + td + '">' +
+        esc_(d.dp || '') + '</td><td style="' + td + '">' + esc_(fl.mt || '') + '</td><td style="' + td + '">' + esc_(fl.freq || '') + '</td></tr>');
+    });
+  });
+  var th = function (t) { return '<th style="' + td + 'background:#2a3273;color:#fff;text-align:left;font-size:12px">' + t + '</th>'; };
+  return '<div style="font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#1b2333;max-width:760px">' +
+    '<div style="background:#2a3273;color:#fff;padding:16px 20px;border-radius:10px 10px 0 0;border-bottom:4px solid #e9622b">' +
+    '<div style="font-size:11px;letter-spacing:2px;color:#f8ae40;font-weight:bold">SUGAM GROUP &middot; CUSTOMER ONBOARDING JOURNEY</div>' +
+    '<div style="font-size:20px;font-weight:bold;margin-top:4px">' + esc_(a.customer) + '</div>' +
+    '<div style="opacity:.85">' + esc_(a.city) + ' &middot; Zone ' + esc_(a.zone) + ' &middot; Visit ID ' + esc_(id) + '</div></div>' +
+    '<div style="background:#fdf0e9;border:1px solid #f9d5c3;border-top:0;padding:16px 20px">' +
+    '<div style="margin-bottom:10px">Dear ' + esc_(greetName) + ', your approval is needed as <b>' + esc_(roleLabel) + '</b>. You can also enter the approved rate.</div>' +
+    '<a href="' + link + '" style="display:inline-block;background:#e9622b;color:#fff;text-decoration:none;font-weight:bold;font-size:15px;padding:12px 26px;border-radius:8px">Approve / Reject &amp; enter rate &rarr;</a>' +
+    '</div>' +
+    '<table style="margin:16px 0 6px"><tr>' + kv('Potential / month', 'Rs ' + (a.potValue || '-')) + kv('Current spend / month', 'Rs ' + (a.mValue || '-')) +
+    kv('Volume / month', (a.mVolume || '-') + ' MT') + kv('Expected rate', a.expRate ? 'Rs ' + a.expRate : '-') + '</tr></table>' +
+    '<div style="font-weight:bold;color:#e9622b;font-size:12px;letter-spacing:1px;margin:16px 0 6px">ORIGIN &gt; DESTINATION LANES</div>' +
+    '<table style="border-collapse:collapse;width:100%"><tr>' + th('Origin zone') + th('Origin') + th('Dest zone') + th('Destination') + th('Delivery point') + th('MT/month') + th('Frequency') + '</tr>' +
+    (laneRows.join('') || '<tr><td colspan="7" style="' + td + '">-</td></tr>') + '</table>' +
+    '<div style="font-weight:bold;color:#e9622b;font-size:12px;letter-spacing:1px;margin:18px 0 6px">FULL VISIT DETAILS</div>' +
+    '<table style="border-collapse:collapse;width:100%">' +
+    rows.filter(function (r) { return r[1]; }).map(function (r, i) {
+      return '<tr style="background:' + (i % 2 ? '#ffffff' : '#f4f6fa') + '"><td style="' + td + 'width:240px;font-weight:bold">' + esc_(r[0]) +
+        '</td><td style="' + td + '">' + esc_(r[1]).replace(/\n/g, '<br>') + '</td></tr>';
+    }).join('') + '</table>' +
+    '<p style="margin-top:16px"><a href="' + link + '" style="color:#e9622b;font-weight:bold">Approve / Reject &amp; enter rate</a> &middot; ' +
+    '<a href="' + ss.getUrl() + '" style="color:#2a3273">Open response sheet</a></p></div>';
+}
+
+/* -------------------------------------------------------------- approvals */
+
+function findApproval_(ss, token) {
+  token = String(token || '').trim();
+  if (!/^[a-f0-9]{32}$/.test(token)) return null;
+  var ap = ss.getSheetByName('Approvals');
+  if (!ap) return null;
+  var v = ap.getDataRange().getValues();
+  for (var i = 1; i < v.length; i++) if (String(v[i][6]) === token) return { sheet: ap, row: i + 1, r: v[i], all: v };
+  return null;
+}
+
+function summaryRow_(ss, id) {
+  var vs = summarySheet_(ss);
+  var ids = vs.getRange(1, 19, Math.max(vs.getLastRow(), 1), 1).getValues();
+  for (var i = ids.length - 1; i >= 1; i--) if (String(ids[i][0]) === id) return { sheet: vs, row: i + 1 };
+  return null;
+}
+
+/** Data for the approval page. */
+function approvalView_(token) {
+  var ss = responseSheet_();
+  var f = findApproval_(ss, token);
+  if (!f) return { ok: false, error: 'This approval link is not valid.' };
+  var id = String(f.r[0]);
+  var s = summaryRow_(ss, id), sv = s ? s.sheet.getRange(s.row, 1, 1, 28).getValues()[0] : [];
+  var lanes = [];
+  ['Visit_Lanes', 'Visit_Lanes_v2', 'Visit_Lanes_v3'].forEach(function (n) {
+    var sh = ss.getSheetByName(n); if (!sh) return;
+    var v = sh.getDataRange().getValues(), h = v[0];
+    var ix = function (name) { return h.indexOf(name); };
+    v.slice(1).forEach(function (r) {
+      if (String(r[1]) !== id) return;
+      lanes.push({ oz: r[ix('Origin Zone')], o: r[ix('Origin')], dz: r[ix('Destination Zone')], d: r[ix('Destination')],
+        dp: ix('Delivery Point') >= 0 ? r[ix('Delivery Point')] : '', mt: r[ix('Origin MT / month')], fq: r[ix('Frequency')] });
+    });
+  });
+  var others = f.all.slice(1).filter(function (r) { return String(r[0]) === id && String(r[6]) !== String(token); })
+    .map(function (r) { return { role: r[4], status: r[7], rate: r[8], remark: r[9] }; });
+  var fmt = function (d) { return d instanceof Date ? Utilities.formatDate(d, Session.getScriptTimeZone(), 'dd MMM yyyy, HH:mm') : String(d || ''); };
+  return {
+    ok: true, token: token, id: id, role: f.r[4], email: f.r[5], status: f.r[7], rate: f.r[8], remark: f.r[9], decidedAt: fmt(f.r[10]),
+    visit: { customer: f.r[2], zone: f.r[3], submitted: fmt(f.r[1]), rep: sv[2] || '', city: sv[6] || '', commodity: sv[9] || '',
+      mValue: sv[10] || '', mVolume: sv[11] || '', potValue: sv[12] || '', expRate: sv[16] || '' },
+    lanes: lanes, others: others
+  };
+}
+
+/** Called from the approval page. decision = APPROVED | REJECTED, rate and remark optional. */
+function approveSave(token, decision, rate, remark) {
+  if (['APPROVED', 'REJECTED'].indexOf(decision) < 0) throw new Error('Choose Approve or Reject');
+  rate = String(rate == null ? '' : rate).trim();
+  if (rate && isNaN(Number(rate))) throw new Error('Rate must be a number');
+  var ss = responseSheet_();
+  var lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    var f = findApproval_(ss, token);
+    if (!f) throw new Error('This approval link is not valid.');
+    var now = new Date(), id = String(f.r[0]);
+    f.sheet.getRange(f.row, 8, 1, 4).setValues([[decision, rate ? Number(rate) : '', String(remark || '').trim(), now]]);
+
+    var all = f.sheet.getDataRange().getValues().slice(1).filter(function (r) { return String(r[0]) === id; });
+    var overall = all.some(function (r) { return r[7] === 'REJECTED'; }) ? 'REJECTED'
+      : all.every(function (r) { return r[7] === 'APPROVED'; }) ? 'APPROVED' : 'PENDING';
+
+    var s = summaryRow_(ss, id);
+    var oldOverall = '';
+    if (s) {
+      var off = f.r[4] === ROLES.CH ? 20 : 24;   // Costing Head cols 20-23, RM cols 24-27
+      s.sheet.getRange(s.row, off, 1, 4).setValues([[decision, rate ? Number(rate) : '', String(remark || '').trim(), now]]);
+      oldOverall = s.sheet.getRange(s.row, 28).getValue();
+      s.sheet.getRange(s.row, 28).setValue(overall);
+      if (overall !== 'PENDING' && overall !== oldOverall) notifyRep_(ss, s, id, overall, all);
+    }
+    return approvalView_(token);
+  } finally {
+    lock.releaseLock();
   }
-  ss.getSheetByName('Mail_Log').appendRow([new Date(), a.customer, a.zone, to + (cc ? ' | cc: ' + cc : ''), status]);
-  return status;
+}
+
+/** Tells the field rep the final outcome. */
+function notifyRep_(ss, s, id, overall, all) {
+  var sv = s.sheet.getRange(s.row, 1, 1, 18).getValues()[0];
+  var rep = String(sv[3] || '').trim();
+  if (!rep) return;
+  var color = overall === 'APPROVED' ? '#127a43' : '#c62f3b';
+  var html = '<div style="font-family:Arial;font-size:13px;color:#1b2333;max-width:640px">' +
+    '<div style="background:#2a3273;color:#fff;padding:14px 18px;border-radius:10px 10px 0 0;border-bottom:4px solid #e9622b">' +
+    '<div style="font-size:11px;letter-spacing:2px;color:#f8ae40;font-weight:bold">SUGAM GROUP &middot; CUSTOMER ONBOARDING JOURNEY</div>' +
+    '<div style="font-size:18px;font-weight:bold">' + esc_(sv[4]) + ': <span style="color:' + (overall === 'APPROVED' ? '#7fe0a8' : '#ff9aa2') + '">' + overall + '</span></div></div>' +
+    '<p>Hi ' + esc_(sv[2]) + ', the visit ' + esc_(id) + ' is <b style="color:' + color + '">' + overall.toLowerCase() + '</b>.</p>' +
+    '<table style="border-collapse:collapse">' + all.map(function (r) {
+      return '<tr><td style="border:1px solid #dfe4ec;padding:6px 10px;font-weight:bold">' + esc_(r[4]) + '</td><td style="border:1px solid #dfe4ec;padding:6px 10px">' +
+        esc_(r[7]) + (r[8] !== '' ? ' &middot; Rate Rs ' + esc_(r[8]) : '') + (r[9] ? ' &middot; ' + esc_(r[9]) : '') + '</td></tr>';
+    }).join('') + '</table></div>';
+  try {
+    MailApp.sendEmail({ to: rep, subject: 'Visit ' + overall.toLowerCase() + ': ' + sv[4] + ' | ' + sv[5], htmlBody: html, name: 'Sugam Customer Visit' });
+    ss.getSheetByName('Mail_Log').appendRow([new Date(), sv[4], sv[5], rep, 'SENT (field rep, ' + overall + ', ' + id + ')']);
+  } catch (err) {
+    ss.getSheetByName('Mail_Log').appendRow([new Date(), sv[4], sv[5], rep, 'FAILED: ' + err.message]);
+  }
 }
 
 /* ------------------------------------------------------------------ admin */
@@ -382,29 +622,28 @@ function checkPin_(ss, pin) {
 }
 
 /** Everything the admin page shows. Also adds missing master origin zones to Zone_Emails. */
-function adminLoad(pin) {
+function adminLoad(pin, fresh) {
   var ss = responseSheet_();
   checkPin_(ss, pin);
-  var masters = getMasters_(ss);
+  var masters = getMasters_(ss, fresh);
   var ze = ss.getSheetByName('Zone_Emails');
   var have = ze.getDataRange().getValues().slice(1).map(function (r) { return String(r[0]).trim().toUpperCase(); });
   Object.keys(masters.origins).sort().forEach(function (z) {
     if (have.indexOf(z.toUpperCase()) < 0) ze.appendRow([z, '', '', '']);
   });
   var s = settingsWithDefaults_(ss);
+  var c = masterCounts_(masters);
+  c.source = masters.source; c.error = masters.error || '';
   return {
     config: readConfig_(ss),
     zones: ze.getDataRange().getValues().slice(1).filter(function (r) { return String(r[0]).trim(); })
       .map(function (r) { return { zone: String(r[0]), name: String(r[1]), email: String(r[2]), cc: String(r[3]) }; }),
     settings: { COSTING_HEAD_EMAIL: s.COSTING_HEAD_EMAIL || '', ALWAYS_CC: s.ALWAYS_CC || '', CC_FIELD_REP: s.CC_FIELD_REP || 'YES',
-      DASHBOARD_MASTER_SHEET: s.DASHBOARD_MASTER_SHEET || '', ORIGIN_ZONE_COLUMN: s.ORIGIN_ZONE_COLUMN, DEST_ZONE_COLUMN: s.DEST_ZONE_COLUMN },
-    masters: { source: masters.source, originZones: Object.keys(masters.origins).length,
-      origins: countAll_(masters.origins), destZones: Object.keys(masters.dests).length, dests: countAll_(masters.dests) },
+      GR_MASTER_SHEET: s.GR_MASTER_SHEET || '', GR_MASTER_TAB: s.GR_MASTER_TAB || 'DASHBOARD_MASTER' },
+    masters: c,
     sheetUrl: ss.getUrl()
   };
 }
-
-function countAll_(m) { return Object.keys(m).reduce(function (n, k) { return n + m[k].length; }, 0); }
 
 /** Saves all questions. Removed questions stay in Form_Config with Active = NO so old data keeps its column. */
 function adminSaveConfig(pin, fields) {
@@ -447,7 +686,7 @@ function adminSaveConfig(pin, fields) {
   return readConfig_(ss);
 }
 
-/** Saves zone emails + mail settings + master link. */
+/** Saves zone emails + mail settings + GR master link. */
 function adminSaveMail(pin, zones, settings) {
   var ss = responseSheet_();
   checkPin_(ss, pin);
@@ -460,20 +699,16 @@ function adminSaveMail(pin, zones, settings) {
   var st = ss.getSheetByName('Settings');
   var data = st.getDataRange().getValues();
   Object.keys(settings).forEach(function (k) {
-    if (['COSTING_HEAD_EMAIL', 'ALWAYS_CC', 'CC_FIELD_REP', 'DASHBOARD_MASTER_SHEET', 'ORIGIN_ZONE_COLUMN', 'DEST_ZONE_COLUMN'].indexOf(k) < 0) return;
+    if (['COSTING_HEAD_EMAIL', 'ALWAYS_CC', 'CC_FIELD_REP', 'GR_MASTER_SHEET', 'GR_MASTER_TAB'].indexOf(k) < 0) return;
     for (var i = 1; i < data.length; i++) {
       if (String(data[i][0]).trim() === k) { st.getRange(i + 1, 2).setValue(settings[k]); return; }
     }
     st.appendRow([k, settings[k], '']);
   });
-  CacheService.getScriptCache().remove(MASTER_CACHE_KEY);
-  return adminLoad(pin);
+  return adminLoad(pin, true);
 }
 
-/** Re-reads the dashboard master now (otherwise it refreshes every 10 minutes). */
+/** Re-reads the GR master now (otherwise it refreshes every 10 minutes). */
 function adminRefreshMasters(pin) {
-  var ss = responseSheet_();
-  checkPin_(ss, pin);
-  CacheService.getScriptCache().remove(MASTER_CACHE_KEY);
-  return adminLoad(pin);
+  return adminLoad(pin, true);
 }

@@ -54,33 +54,38 @@ Response sheet ke tab `Masters` me branch / destination add-remove karo, phir sc
 
 ---
 
-# Custom HTML form + Admin panel (recommended, Google Form ki jagah)
+# Custom HTML form + Admin panel + Approval (recommended)
 
-Same response sheet, same Zone_Emails / Settings, same mail. Extra:
-- **Admin panel** (`<web app link>?page=admin`, PIN se): sawaal / options add, edit, delete, upar-niche,
-  required on/off, step badalna. Sheet ke columns apne aap update hote hain (naya sawaal = naya column,
-  naam badla = header badla, delete = column pe "(removed)", purana data safe).
-- **Zones dashboard master se**: engine spreadsheet ke `LANE_ORIGIN` (Booking Lane) aur `LANE_DEST`
-  (Broader Lane L2) tabs se unique zones aur locations. Link Admin > Master data me daalo.
-- **Origin > multiple destinations**: ek origin block me saare destinations ek saath tick karo (poora zone ya cities), naye origin ke liye naya block.
+Apps Script project (Business_Flow) me ye files honi chahiye. Naam exactly aise (capital letter ke saath):
 
-## Setup (setup() pehle chal chuka hona chahiye)
-Apps Script project me ye 3 files honi chahiye (purani WebApp.gs / Index.html ho to unka content replace karo):
-1. **+ > Script** > naam `WebApp` > `WebApp.gs` paste
-2. **+ > HTML** > naam `Index` > `Index.html` paste
-3. **+ > HTML** > naam `Admin` > `Admin.html` paste > Save
-4. Response sheet ke **Settings** tab me nayi row: Key `ADMIN_PIN`, Value apna PIN (jaise 4821).
-5. **Deploy > New deployment > Web app** > Execute as: Me > Who has access: Anyone > Deploy > link copy.
-   (Pehle deploy kar chuke ho to: Deploy > Manage deployments > pencil > Version: New version > Deploy.)
-6. Admin: link ke end me `?page=admin` lagao > PIN > **Master data** tab me dashboard engine sheet ka link
-   daalo > Save. **Zone emails** tab me RM emails + Costing Head bharo > Save.
-7. Field reps ko sirf normal link bhejo (bina `?page=admin`).
+| File | Type | Content |
+|---|---|---|
+| `Code` | Script | Sugam_Customer_Visit_Form.gs (setup wala, ek baar chal chuka) |
+| `WebApp` (ya webapp.gs) | Script | WebApp.gs |
+| `Index` | HTML | Index.html (field rep form) |
+| `Admin` | HTML | Admin.html (admin panel) |
+| `Approve` | HTML | Approve.html (Costing Head / RM approval page) |
 
-## Sheet me kya aayega
+Code badalne ke baad hamesha: **Deploy > Manage deployments > pencil > Version: New version > Deploy** (link wahi rehta hai).
+
+## Kya hota hai
+1. Field rep form bharta hai (zones / origin / destination / delivery point GR PNL data master se, unique).
+2. **Costing Head** aur zone ke **Regional Manager** ko alag-alag mail jata hai: upar "Approve / Reject & enter rate"
+   button, neeche lanes aur poori visit details.
+3. Button se approval page khulta hai: Approve / Reject, approved rate (optional), remark (optional).
+4. Sheet me save hota hai:
+   - `Approvals` - har approver ki ek row (status, rate, remark, time)
+   - `Visit_Summary` - columns S se AB: Visit ID, Costing Head status/rate/remark/time, RM status/rate/remark/time, Overall Status
+5. Dono ka decision aane pe field rep ko result ka mail (Approved / Rejected + rate).
+
+## Zones & places (GR PNL data master)
+Settings me `GR_MASTER_SHEET` (default: GR PNL mirror sheet) aur `GR_MASTER_TAB` (default `DASHBOARD_MASTER`).
+Columns jo padhe jaate hain: Origin Zone, Origin, Dest Zone, Destname, Delivery Point (naam me space/underscore/case
+se farak nahi padta). "UNSPECIFIED" values chhod di jaati hain. Har 10 minute me refresh, ya Admin > Master data >
+Reload master now. Agar padh nahi paya to Admin me error dikhega aur purani lane file copy use hogi.
+
+## Sheet tabs
 - `Form_Config` - saare sawaal (admin panel isi ko badalta hai)
 - `Web_Responses` - ek visit = ek row, har sawaal ka column
-- `Visit_Lanes` - har origin > destination ki alag row (Origin zone / Origin > Destination zone / Destination, MT, frequency)
-- `Visit_Summary`, `Mail_Log` - pehle jaise
-
-Note: "Customer zone", naam, email, customer, potential aur flows "Core" sawaal hain (mail inhi se banta hai),
-inka naam badal sakte ho, delete nahi. Purana Google Form ab sync nahi rahega, reps ko sirf web app link do.
+- `Visit_Lanes` - har origin > destination (> delivery point) ki alag row
+- `Visit_Summary`, `Approvals`, `Mail_Log`, `Zone_Emails`, `Settings`
