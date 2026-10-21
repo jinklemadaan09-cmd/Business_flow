@@ -51,3 +51,27 @@ Response sheet ke tab `Masters` me branch / destination add-remove karo, phir sc
 - Free Gmail se roz ~100 mail limit hai, Google Workspace se ~1500.
 - `setup` dobara mat chalao (naya form ban jayega); script khud rok degi.
 - Mail nahi gaya to `Mail_Log` ka Status dekho, waha reason likha hoga.
+
+---
+
+# Custom HTML form (web app) - Google Form ki jagah sundar page
+
+Same sheet, same Zone_Emails / Settings, same mail. Isme lane mapping better hai:
+har origin branch ka alag card, destination city search karke (809 cities) ya "ALL OF <region>" chuno,
+aur har origin ka MT/month + frequency.
+
+## Setup (setup() pehle chal chuka hona chahiye)
+1. Apps Script project kholo (jisme setup chalaya tha).
+2. Files ke saamne **+** > **Script** > naam `WebApp` > `WebApp.gs` ka pura content paste > Save.
+3. Files ke saamne **+** > **HTML** > naam `Index` (exact yahi) > `Index.html` ka pura content paste > Save.
+4. Upar right **Deploy** > **New deployment** > gear icon > **Web app**.
+   - Execute as: **Me**
+   - Who has access: **Anyone** (ya "Anyone with Google account" agar sab reps ke paas Google login hai)
+   - **Deploy** > permission Allow > **Web app URL** copy karo. Yahi link field reps ko bhejna hai.
+5. Baad me code badla to: Deploy > **Manage deployments** > pencil > Version: **New version** > Deploy (link wahi rahega).
+
+## Sheet me kya aayega
+- `Web_Responses` - ek visit = ek row, saare fields
+- `Visit_Lanes` - har origin > destination ki alag row (pivot / lane analysis ke liye)
+- `Visit_Summary` + `Mail_Log` - Google Form wale jaise
+- Draft rep ke phone me save rehta hai, network gaya to bhara hua data nahi jayega.
