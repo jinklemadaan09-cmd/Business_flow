@@ -23,7 +23,7 @@
  *   Mail_Log, Zone_Emails, Settings
  */
 
-var APP_VERSION = 'v3.6 (21 Oct 2026)';   // shown on the form and admin page, to check the deployed version
+var APP_VERSION = 'v3.7 (21 Oct 2026)';   // shown on the form and admin page, to check the deployed version
 var CONFIG_SHEET = 'Form_Config';
 var CONFIG_HEADERS = ['Field_ID', 'Step', 'Order', 'Label', 'Type', 'Required', 'Options', 'Help', 'Active', 'Locked'];
 var STEP_NAMES = ['Customer Visit', 'Monthly Business Potential', 'Material Understanding',
@@ -457,7 +457,8 @@ function submitVisit(p) {
     mailLog_(ss).appendRow([now, a.customer, a.zone, '', 'NEW VISIT ' + id + ' > ' + stage + (rm.email ? ' (RM ' + rm.email + ')' : ' (no RM email found for zone "' + (a.zone || '') + '" in Zone_Emails)')]);
     var instant = isInstant_(settings);
     if (instant) mailApprover_(ss, trackerRows_(ss).filter(function (x) { return String(x['Visit ID']) === id; })[0], rm.email ? 'RM' : 'HO');
-    return { id: id, status: stage + '. ' + (rm.email ? 'The Regional Manager' : 'Head Costing') + (instant ? ' has been mailed now.' : ' gets it in the next digest mail.') };
+    return { id: id, status: stage + '. ' + (rm.email ? 'The Regional Manager (' + rm.email + ')' : 'Head Costing (no RM email for ' + (a.zone || 'this zone') + ')') +
+      (instant ? ' has been mailed now.' : ' gets it in the next digest mail.') };
   } finally {
     lock.releaseLock();
   }
@@ -1180,6 +1181,27 @@ function adminSaveMail(pin, zones, settings, fresh, removed) {
   var out = adminLoad(pin, !!fresh);
   out.warning = warning;
   return out;
+}
+
+/** Admin "Mail check": last Mail_Log rows. */
+function adminMailCheck(pin) {
+  var ss = responseSheet_();
+  checkPin_(ss, pin);
+  var v = mailLog_(ss).getDataRange().getValues().slice(1).slice(-25).reverse();
+  return v.map(function (r) { return r.map(function (x) { return x instanceof Date ? fmtDate_(x, true) : String(x); }); });
+}
+
+/** Admin "Test": sends a short test mail to one zone's RM, so routing can be checked without a form. */
+function adminTestZone(pin, zone) {
+  var ss = responseSheet_();
+  checkPin_(ss, pin);
+  var rm = findZone_(ss, String(zone || ''));
+  if (!rm.email) throw new Error('No RM email for ' + zone + ' in Zone_Emails.');
+  var ok = sendMail_(ss, { to: rm.email, cc: rm.cc || undefined, subject: 'Test: customer visit approvals for ' + zone,
+    htmlBody: mailShell_('Test mail', esc_(zone), '<p>Dear ' + esc_(rm.name || 'Regional Manager') + ',</p><p>This is a test. Customer visits for <b>' + esc_(zone) +
+      '</b> will come to this address for RM approval.</p>') }, 'Test RM mail (' + zone + ')');
+  if (!ok) throw new Error('Mail to ' + rm.email + ' failed. See Mail_Log.');
+  return 'Test mail sent to ' + rm.email + (rm.cc ? ' (cc ' + rm.cc + ')' : '');
 }
 
 /** Customer zones for the form = the zones listed in Zone_Emails (managed in Admin). */

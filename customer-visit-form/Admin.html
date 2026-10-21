@@ -347,7 +347,23 @@ function mailHtml() {
           '" oninput="zones[' + i + '].' + k + '=this.value;setDirty(true)"></td>'; }).join('') +
         '<td><button class="btn sec" style="padding:4px 10px" title="Remove zone" onclick="removeZone(' + i + ')">&times;</button></td></tr>';
     }).join('') + '</tbody></table>' +
-    '<button class="btn sec" style="margin-top:10px" onclick="addZone()">+ Add zone</button></section>';
+    '<button class="btn sec" style="margin-top:10px" onclick="addZone()">+ Add zone</button></section>' +
+    '<section class="card"><div class="tag">MAIL CHECK</div><h2>Test and mail log</h2>' +
+    '<p class="hint">Send a test mail to one zone\'s RM, and see the last 25 lines of Mail_Log (newest first).</p>' +
+    '<div style="display:flex;gap:10px;flex-wrap:wrap"><select id="testZone">' + zones.filter(function (z) { return !z.isNew; }).map(function (z) {
+      return '<option>' + esc(z.zone) + '</option>'; }).join('') + '</select>' +
+    '<button class="btn sec" onclick="testZone()">Send test mail to RM</button><button class="btn sec" onclick="mailCheck()">Show mail log</button></div>' +
+    '<div id="mailLog" style="margin-top:12px;overflow-x:auto"></div></section>';
+}
+function testZone() {
+  if (dirty) return toast('Save your changes first');
+  run('adminTestZone', [pin, document.getElementById('testZone').value], function (m) { toast(m); mailCheck(); });
+}
+function mailCheck() {
+  run('adminMailCheck', [pin], function (rows) {
+    document.getElementById('mailLog').innerHTML = rows.length ? '<table class="z"><thead><tr><th>Time</th><th>What / customer</th><th>Zone</th><th>To</th><th>Status</th></tr></thead><tbody>' +
+      rows.map(function (r) { return '<tr>' + r.slice(0, 5).map(function (x) { return '<td>' + esc(x) + '</td>'; }).join('') + '</tr>'; }).join('') + '</tbody></table>' : '<p class="hint">Mail_Log is empty.</p>';
+  });
 }
 function sendNow() {
   if (dirty) return toast('Save your changes first');

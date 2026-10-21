@@ -303,10 +303,13 @@ function readSettings_(ss) {
   return out;
 }
 
+/** Zone names compared without case, extra / non-breaking spaces or dash spacing. */
+function zoneKey_(z) { return String(z == null ? '' : z).replace(/[\s\u00a0]+/g, ' ').replace(/\s*-\s*/g, '-').trim().toUpperCase(); }
+
 function findZone_(ss, zone) {
   var data = ss.getSheetByName('Zone_Emails').getDataRange().getValues();
   for (var i = 1; i < data.length; i++) {
-    if (String(data[i][0]).trim().toUpperCase() === zone.trim().toUpperCase()) {
+    if (zoneKey_(data[i][0]) === zoneKey_(zone)) {
       return { name: String(data[i][1]).trim(), email: String(data[i][2]).trim(), cc: String(data[i][3]).trim() };
     }
   }
