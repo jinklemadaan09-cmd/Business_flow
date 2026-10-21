@@ -50,6 +50,7 @@ var GR_COLS = {
 var SUMMARY_APPROVAL_HEADERS = ['Visit ID', 'Costing Head Status', 'Costing Head Rate', 'Costing Head Remark', 'Costing Head Time',
   'RM Status', 'RM Rate', 'RM Remark', 'RM Time', 'Overall Status'];
 var ROLES = { CH: 'Costing Head', RM: 'Regional Manager' };
+var LANE_RATE_HEADERS = { 'Costing Head': 'Costing Head Rate', 'Regional Manager': 'RM Rate' };
 
 // Field_ID, Step, Label, Type, Required, Options (one per line), Help, Locked
 var DEFAULT_FIELDS = [
@@ -491,7 +492,7 @@ function visitMailHtml_(ss, id, a, rows, flows, link, greetName, roleLabel) {
     '<div style="font-size:20px;font-weight:bold;margin-top:4px">' + esc_(a.customer) + '</div>' +
     '<div style="opacity:.85">' + esc_(a.city) + ' &middot; Zone ' + esc_(a.zone) + ' &middot; Visit ID ' + esc_(id) + '</div></div>' +
     '<div style="background:#fdf0e9;border:1px solid #f9d5c3;border-top:0;padding:16px 20px">' +
-    '<div style="margin-bottom:10px">Dear ' + esc_(greetName) + ', your approval is needed as <b>' + esc_(roleLabel) + '</b>. You can also enter the approved rate.</div>' +
+    '<div style="margin-bottom:10px">Dear ' + esc_(greetName) + ', your approval is needed as <b>' + esc_(roleLabel) + '</b>. You can enter an approved rate for each lane.</div>' +
     '<a href="' + link + '" style="display:inline-block;background:#e9622b;color:#fff;text-decoration:none;font-weight:bold;font-size:15px;padding:12px 26px;border-radius:8px">Approve / Reject &amp; enter rate &rarr;</a>' +
     '</div>' +
     '<table style="margin:16px 0 6px"><tr>' + kv('Potential / month', 'Rs ' + (a.potValue || '-')) + kv('Current spend / month', 'Rs ' + (a.mValue || '-')) +
@@ -535,15 +536,17 @@ function approvalView_(token) {
   if (!f) return { ok: false, error: 'This approval link is not valid.' };
   var id = String(f.r[0]);
   var s = summaryRow_(ss, id), sv = s ? s.sheet.getRange(s.row, 1, 1, 28).getValues()[0] : [];
-  var lanes = [];
+  var lanes = [], role = String(f.r[4]);
   ['Visit_Lanes', 'Visit_Lanes_v2', 'Visit_Lanes_v3'].forEach(function (n) {
     var sh = ss.getSheetByName(n); if (!sh) return;
     var v = sh.getDataRange().getValues(), h = v[0];
     var ix = function (name) { return h.indexOf(name); };
-    v.slice(1).forEach(function (r) {
-      if (String(r[1]) !== id) return;
-      lanes.push({ oz: r[ix('Origin Zone')], o: r[ix('Origin')], dz: r[ix('Destination Zone')], d: r[ix('Destination')],
-        dp: ix('Delivery Point') >= 0 ? r[ix('Delivery Point')] : '', mt: r[ix('Origin MT / month')], fq: r[ix('Frequency')] });
+    var mine = ix(LANE_RATE_HEADERS[role]), other = ix(LANE_RATE_HEADERS[role === ROLES.CH ? ROLES.RM : ROLES.CH]);
+    v.forEach(function (r, i) {
+      if (i === 0 || String(r[1]) !== id) return;
+      lanes.push({ tab: n, row: i + 1, oz: r[ix('Origin Zone')], o: r[ix('Origin')], dz: r[ix('Destination Zone')], d: r[ix('Destination')],
+        dp: ix('Delivery Point') >= 0 ? r[ix('Delivery Point')] : '', mt: r[ix('Origin MT / month')], fq: r[ix('Frequency')],
+        rate: mine >= 0 ? r[mine] : '', otherRate: other >= 0 ? r[other] : '' });
     });
   });
   var others = f.all.slice(1).filter(function (r) { return String(r[0]) === id && String(r[6]) !== String(token); })
@@ -557,30 +560,56 @@ function approvalView_(token) {
   };
 }
 
-/** Called from the approval page. decision = APPROVED | REJECTED, rate and remark optional. */
-function approveSave(token, decision, rate, remark) {
+/**
+ * Called from the approval page. decision = APPROVED | REJECTED.
+ * rates = [{ tab, row, rate }] one optional rate per lane (origin > destination / delivery point).
+ */
+function approveSave(token, decision, rates, remark) {
   if (['APPROVED', 'REJECTED'].indexOf(decision) < 0) throw new Error('Choose Approve or Reject');
-  rate = String(rate == null ? '' : rate).trim();
-  if (rate && isNaN(Number(rate))) throw new Error('Rate must be a number');
+  rates = Array.isArray(rates) ? rates : [];
+  rates.forEach(function (x) {
+    x.rate = String(x.rate == null ? '' : x.rate).trim();
+    if (x.rate && isNaN(Number(x.rate))) throw new Error('Rates must be numbers');
+  });
   var ss = responseSheet_();
   var lock = LockService.getScriptLock();
   lock.waitLock(20000);
   try {
     var f = findApproval_(ss, token);
     if (!f) throw new Error('This approval link is not valid.');
-    var now = new Date(), id = String(f.r[0]);
-    f.sheet.getRange(f.row, 8, 1, 4).setValues([[decision, rate ? Number(rate) : '', String(remark || '').trim(), now]]);
+    var now = new Date(), id = String(f.r[0]), role = String(f.r[4]);
+
+    // per-lane rate into Visit_Lanes (only rows of this visit)
+    var summary = [];
+    rates.forEach(function (x) {
+      if (['Visit_Lanes', 'Visit_Lanes_v2', 'Visit_Lanes_v3'].indexOf(x.tab) < 0) return;
+      var sh = ss.getSheetByName(x.tab); if (!sh) return;
+      var row = Number(x.row);
+      if (!(row >= 2) || String(sh.getRange(row, 2).getValue()) !== id) return;
+      var head = sh.getRange(1, 1, 1, Math.max(sh.getLastColumn(), 1)).getValues()[0];
+      var col = head.indexOf(LANE_RATE_HEADERS[role]) + 1;
+      if (!col) {
+        col = head.length + 1;
+        sh.getRange(1, col).setValue(LANE_RATE_HEADERS[role]).setFontWeight('bold').setBackground('#e9622b').setFontColor('#ffffff');
+      }
+      sh.getRange(row, col).setValue(x.rate ? Number(x.rate) : '');
+      if (x.rate) {
+        var lr = sh.getRange(row, 1, 1, 10).getValues()[0];
+        summary.push(lr[6] + ' > ' + lr[8] + (lr[9] ? ' > ' + lr[9] : '') + ': ' + x.rate);
+      }
+    });
+    var rateText = summary.join('; ');
+    f.sheet.getRange(f.row, 8, 1, 4).setValues([[decision, rateText, String(remark || '').trim(), now]]);
 
     var all = f.sheet.getDataRange().getValues().slice(1).filter(function (r) { return String(r[0]) === id; });
     var overall = all.some(function (r) { return r[7] === 'REJECTED'; }) ? 'REJECTED'
       : all.every(function (r) { return r[7] === 'APPROVED'; }) ? 'APPROVED' : 'PENDING';
 
     var s = summaryRow_(ss, id);
-    var oldOverall = '';
     if (s) {
-      var off = f.r[4] === ROLES.CH ? 20 : 24;   // Costing Head cols 20-23, RM cols 24-27
-      s.sheet.getRange(s.row, off, 1, 4).setValues([[decision, rate ? Number(rate) : '', String(remark || '').trim(), now]]);
-      oldOverall = s.sheet.getRange(s.row, 28).getValue();
+      var off = role === ROLES.CH ? 20 : 24;   // Costing Head cols 20-23, RM cols 24-27
+      s.sheet.getRange(s.row, off, 1, 4).setValues([[decision, rateText, String(remark || '').trim(), now]]);
+      var oldOverall = s.sheet.getRange(s.row, 28).getValue();
       s.sheet.getRange(s.row, 28).setValue(overall);
       if (overall !== 'PENDING' && overall !== oldOverall) notifyRep_(ss, s, id, overall, all);
     }
@@ -603,7 +632,7 @@ function notifyRep_(ss, s, id, overall, all) {
     '<p>Hi ' + esc_(sv[2]) + ', the visit ' + esc_(id) + ' is <b style="color:' + color + '">' + overall.toLowerCase() + '</b>.</p>' +
     '<table style="border-collapse:collapse">' + all.map(function (r) {
       return '<tr><td style="border:1px solid #dfe4ec;padding:6px 10px;font-weight:bold">' + esc_(r[4]) + '</td><td style="border:1px solid #dfe4ec;padding:6px 10px">' +
-        esc_(r[7]) + (r[8] !== '' ? ' &middot; Rate Rs ' + esc_(r[8]) : '') + (r[9] ? ' &middot; ' + esc_(r[9]) : '') + '</td></tr>';
+        esc_(r[7]) + (r[8] !== '' ? '<br>Rates: ' + esc_(String(r[8]).replace(/; /g, ' | ')) : '') + (r[9] ? '<br>' + esc_(r[9]) : '') + '</td></tr>';
     }).join('') + '</table></div>';
   try {
     MailApp.sendEmail({ to: rep, subject: 'Visit ' + overall.toLowerCase() + ': ' + sv[4] + ' | ' + sv[5], htmlBody: html, name: 'Sugam Customer Visit' });

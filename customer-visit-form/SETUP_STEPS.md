@@ -72,7 +72,7 @@ Code badalne ke baad hamesha: **Deploy > Manage deployments > pencil > Version: 
 1. Field rep form bharta hai (zones / origin / destination / delivery point GR PNL data master se, unique).
 2. **Costing Head** aur zone ke **Regional Manager** ko alag-alag mail jata hai: upar "Approve / Reject & enter rate"
    button, neeche lanes aur poori visit details.
-3. Button se approval page khulta hai: Approve / Reject, approved rate (optional), remark (optional).
+3. Button se approval page khulta hai: Approve / Reject, har lane (origin > destination / delivery point) ka approved rate (optional, "Apply to all" bhi), remark (optional). Lane rate `Visit_Lanes` ke "Costing Head Rate" / "RM Rate" columns me save hota hai.
 4. Sheet me save hota hai:
    - `Approvals` - har approver ki ek row (status, rate, remark, time)
    - `Visit_Summary` - columns S se AB: Visit ID, Costing Head status/rate/remark/time, RM status/rate/remark/time, Overall Status

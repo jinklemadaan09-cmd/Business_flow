@@ -116,6 +116,14 @@
   .pill2.APPROVED { background: #e6f4ec; color: var(--ok); }
   .pill2.REJECTED { background: #fdecee; color: var(--crimson); }
   .pill2.PENDING { background: #fff4e0; color: #8a5a00; }
+  .sec-h { font-size: 12px; font-weight: 700; letter-spacing: .06em; color: var(--muted); margin: 4px 0 8px; }
+  .lr { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+  .lr-t { flex: 1; min-width: 0; }
+  .lr-t b { display: block; font-size: 14px; color: var(--navy); word-break: break-word; }
+  .lr-t small { color: var(--muted); font-size: 12px; }
+  .lr-i { width: 130px; flex: 0 0 auto; }
+  .allrow { display: flex; gap: 8px; margin-bottom: 6px; }
+  .allrow .pre { flex: 1; }
   .saved { border: 1.5px solid #bfe3cc; background: #f1faf4; border-radius: 12px; padding: 12px 14px; margin-top: 12px; display: none; }
 </style>
 </head>
@@ -154,20 +162,28 @@ function render() {
     '<div class="kv"><div><span>POTENTIAL / MONTH</span><b>' + money(v.potValue) + '</b></div><div><span>CURRENT SPEND / MONTH</span><b>' + money(v.mValue) + '</b></div>' +
     '<div><span>VOLUME / MONTH</span><b>' + esc(v.mVolume || '-') + ' MT</b></div><div><span>EXPECTED RATE</span><b>' + money(v.expRate) + '</b></div>' +
     '<div><span>COMMODITY</span><b>' + esc(v.commodity || '-') + '</b></div></div>' +
-    (B.lanes.length ? '<div class="tbl"><table class="l"><tr><th>Origin</th><th>Destination</th><th>Delivery point</th><th>MT/month</th></tr>' +
-      B.lanes.map(function (l) { return '<tr><td>' + esc(l.o) + '<br><small class="hint">' + esc(l.oz) + '</small></td><td>' + esc(l.d) + '<br><small class="hint">' + esc(l.dz) + '</small></td><td>' + esc(l.dp || '-') + '</td><td>' + esc(l.mt || '-') + '</td></tr>'; }).join('') +
-      '</table></div>' : '') +
-    (B.others.length ? '<p class="hint" style="margin:12px 0 0">' + B.others.map(function (o) { return esc(o.role) + ': <span class="pill2 ' + esc(o.status) + '">' + esc(o.status) + '</span>' + (o.rate !== '' ? ' &middot; ' + money(o.rate) : ''); }).join(' &nbsp; ') + '</p>' : '') +
-    '<p class="hint" style="margin:12px 0 0">Full details are in the mail.</p></section>' +
+    (B.others.length ? '<p class="hint" style="margin:12px 0 0">' + B.others.map(function (o) { return esc(o.role) + ': <span class="pill2 ' + esc(o.status) + '">' + esc(o.status) + '</span>'; }).join(' &nbsp; ') + '</p>' : '') +
+    '<p class="hint" style="margin:12px 0 0">' + B.lanes.length + ' lane' + (B.lanes.length === 1 ? '' : 's') + ' below. Full details are in the mail.</p></section>' +
 
     '<section class="card"><div class="tag">YOUR DECISION &middot; ' + esc(String(B.role).toUpperCase()) + '</div><h2>Approve this proposal?</h2>' +
     '<p class="hint">Current status: <span class="pill2 ' + esc(B.status) + '">' + esc(B.status) + '</span>' + (B.decidedAt ? ' &middot; ' + esc(B.decidedAt) : '') + '</p>' +
     '<div class="choice"><button type="button" class="ch ap' + (choice === 'APPROVED' ? ' on' : '') + '" onclick="pick(\'APPROVED\')"><span class="ic2">&#10003;</span>Approve</button>' +
     '<button type="button" class="ch rj' + (choice === 'REJECTED' ? ' on' : '') + '" onclick="pick(\'REJECTED\')"><span class="ic2">&#10007;</span>Reject</button></div>' +
-    '<div class="grid" style="margin-top:14px"><div><label class="f">Approved rate (optional)</label><div class="pre"><span>&#8377;</span><input id="rate" type="number" inputmode="decimal" min="0" step="any" value="' + esc(B.rate) + '"></div></div>' +
+    '<div class="sec-h" style="margin-top:18px">APPROVED RATE PER LANE (OPTIONAL)</div>' +
+    (B.lanes.length > 1 ? '<div class="allrow"><div class="pre"><span>&#8377;</span><input id="allRate" type="number" inputmode="decimal" min="0" step="any" placeholder="Same rate for all lanes"></div><button type="button" class="btn sec" onclick="applyAll()">Apply to all</button></div>' : '') +
+    B.lanes.map(function (l, k) {
+      return '<div class="lr"><div class="lr-t"><b>' + esc(l.o) + ' &rarr; ' + esc(l.d) + (l.dp ? ' &rsaquo; ' + esc(l.dp) : '') + '</b>' +
+        '<small>' + esc(l.oz) + ' &rarr; ' + esc(l.dz) + (l.mt ? ' &middot; ' + esc(l.mt) + ' MT/month' : '') + (l.otherRate !== '' && l.otherRate != null ? ' &middot; other approver: ' + money(l.otherRate) : '') + '</small></div>' +
+        '<div class="pre lr-i"><span>&#8377;</span><input class="lrate" data-k="' + k + '" type="number" inputmode="decimal" min="0" step="any" placeholder="Rate" value="' + esc(l.rate) + '"></div></div>';
+    }).join('') +
+    '<div class="grid" style="margin-top:14px">' +
     '<div class="full"><label class="f">Remark (optional)</label><textarea id="remark" placeholder="Conditions, reason, revised terms...">' + esc(B.remark) + '</textarea></div></div>' +
     '<button class="btn sub" id="saveBtn" style="width:100%;margin-top:14px" onclick="saveIt()">Submit decision</button>' +
     '<div class="saved" id="saved"></div></section>';
+}
+function applyAll() {
+  var v = document.getElementById('allRate').value;
+  Array.prototype.forEach.call(document.querySelectorAll('.lrate'), function (i) { i.value = v; });
 }
 function pick(c) { choice = c; Array.prototype.forEach.call(document.querySelectorAll('.ch'), function (b) { b.classList.toggle('on', b.classList.contains(c === 'APPROVED' ? 'ap' : 'rj')); }); }
 function saveIt() {
@@ -180,7 +196,9 @@ function saveIt() {
     s.style.display = 'block'; s.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }).withFailureHandler(function (e) {
     b.disabled = false; b.textContent = 'Submit decision'; toast(e && e.message ? e.message : String(e));
-  }).approveSave(B.token, choice, document.getElementById('rate').value, document.getElementById('remark').value);
+  }).approveSave(B.token, choice, B.lanes.map(function (l, k) {
+    return { tab: l.tab, row: l.row, rate: document.querySelector('.lrate[data-k="' + k + '"]').value };
+  }), document.getElementById('remark').value);
 }
 render();
 </script>
