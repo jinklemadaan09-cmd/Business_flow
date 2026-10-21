@@ -454,7 +454,7 @@ function submitVisit(p) {
       'RM Email': rm.email, 'RM Status': rm.email ? 'PENDING' : 'NO RM EMAIL', 'HO Status': 'PENDING',
       'RM Token': tok(), 'HO Token': tok(), 'FR Token': tok() });
     writeResponseStatus_(ss, id, { 'Stage': stage });
-    ss.getSheetByName('Mail_Log').appendRow([now, a.customer, a.zone, '', 'NEW VISIT ' + id + ' > ' + stage]);
+    mailLog_(ss).appendRow([now, a.customer, a.zone, '', 'NEW VISIT ' + id + ' > ' + stage]);
     var instant = isInstant_(settings);
     if (instant) mailApprover_(ss, trackerRows_(ss).filter(function (x) { return String(x['Visit ID']) === id; })[0], rm.email ? 'RM' : 'HO');
     return { id: id, status: stage + '. ' + (rm.email ? 'The Regional Manager' : 'Head Costing') + (instant ? ' has been mailed now.' : ' gets it in the next digest mail.') };
@@ -817,14 +817,21 @@ function btn_(href, text) {
 }
 function rs_(v) { return v === '' || v == null ? '-' : 'Rs ' + esc_(v); }
 
+/** Mail_Log tab in the response sheet; made again if someone deleted it. */
+function mailLog_(ss) {
+  var sh = ss.getSheetByName('Mail_Log');
+  if (!sh) { sh = ss.insertSheet('Mail_Log'); sh.appendRow(['Time', 'What / customer', 'Zone', 'To', 'Status']); sh.setFrozenRows(1); }
+  return sh;
+}
+
 function sendMail_(ss, m, what) {
   try {
     m.name = m.name || MAIL_FROM_NAME;
     MailApp.sendEmail(m);
-    ss.getSheetByName('Mail_Log').appendRow([new Date(), what, '', m.to + (m.cc ? ' | cc: ' + m.cc : ''), 'SENT']);
+    mailLog_(ss).appendRow([new Date(), what, '', m.to + (m.cc ? ' | cc: ' + m.cc : ''), 'SENT']);
     return true;
   } catch (err) {
-    ss.getSheetByName('Mail_Log').appendRow([new Date(), what, '', m.to, 'FAILED: ' + err.message]);
+    mailLog_(ss).appendRow([new Date(), what, '', m.to, 'FAILED: ' + err.message]);
     return false;
   }
 }
