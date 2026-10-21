@@ -319,6 +319,19 @@ function syncResponseColumns_(ss, config) {
 
 /* ----------------------------------------------------------------- submit */
 
+function priceOf_(d) { var v = String(d.price == null ? '' : d.price).trim(); return v && !isNaN(Number(v)) ? Number(v) : ''; }
+
+/** Column with this header in a lanes tab, added at the end when missing. */
+function laneColumn_(sh, title, color) {
+  var head = sh.getRange(1, 1, 1, Math.max(sh.getLastColumn(), 1)).getValues()[0];
+  var col = head.indexOf(title) + 1;
+  if (!col) {
+    col = head.length + 1;
+    sh.getRange(1, col).setValue(title).setFontWeight('bold').setBackground(color).setFontColor('#ffffff');
+  }
+  return col;
+}
+
 function destName_(d) { return d.dp ? d.place + ' > ' + d.dp : (d.place || 'ALL OF ' + d.zone); }
 function originName_(o) { return o.place || ('ALL OF ' + o.zone); }
 
@@ -345,7 +358,7 @@ function submitVisit(p) {
     var now = new Date();
     var id = 'SV-' + Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyyMMdd-HHmmss') + '-' + Math.floor(Math.random() * 900 + 100);
     var flowText = flows.map(function (fl) {
-      return originName_(fl.origin) + ' > ' + fl.dests.map(destName_).join(', ') +
+      return originName_(fl.origin) + ' > ' + fl.dests.map(function (d) { return destName_(d) + (priceOf_(d) !== '' ? ' (Rs ' + priceOf_(d) + ')' : ''); }).join(', ') +
         (fl.mt ? ' | ' + fl.mt + ' MT/month' : '') + (fl.freq ? ' | ' + fl.freq : '') + (fl.note ? ' | ' + fl.note : '');
     }).join('\n');
 
@@ -375,7 +388,13 @@ function submitVisit(p) {
           d.zone, d.place || ('ALL OF ' + d.zone), d.dp || '', fl.mt || '', fl.freq || '', fl.note || '']);
       });
     });
-    if (lanes.length) vf.getRange(vf.getLastRow() + 1, 1, lanes.length, FH.length).setValues(lanes);
+    if (lanes.length) {
+      var first = vf.getLastRow() + 1;
+      vf.getRange(first, 1, lanes.length, FH.length).setValues(lanes);
+      var sc = laneColumn_(vf, 'Suggested Price (Field Rep)', '#127a43'), prices = [];
+      flows.forEach(function (fl) { fl.dests.forEach(function (d) { prices.push([priceOf_(d)]); }); });
+      vf.getRange(first, sc, prices.length, 1).setValues(prices);
+    }
 
     // Approvals + mail
     var rows = fields.map(function (f) { return [f.label, a[f.id]]; });
@@ -482,7 +501,7 @@ function visitMailHtml_(ss, id, a, rows, flows, link, greetName, roleLabel) {
     fl.dests.forEach(function (d) {
       laneRows.push('<tr><td style="' + td + '">' + esc_(fl.origin.zone) + '</td><td style="' + td + '">' + esc_(originName_(fl.origin)) +
         '</td><td style="' + td + '">' + esc_(d.zone) + '</td><td style="' + td + '">' + esc_(d.place || 'ALL') + '</td><td style="' + td + '">' +
-        esc_(d.dp || '') + '</td><td style="' + td + '">' + esc_(fl.mt || '') + '</td><td style="' + td + '">' + esc_(fl.freq || '') + '</td></tr>');
+        esc_(d.dp || '') + '</td><td style="' + td + 'font-weight:bold;color:#127a43">' + (priceOf_(d) !== '' ? 'Rs ' + priceOf_(d) : '-') + '</td><td style="' + td + '">' + esc_(fl.mt || '') + '</td><td style="' + td + '">' + esc_(fl.freq || '') + '</td></tr>');
     });
   });
   var th = function (t) { return '<th style="' + td + 'background:#2a3273;color:#fff;text-align:left;font-size:12px">' + t + '</th>'; };
@@ -498,8 +517,8 @@ function visitMailHtml_(ss, id, a, rows, flows, link, greetName, roleLabel) {
     '<table style="margin:16px 0 6px"><tr>' + kv('Potential / month', 'Rs ' + (a.potValue || '-')) + kv('Current spend / month', 'Rs ' + (a.mValue || '-')) +
     kv('Volume / month', (a.mVolume || '-') + ' MT') + kv('Expected rate', a.expRate ? 'Rs ' + a.expRate : '-') + '</tr></table>' +
     '<div style="font-weight:bold;color:#e9622b;font-size:12px;letter-spacing:1px;margin:16px 0 6px">ORIGIN &gt; DESTINATION LANES</div>' +
-    '<table style="border-collapse:collapse;width:100%"><tr>' + th('Origin zone') + th('Origin') + th('Dest zone') + th('Destination') + th('Delivery point') + th('MT/month') + th('Frequency') + '</tr>' +
-    (laneRows.join('') || '<tr><td colspan="7" style="' + td + '">-</td></tr>') + '</table>' +
+    '<table style="border-collapse:collapse;width:100%"><tr>' + th('Origin zone') + th('Origin') + th('Dest zone') + th('Destination') +  th('Delivery point') + th('Suggested price') + th('MT/month') + th('Frequency') + '</tr>' +
+    (laneRows.join('') || '<tr><td colspan="8" style="' + td + '">-</td></tr>') + '</table>' +
     '<div style="font-weight:bold;color:#e9622b;font-size:12px;letter-spacing:1px;margin:18px 0 6px">FULL VISIT DETAILS</div>' +
     '<table style="border-collapse:collapse;width:100%">' +
     rows.filter(function (r) { return r[1]; }).map(function (r, i) {
@@ -541,12 +560,12 @@ function approvalView_(token) {
     var sh = ss.getSheetByName(n); if (!sh) return;
     var v = sh.getDataRange().getValues(), h = v[0];
     var ix = function (name) { return h.indexOf(name); };
-    var mine = ix(LANE_RATE_HEADERS[role]), other = ix(LANE_RATE_HEADERS[role === ROLES.CH ? ROLES.RM : ROLES.CH]);
+    var sug = ix('Suggested Price (Field Rep)'), mine = ix(LANE_RATE_HEADERS[role]), other = ix(LANE_RATE_HEADERS[role === ROLES.CH ? ROLES.RM : ROLES.CH]);
     v.forEach(function (r, i) {
       if (i === 0 || String(r[1]) !== id) return;
       lanes.push({ tab: n, row: i + 1, oz: r[ix('Origin Zone')], o: r[ix('Origin')], dz: r[ix('Destination Zone')], d: r[ix('Destination')],
         dp: ix('Delivery Point') >= 0 ? r[ix('Delivery Point')] : '', mt: r[ix('Origin MT / month')], fq: r[ix('Frequency')],
-        rate: mine >= 0 ? r[mine] : '', otherRate: other >= 0 ? r[other] : '' });
+        rate: mine >= 0 ? r[mine] : '', otherRate: other >= 0 ? r[other] : '', suggested: sug >= 0 ? r[sug] : '' });
     });
   });
   var others = f.all.slice(1).filter(function (r) { return String(r[0]) === id && String(r[6]) !== String(token); })
@@ -586,12 +605,7 @@ function approveSave(token, decision, rates, remark) {
       var sh = ss.getSheetByName(x.tab); if (!sh) return;
       var row = Number(x.row);
       if (!(row >= 2) || String(sh.getRange(row, 2).getValue()) !== id) return;
-      var head = sh.getRange(1, 1, 1, Math.max(sh.getLastColumn(), 1)).getValues()[0];
-      var col = head.indexOf(LANE_RATE_HEADERS[role]) + 1;
-      if (!col) {
-        col = head.length + 1;
-        sh.getRange(1, col).setValue(LANE_RATE_HEADERS[role]).setFontWeight('bold').setBackground('#e9622b').setFontColor('#ffffff');
-      }
+      var col = laneColumn_(sh, LANE_RATE_HEADERS[role], '#e9622b');
       sh.getRange(row, col).setValue(x.rate ? Number(x.rate) : '');
       if (x.rate) {
         var lr = sh.getRange(row, 1, 1, 10).getValues()[0];

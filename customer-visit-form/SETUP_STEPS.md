@@ -69,7 +69,7 @@ Apps Script project (Business_Flow) me ye files honi chahiye. Naam exactly aise 
 Code badalne ke baad hamesha: **Deploy > Manage deployments > pencil > Version: New version > Deploy** (link wahi rehta hai).
 
 ## Kya hota hai
-1. Field rep form bharta hai (zones / origin / destination / delivery point GR PNL data master se, unique).
+1. Field rep form bharta hai (zones / origin / destination / delivery point GR PNL data master se, unique). Har chune hue destination ke saamne optional suggested price (`Visit_Lanes` > "Suggested Price (Field Rep)").
 2. **Costing Head** aur zone ke **Regional Manager** ko alag-alag mail jata hai: upar "Approve / Reject & enter rate"
    button, neeche lanes aur poori visit details.
 3. Button se approval page khulta hai: Approve / Reject, har lane (origin > destination / delivery point) ka approved rate (optional, "Apply to all" bhi), remark (optional). Lane rate `Visit_Lanes` ke "Costing Head Rate" / "RM Rate" columns me save hota hai.

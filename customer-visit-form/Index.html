@@ -120,6 +120,15 @@
   .picker .bar2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 8px; }
   @media (max-width: 560px) { .picker .bar2 { grid-template-columns: 1fr; } }
   .addstop { border: 0; background: none; color: var(--navy-2); font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; padding: 6px 0; }
+  .sel { border: 1.5px solid var(--line); border-radius: 10px; margin-top: 6px; background: #fff; }
+  .sel-r { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-bottom: 1px solid #f1f3f7; }
+  .sel-r:last-child { border-bottom: 0; }
+  .sel-t { flex: 1; min-width: 0; }
+  .sel-t b { display: block; font-size: 13px; color: var(--navy); word-break: break-word; }
+  .sel-t small { font-size: 11px; color: var(--muted); }
+  .sel-i { width: 130px; flex: 0 0 auto; }
+  .sel-i input { padding-top: 8px; padding-bottom: 8px; }
+  .sel-x { border: 0; background: none; color: var(--muted); font-size: 20px; cursor: pointer; padding: 0 2px; }
   .cnt { font-size: 12px; color: var(--muted); margin-top: 8px; }
   .clear { border: 0; background: none; color: var(--crimson); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
   .empty { color: var(--muted); padding: 30px 0; text-align: center; }
@@ -342,11 +351,14 @@ function renderList(i) {
 function renderChips(i) {
   var el = document.getElementById('chips' + i); if (!el) return;
   var ds = flows[i].dests;
-  el.innerHTML = (ds.length ? '<div class="cnt">' + ds.length + ' destination' + (ds.length > 1 ? 's' : '') + ' selected <button class="clear" onclick="clearDests(' + i + ')">Clear all</button></div>' : '') +
-    '<div class="chips">' + ds.map(function (d, k) {
-      return '<span class="chip">' + esc(placeName(d)) + (d.place ? ' <small>' + esc(d.zone) + '</small>' : '') +
-        '<button onclick="removeChip(' + i + ',' + k + ')">&times;</button></span>'; }).join('') + '</div>';
+  el.innerHTML = ds.length ? '<div class="cnt">' + ds.length + ' destination' + (ds.length > 1 ? 's' : '') + ' selected &middot; suggested price is optional <button class="clear" onclick="clearDests(' + i + ')">Clear all</button></div>' +
+    '<div class="sel">' + ds.map(function (d, k) {
+      return '<div class="sel-r"><div class="sel-t"><b>' + esc(placeName(d)) + '</b><small>' + esc(d.zone) + '</small></div>' +
+        '<div class="pre sel-i"><span>&#8377;</span><input type="number" inputmode="decimal" min="0" step="any" placeholder="Price" value="' + esc(d.price || '') + '" oninput="setPrice(' + i + ',' + k + ',this.value)"></div>' +
+        '<button class="sel-x" title="Remove" onclick="removeChip(' + i + ',' + k + ')">&times;</button></div>';
+    }).join('') + '</div>' : '';
 }
+function setPrice(i, k, v) { flows[i].dests[k].price = v; save(); }
 function renderFlows() {
   var el = document.getElementById('flows'); if (!el) return;
   el.innerHTML = flows.map(function (fl, i) {
@@ -412,7 +424,7 @@ function reviewHtml() {
     s.fields.forEach(function (f) {
       if (f.type === 'flows') {
         flows.forEach(function (fl, i) {
-          h += '<dt>From ' + esc(placeName(fl.origin)) + '</dt><dd>To ' + fl.dests.map(function (x) { return esc(placeName(x)); }).join(', ') +
+          h += '<dt>From ' + esc(placeName(fl.origin)) + '</dt><dd>To ' + fl.dests.map(function (x) { return esc(placeName(x)) + (x.price ? ' (&#8377; ' + esc(x.price) + ')' : ''); }).join(', ') +
             (fl.mt ? ' &middot; ' + esc(fl.mt) + ' MT/month' : '') + (fl.freq ? ' &middot; ' + esc(fl.freq) : '') + '</dd>';
         });
         return;

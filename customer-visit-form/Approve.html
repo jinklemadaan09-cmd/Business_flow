@@ -121,6 +121,7 @@
   .lr-t { flex: 1; min-width: 0; }
   .lr-t b { display: block; font-size: 14px; color: var(--navy); word-break: break-word; }
   .lr-t small { color: var(--muted); font-size: 12px; }
+  .sugg { display: inline-block; margin-top: 4px; font-size: 12px; font-weight: 700; color: var(--ok); background: #e9f6ee; border-radius: 999px; padding: 2px 9px; }
   .lr-i { width: 130px; flex: 0 0 auto; }
   .allrow { display: flex; gap: 8px; margin-bottom: 6px; }
   .allrow .pre { flex: 1; }
@@ -173,7 +174,8 @@ function render() {
     (B.lanes.length > 1 ? '<div class="allrow"><div class="pre"><span>&#8377;</span><input id="allRate" type="number" inputmode="decimal" min="0" step="any" placeholder="Same rate for all lanes"></div><button type="button" class="btn sec" onclick="applyAll()">Apply to all</button></div>' : '') +
     B.lanes.map(function (l, k) {
       return '<div class="lr"><div class="lr-t"><b>' + esc(l.o) + ' &rarr; ' + esc(l.d) + (l.dp ? ' &rsaquo; ' + esc(l.dp) : '') + '</b>' +
-        '<small>' + esc(l.oz) + ' &rarr; ' + esc(l.dz) + (l.mt ? ' &middot; ' + esc(l.mt) + ' MT/month' : '') + (l.otherRate !== '' && l.otherRate != null ? ' &middot; other approver: ' + money(l.otherRate) : '') + '</small></div>' +
+        '<small>' + esc(l.oz) + ' &rarr; ' + esc(l.dz) + (l.mt ? ' &middot; ' + esc(l.mt) + ' MT/month' : '') + (l.otherRate !== '' && l.otherRate != null ? ' &middot; other approver: ' + money(l.otherRate) : '') + '</small>' +
+        (l.suggested !== '' && l.suggested != null ? '<span class="sugg">Field rep suggested ' + money(l.suggested) + '</span>' : '') + '</div>' +
         '<div class="pre lr-i"><span>&#8377;</span><input class="lrate" data-k="' + k + '" type="number" inputmode="decimal" min="0" step="any" placeholder="Rate" value="' + esc(l.rate) + '"></div></div>';
     }).join('') +
     '<div class="grid" style="margin-top:14px">' +
