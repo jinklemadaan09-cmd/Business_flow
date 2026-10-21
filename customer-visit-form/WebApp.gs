@@ -27,7 +27,7 @@ var CONFIG_HEADERS = ['Field_ID', 'Step', 'Order', 'Label', 'Type', 'Required', 
 var STEP_NAMES = ['Customer Visit', 'Monthly Business Potential', 'Material Understanding',
   'Origin & Destination Mapping', 'Indicative Rate Discussion'];
 var FIELD_TYPES = ['text', 'textarea', 'number', 'money', 'date', 'email', 'tel', 'single', 'multi', 'dropdown', 'zone', 'flows'];
-var MASTER_CACHE_KEY = 'visit_masters_v3';
+var MASTER_CACHE_KEY = 'visit_masters_v4';
 var FLOWS_HELP = 'One block per origin. Tick all its destinations in one go, then add a new block for the next origin.';
 var OLD_FLOWS_HELP = 'One card per flow. Add stops in order: origin, then every place the material goes next.';
 
@@ -44,8 +44,11 @@ var GR_COLS = {
   origin: ['origin', 'originname', 'origincity', 'bookingbranch', 'branch'],
   destZone: ['destzone', 'destinationzone', 'dstzone'],
   dest: ['destname', 'destination', 'destinationname', 'destcity'],
-  deliveryPoint: ['deliverypoint', 'delpoint', 'deliverypointname', 'dp']
+  deliveryPoint: ['deliverypoint', 'delpoint', 'deliverypointname', 'dp'],
+  cardRate: ['cardrate', 'cardratekg', 'cardrateperkg', 'cardratepkg', 'tariffrate', 'card'],
+  grDate: ['grdt', 'grdate', 'bookingdate', 'date']
 };
+var GR_OPTIONAL = ['deliveryPoint', 'cardRate', 'grDate'];
 
 var SUMMARY_APPROVAL_HEADERS = ['Visit ID', 'Costing Head Status', 'Costing Head Rate', 'Costing Head Remark', 'Costing Head Time',
   'RM Status', 'RM Rate', 'RM Remark', 'RM Time', 'Overall Status'];
@@ -128,7 +131,7 @@ function doGet(e) {
   if (file === 'Index') {
     var ss = responseSheet_();
     var m = getMasters_(ss);
-    boot = { steps: STEP_NAMES, fields: activeFields_(readConfig_(ss)), masters: { origins: m.origins, dests: m.dests } };
+    boot = { steps: STEP_NAMES, fields: activeFields_(readConfig_(ss)), masters: { origins: m.origins, dests: m.dests, card: m.card || {} } };
   } else if (file === 'Approve') {
     boot = approvalView_(e.parameter.t);
   } else {
@@ -227,12 +230,18 @@ function readGrMaster_(settings) {
   Object.keys(GR_COLS).forEach(function (k) {
     var idx = -1;
     GR_COLS[k].some(function (alias) { idx = head.indexOf(alias); return idx >= 0; });
-    if (idx < 0 && k !== 'deliveryPoint') missing.push(GR_COLS[k][0]);
+    if (idx < 0 && GR_OPTIONAL.indexOf(k) < 0) missing.push(GR_COLS[k][0]);
     col[k] = idx;
   });
   if (missing.length) throw new Error('Columns not found in ' + tab + ': ' + missing.join(', '));
   var read = function (k) { return col[k] < 0 ? null : sh.getRange(2, col[k] + 1, lastRow - 1, 1).getValues(); };
   var oz = read('originZone'), o = read('origin'), dz = read('destZone'), d = read('dest'), dp = read('deliveryPoint');
+  var cr = read('cardRate'), gd = read('grDate'), card = {}, cardAt = {};
+  // Card rate per lane: newest GR date wins, then the higher rate.
+  var putCard = function (key, rate, t) {
+    if (!(key in card) || t > cardAt[key] || (t === cardAt[key] && rate > card[key])) { card[key] = rate; cardAt[key] = t; }
+  };
+  var timeOf = function (v) { if (v instanceof Date) return v.getTime(); var t = Date.parse(v); return isNaN(t) ? 0 : t; };
   var clean = function (v) { v = String(v == null ? '' : v).trim(); return v && v.toUpperCase() !== 'UNSPECIFIED' ? v : ''; };
   var origins = {}, dests = {}, seenO = {}, seenD = {};
   for (var r = 0; r < lastRow - 1; r++) {
@@ -244,10 +253,33 @@ function readGrMaster_(settings) {
       dests[z2][dn] = dests[z2][dn] || [];
       if (p && p !== dn && !seenD[z2 + '|' + dn + '|' + p]) { seenD[z2 + '|' + dn + '|' + p] = 1; dests[z2][dn].push(p); }
     }
+    var rate = cr ? Number(cr[r][0]) : 0;
+    if (on && rate > 0) {
+      var t = gd ? timeOf(gd[r][0]) : 0;
+      if (p) putCard(cardKey_(on, '', p), Math.round(rate * 100) / 100, t);
+      if (dn) putCard(cardKey_(on, dn, ''), Math.round(rate * 100) / 100, t);
+    }
   }
   Object.keys(origins).forEach(function (z) { origins[z].sort(); });
   Object.keys(dests).forEach(function (z) { Object.keys(dests[z]).forEach(function (n) { dests[z][n].sort(); }); });
-  return { source: 'GR PNL data master: ' + file.getName() + ' / ' + tab + ' (' + (lastRow - 1) + ' GR rows)', origins: origins, dests: dests };
+  return { source: 'GR PNL data master: ' + file.getName() + ' / ' + tab + ' (' + (lastRow - 1) + ' GR rows)', origins: origins, dests: dests, card: card,
+    cardNote: cr ? '' : 'No card rate column found in ' + tab + ' (looked for: CARD RATE)' };
+}
+
+/**
+ * Card rate key. Delivery point picked: origin + delivery point. Otherwise origin + destination.
+ * The same function runs in the form page so both sides match.
+ */
+function cardKey_(origin, dest, dp) {
+  var u = function (v) { return String(v || '').trim().toUpperCase(); };
+  return u(dp) ? 'P|' + u(origin) + '|' + u(dp) : 'D|' + u(origin) + '|' + u(dest);
+}
+
+/** Card rate for one lane, '' when the origin is a whole zone or no rate is known. */
+function cardRateOf_(m, origin, d) {
+  if (!m || !m.card || !origin || !origin.place || !d.place) return '';
+  var v = m.card[cardKey_(origin.place, d.place, d.dp)];
+  return v == null ? '' : v;
 }
 
 /** Lane master copy inside the script, used only when the GR master cannot be read. */
@@ -261,7 +293,7 @@ function fallbackMasters_() {
 }
 
 function masterCounts_(m) {
-  var c = { originZones: Object.keys(m.origins).length, origins: 0, destZones: Object.keys(m.dests).length, dests: 0, deliveryPoints: 0 };
+  var c = { originZones: Object.keys(m.origins).length, origins: 0, destZones: Object.keys(m.dests).length, dests: 0, deliveryPoints: 0, cardRates: Object.keys(m.card || {}).length };
   Object.keys(m.origins).forEach(function (z) { c.origins += m.origins[z].length; });
   Object.keys(m.dests).forEach(function (z) {
     Object.keys(m.dests[z]).forEach(function (n) { c.dests += 1; c.deliveryPoints += m.dests[z][n].length; });
@@ -355,7 +387,8 @@ function submitVisit(p) {
   var lock = LockService.getScriptLock();
   lock.waitLock(20000);
   try {
-    var now = new Date();
+    var now = new Date(), masters = getMasters_(ss);
+    flows.forEach(function (fl) { fl.dests.forEach(function (d) { d.card = cardRateOf_(masters, fl.origin, d); }); });
     var id = 'SV-' + Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyyMMdd-HHmmss') + '-' + Math.floor(Math.random() * 900 + 100);
     var flowText = flows.map(function (fl) {
       return originName_(fl.origin) + ' > ' + fl.dests.map(function (d) { return destName_(d) + (priceOf_(d) !== '' ? ' (Rs ' + priceOf_(d) + ')' : ''); }).join(', ') +
@@ -378,16 +411,18 @@ function submitVisit(p) {
     cols.sheet.appendRow(row);
 
     // Customer_Lanes: one row per customer x origin > destination / delivery point
-    var cl = customerLanesSheet_(ss), lanes = [], n = 0;
+    var total = flows.reduce(function (t, x) { return t + x.dests.length; }, 0), lanes = [], n = 0;
     flows.forEach(function (fl, i) {
       fl.dests.forEach(function (d) {
         n++;
-        lanes.push([a.customer || '', a.zone || '', id, a.visitDate || '', now, a.repName || '', n + ' of ' + flows.reduce(function (t, x) { return t + x.dests.length; }, 0),
-          i + 1, fl.origin.zone, originName_(fl.origin), d.zone, d.place || ('ALL OF ' + d.zone), d.dp || '',
-          originName_(fl.origin) + ' > ' + destName_(d), priceOf_(d), fl.mt || '', fl.freq || '', fl.note || '', '', '', 'PENDING']);
+        lanes.push({ 'Customer': a.customer || '', 'Customer Zone': a.zone || '', 'Visit ID': id, 'Visit Date': a.visitDate || '', 'Submitted At': now,
+          'Field Rep': a.repName || '', 'Lane': n + ' of ' + total, 'Origin #': i + 1, 'Origin Zone': fl.origin.zone, 'Origin': originName_(fl.origin),
+          'Destination Zone': d.zone, 'Destination': d.place || ('ALL OF ' + d.zone), 'Delivery Point': d.dp || '',
+          'Lane (From > To)': originName_(fl.origin) + ' > ' + destName_(d), 'Card Rate': d.card, 'Suggested Price (Field Rep)': priceOf_(d),
+          'Origin MT / month': fl.mt || '', 'Frequency': fl.freq || '', 'Note': fl.note || '', 'Lane Status': 'PENDING', 'Overall Status': 'PENDING' });
       });
     });
-    if (lanes.length) cl.getRange(cl.getLastRow() + 1, 1, lanes.length, CL_HEADERS.length).setValues(lanes);
+    writeLanes_(customerLanesSheet_(ss), lanes);
 
     // Approvals + mail
     var rows = fields.map(function (f) { return [f.label, a[f.id]]; });
@@ -419,7 +454,11 @@ function submitVisit(p) {
 var CL_TAB = 'Customer_Lanes';
 var CL_HEADERS = ['Customer', 'Customer Zone', 'Visit ID', 'Visit Date', 'Submitted At', 'Field Rep', 'Lane',
   'Origin #', 'Origin Zone', 'Origin', 'Destination Zone', 'Destination', 'Delivery Point', 'Lane (From > To)',
-  'Suggested Price (Field Rep)', 'Origin MT / month', 'Frequency', 'Note', 'Costing Head Rate', 'RM Rate', 'Overall Status'];
+  'Card Rate', 'Suggested Price (Field Rep)', 'Origin MT / month', 'Frequency', 'Note',
+  'CH Decision', 'Costing Head Rate', 'RM Decision', 'RM Rate', 'Lane Status', 'Overall Status'];
+var LANE_DEC_HEADERS = { 'Costing Head': 'CH Decision', 'Regional Manager': 'RM Decision' };
+var CL_COLORS = { 'Card Rate': '#3b45a3', 'Suggested Price (Field Rep)': '#127a43', 'CH Decision': '#e9622b', 'Costing Head Rate': '#e9622b',
+  'RM Decision': '#e9622b', 'RM Rate': '#e9622b' };
 var LANE_TABS = [CL_TAB, 'Visit_Lanes', 'Visit_Lanes_v2', 'Visit_Lanes_v3'];   // older tabs are still read for old visits
 
 function customerLanesSheet_(ss) {
@@ -427,12 +466,24 @@ function customerLanesSheet_(ss) {
   if (sh) return sh;
   sh = ss.insertSheet(CL_TAB);
   sh.getRange(1, 1, 1, CL_HEADERS.length).setValues([CL_HEADERS]).setFontWeight('bold').setBackground('#2a3273').setFontColor('#ffffff');
-  sh.getRange(1, 15).setBackground('#127a43');
-  sh.getRange(1, 19, 1, 2).setBackground('#e9622b');
+  CL_HEADERS.forEach(function (h, i) { if (CL_COLORS[h]) sh.getRange(1, i + 1).setBackground(CL_COLORS[h]); });
   sh.setFrozenRows(1);
   sh.setFrozenColumns(1);
   sh.getRange(1, 1, sh.getMaxRows(), CL_HEADERS.length).createFilter();
   return sh;
+}
+
+/** Appends lane rows by header name; columns missing in an older tab are added at the end. */
+function writeLanes_(sh, objs) {
+  if (!objs.length) return;
+  var head = sh.getRange(1, 1, 1, Math.max(sh.getLastColumn(), 1)).getValues()[0];
+  CL_HEADERS.forEach(function (h) {
+    if (head.indexOf(h) >= 0) return;
+    head.push(h);
+    sh.getRange(1, head.length).setValue(h).setFontWeight('bold').setBackground(CL_COLORS[h] || '#2a3273').setFontColor('#ffffff');
+  });
+  var rows = objs.map(function (o) { return head.map(function (h) { return o[h] === undefined ? '' : o[h]; }); });
+  sh.getRange(sh.getLastRow() + 1, 1, rows.length, head.length).setValues(rows);
 }
 
 /** Header index helper for any lanes tab. */
@@ -515,7 +566,7 @@ function visitMailHtml_(ss, id, a, rows, flows, link, greetName, roleLabel) {
     fl.dests.forEach(function (d) {
       laneRows.push('<tr><td style="' + td + '">' + esc_(fl.origin.zone) + '</td><td style="' + td + '">' + esc_(originName_(fl.origin)) +
         '</td><td style="' + td + '">' + esc_(d.zone) + '</td><td style="' + td + '">' + esc_(d.place || 'ALL') + '</td><td style="' + td + '">' +
-        esc_(d.dp || '') + '</td><td style="' + td + 'font-weight:bold;color:#127a43">' + (priceOf_(d) !== '' ? 'Rs ' + priceOf_(d) : '-') + '</td><td style="' + td + '">' + esc_(fl.mt || '') + '</td><td style="' + td + '">' + esc_(fl.freq || '') + '</td></tr>');
+        esc_(d.dp || '') + '</td><td style="' + td + '">' + (d.card !== '' && d.card != null ? 'Rs ' + d.card : '-') + '</td><td style="' + td + 'font-weight:bold;color:#127a43">' + (priceOf_(d) !== '' ? 'Rs ' + priceOf_(d) : '-') + '</td><td style="' + td + '">' + esc_(fl.mt || '') + '</td><td style="' + td + '">' + esc_(fl.freq || '') + '</td></tr>');
     });
   });
   var th = function (t) { return '<th style="' + td + 'background:#2a3273;color:#fff;text-align:left;font-size:12px">' + t + '</th>'; };
@@ -525,14 +576,14 @@ function visitMailHtml_(ss, id, a, rows, flows, link, greetName, roleLabel) {
     '<div style="font-size:20px;font-weight:bold;margin-top:4px">' + esc_(a.customer) + '</div>' +
     '<div style="opacity:.85">' + esc_(a.city) + ' &middot; Zone ' + esc_(a.zone) + ' &middot; Visit ID ' + esc_(id) + '</div></div>' +
     '<div style="background:#fdf0e9;border:1px solid #f9d5c3;border-top:0;padding:16px 20px">' +
-    '<div style="margin-bottom:10px">Dear ' + esc_(greetName) + ', your approval is needed as <b>' + esc_(roleLabel) + '</b>. You can enter an approved rate for each lane.</div>' +
+    '<div style="margin-bottom:10px">Dear ' + esc_(greetName) + ', your approval is needed as <b>' + esc_(roleLabel) + '</b>. Approve or reject each lane and enter its approved rate.</div>' +
     '<a href="' + link + '" style="display:inline-block;background:#e9622b;color:#fff;text-decoration:none;font-weight:bold;font-size:15px;padding:12px 26px;border-radius:8px">Approve / Reject &amp; enter rate &rarr;</a>' +
     '</div>' +
     '<table style="margin:16px 0 6px"><tr>' + kv('Potential / month', 'Rs ' + (a.potValue || '-')) + kv('Current spend / month', 'Rs ' + (a.mValue || '-')) +
     kv('Volume / month', (a.mVolume || '-') + ' MT') + kv('Expected rate', a.expRate ? 'Rs ' + a.expRate : '-') + '</tr></table>' +
     '<div style="font-weight:bold;color:#e9622b;font-size:12px;letter-spacing:1px;margin:16px 0 6px">ORIGIN &gt; DESTINATION LANES</div>' +
-    '<table style="border-collapse:collapse;width:100%"><tr>' + th('Origin zone') + th('Origin') + th('Dest zone') + th('Destination') +  th('Delivery point') + th('Suggested price') + th('MT/month') + th('Frequency') + '</tr>' +
-    (laneRows.join('') || '<tr><td colspan="8" style="' + td + '">-</td></tr>') + '</table>' +
+    '<table style="border-collapse:collapse;width:100%"><tr>' + th('Origin zone') + th('Origin') + th('Dest zone') + th('Destination') +  th('Delivery point') + th('Card rate') + th('Field rep price') + th('MT/month') + th('Frequency') + '</tr>' +
+    (laneRows.join('') || '<tr><td colspan="9" style="' + td + '">-</td></tr>') + '</table>' +
     '<div style="font-weight:bold;color:#e9622b;font-size:12px;letter-spacing:1px;margin:18px 0 6px">FULL VISIT DETAILS</div>' +
     '<table style="border-collapse:collapse;width:100%">' +
     rows.filter(function (r) { return r[1]; }).map(function (r, i) {
@@ -574,13 +625,16 @@ function approvalView_(token) {
     var sh = ss.getSheetByName(n); if (!sh) return;
     var v = sh.getDataRange().getValues(), h = v[0];
     var ix = function (name) { return h.indexOf(name); };
-    var vid = ix('Visit ID'), sug = ix('Suggested Price (Field Rep)'), mine = ix(LANE_RATE_HEADERS[role]), other = ix(LANE_RATE_HEADERS[role === ROLES.CH ? ROLES.RM : ROLES.CH]);
+    var otherRole = role === ROLES.CH ? ROLES.RM : ROLES.CH;
+    var vid = ix('Visit ID'), sug = ix('Suggested Price (Field Rep)'), mine = ix(LANE_RATE_HEADERS[role]), other = ix(LANE_RATE_HEADERS[otherRole]);
+    var card = ix('Card Rate'), myDec = ix(LANE_DEC_HEADERS[role]), otherDec = ix(LANE_DEC_HEADERS[otherRole]);
     if (vid < 0) return;
     v.forEach(function (r, i) {
       if (i === 0 || String(r[vid]) !== id) return;
       lanes.push({ tab: n, row: i + 1, oz: r[ix('Origin Zone')], o: r[ix('Origin')], dz: r[ix('Destination Zone')], d: r[ix('Destination')],
         dp: ix('Delivery Point') >= 0 ? r[ix('Delivery Point')] : '', mt: r[ix('Origin MT / month')], fq: r[ix('Frequency')],
-        rate: mine >= 0 ? r[mine] : '', otherRate: other >= 0 ? r[other] : '', suggested: sug >= 0 ? r[sug] : '' });
+        rate: mine >= 0 ? r[mine] : '', otherRate: other >= 0 ? r[other] : '', suggested: sug >= 0 ? r[sug] : '', card: card >= 0 ? r[card] : '',
+        dec: myDec >= 0 ? r[myDec] : '', otherDec: otherDec >= 0 ? r[otherDec] : '' });
     });
   });
   var others = f.all.slice(1).filter(function (r) { return String(r[0]) === id && String(r[6]) !== String(token); })
@@ -595,16 +649,21 @@ function approvalView_(token) {
 }
 
 /**
- * Called from the approval page. decision = APPROVED | REJECTED.
- * rates = [{ tab, row, rate }] one optional rate per lane (origin > destination / delivery point).
+ * Called from the approval page.
+ * lanes = [{ tab, row, decision, rate }]: every lane gets its own APPROVED / REJECTED and an optional rate.
+ * decision is the fallback for a lane sent without one (older approval pages).
+ * The approver's status becomes APPROVED (all lanes), REJECTED (all lanes) or PARTIAL.
  */
-function approveSave(token, decision, rates, remark) {
-  if (['APPROVED', 'REJECTED'].indexOf(decision) < 0) throw new Error('Choose Approve or Reject');
-  rates = Array.isArray(rates) ? rates : [];
-  rates.forEach(function (x) {
+function approveSave(token, decision, lanes, remark) {
+  var OK = ['APPROVED', 'REJECTED'];
+  lanes = Array.isArray(lanes) ? lanes : [];
+  lanes.forEach(function (x) {
     x.rate = String(x.rate == null ? '' : x.rate).trim();
     if (x.rate && isNaN(Number(x.rate))) throw new Error('Rates must be numbers');
+    x.decision = OK.indexOf(x.decision) >= 0 ? x.decision : decision;
+    if (OK.indexOf(x.decision) < 0) throw new Error('Approve or reject every lane');
   });
+  if (!lanes.length && OK.indexOf(decision) < 0) throw new Error('Choose Approve or Reject');
   var ss = responseSheet_();
   var lock = LockService.getScriptLock();
   lock.waitLock(20000);
@@ -612,37 +671,48 @@ function approveSave(token, decision, rates, remark) {
     var f = findApproval_(ss, token);
     if (!f) throw new Error('This approval link is not valid.');
     var now = new Date(), id = String(f.r[0]), role = String(f.r[4]);
+    var roles = f.all.slice(1).filter(function (r) { return String(r[0]) === id; }).map(function (r) { return String(r[4]); });
 
-    // per-lane rate into the lanes tab (only rows of this visit)
-    var summary = [];
-    rates.forEach(function (x) {
+    // per-lane decision + rate (only rows of this visit)
+    var done = [], summary = [];
+    lanes.forEach(function (x) {
       if (LANE_TABS.indexOf(x.tab) < 0) return;
       var sh = ss.getSheetByName(x.tab); if (!sh) return;
       var ix = laneCols_(sh), row = Number(x.row);
       if (!(row >= 2) || ix('Visit ID') < 0 || String(sh.getRange(row, ix('Visit ID') + 1).getValue()) !== id) return;
-      var col = laneColumn_(sh, LANE_RATE_HEADERS[role], '#e9622b');
-      sh.getRange(row, col).setValue(x.rate ? Number(x.rate) : '');
-      if (x.rate) {
-        var lr = sh.getRange(row, 1, 1, sh.getLastColumn()).getValues()[0], dp = lr[ix('Delivery Point')];
-        summary.push(lr[ix('Origin')] + ' > ' + lr[ix('Destination')] + (dp ? ' > ' + dp : '') + ': ' + x.rate);
-      }
+      sh.getRange(row, laneColumn_(sh, LANE_DEC_HEADERS[role], '#e9622b')).setValue(x.decision);
+      sh.getRange(row, laneColumn_(sh, LANE_RATE_HEADERS[role], '#e9622b')).setValue(x.rate ? Number(x.rate) : '');
+      ix = laneCols_(sh);
+      var lr = sh.getRange(row, 1, 1, sh.getLastColumn()).getValues()[0], dp = lr[ix('Delivery Point')];
+      // lane status from every approver of this visit
+      var decs = roles.map(function (r) { var c = ix(LANE_DEC_HEADERS[r]); return c >= 0 ? String(lr[c]) : ''; });
+      var ls = decs.indexOf('REJECTED') >= 0 ? 'REJECTED' : decs.every(function (d) { return d === 'APPROVED'; }) ? 'APPROVED' : 'PENDING';
+      sh.getRange(row, laneColumn_(sh, 'Lane Status', '#2a3273')).setValue(ls);
+      done.push(x.decision);
+      summary.push(lr[ix('Origin')] + ' > ' + lr[ix('Destination')] + (dp ? ' > ' + dp : '') + ': ' +
+        (x.decision === 'APPROVED' ? 'OK' : 'NO') + (x.rate ? ' ' + x.rate : ''));
     });
+    var mine = !done.length ? decision
+      : done.every(function (d) { return d === 'APPROVED'; }) ? 'APPROVED'
+      : done.every(function (d) { return d === 'REJECTED'; }) ? 'REJECTED' : 'PARTIAL';
     var rateText = summary.join('; ');
-    f.sheet.getRange(f.row, 8, 1, 4).setValues([[decision, rateText, String(remark || '').trim(), now]]);
+    f.sheet.getRange(f.row, 8, 1, 4).setValues([[mine, rateText, String(remark || '').trim(), now]]);
 
     var all = f.sheet.getDataRange().getValues().slice(1).filter(function (r) { return String(r[0]) === id; });
-    var overall = all.some(function (r) { return r[7] === 'REJECTED'; }) ? 'REJECTED'
-      : all.every(function (r) { return r[7] === 'APPROVED'; }) ? 'APPROVED' : 'PENDING';
+    var st = all.map(function (r) { return String(r[7]); });
+    var overall = st.indexOf('REJECTED') >= 0 ? 'REJECTED'
+      : st.indexOf('PENDING') >= 0 ? 'PENDING'
+      : st.every(function (x) { return x === 'APPROVED'; }) ? 'APPROVED' : 'PARTIAL';
 
     var s = summaryRow_(ss, id);
     if (s) {
       var off = role === ROLES.CH ? 20 : 24;   // Costing Head cols 20-23, RM cols 24-27
-      s.sheet.getRange(s.row, off, 1, 4).setValues([[decision, rateText, String(remark || '').trim(), now]]);
+      s.sheet.getRange(s.row, off, 1, 4).setValues([[mine, rateText, String(remark || '').trim(), now]]);
       var oldOverall = s.sheet.getRange(s.row, 28).getValue();
       s.sheet.getRange(s.row, 28).setValue(overall);
-      setLaneStatus_(ss, id, overall);
       if (overall !== 'PENDING' && overall !== oldOverall) notifyRep_(ss, s, id, overall, all);
     }
+    setLaneStatus_(ss, id, overall);
     return approvalView_(token);
   } finally {
     lock.releaseLock();
@@ -654,18 +724,19 @@ function notifyRep_(ss, s, id, overall, all) {
   var sv = s.sheet.getRange(s.row, 1, 1, 18).getValues()[0];
   var rep = String(sv[3] || '').trim();
   if (!rep) return;
-  var color = overall === 'APPROVED' ? '#127a43' : '#c62f3b';
+  var word = overall === 'PARTIAL' ? 'PARTLY APPROVED' : overall;
+  var color = overall === 'APPROVED' ? '#127a43' : overall === 'PARTIAL' ? '#b26a00' : '#c62f3b';
   var html = '<div style="font-family:Arial;font-size:13px;color:#1b2333;max-width:640px">' +
     '<div style="background:#2a3273;color:#fff;padding:14px 18px;border-radius:10px 10px 0 0;border-bottom:4px solid #e9622b">' +
     '<div style="font-size:11px;letter-spacing:2px;color:#f8ae40;font-weight:bold">SUGAM GROUP &middot; CUSTOMER ONBOARDING JOURNEY</div>' +
-    '<div style="font-size:18px;font-weight:bold">' + esc_(sv[4]) + ': <span style="color:' + (overall === 'APPROVED' ? '#7fe0a8' : '#ff9aa2') + '">' + overall + '</span></div></div>' +
-    '<p>Hi ' + esc_(sv[2]) + ', the visit ' + esc_(id) + ' is <b style="color:' + color + '">' + overall.toLowerCase() + '</b>.</p>' +
+    '<div style="font-size:18px;font-weight:bold">' + esc_(sv[4]) + ': <span style="color:' + (overall === 'APPROVED' ? '#7fe0a8' : overall === 'PARTIAL' ? '#f8ae40' : '#ff9aa2') + '">' + word + '</span></div></div>' +
+    '<p>Hi ' + esc_(sv[2]) + ', the visit ' + esc_(id) + ' is <b style="color:' + color + '">' + word.toLowerCase() + '</b>.</p>' +
     '<table style="border-collapse:collapse">' + all.map(function (r) {
       return '<tr><td style="border:1px solid #dfe4ec;padding:6px 10px;font-weight:bold">' + esc_(r[4]) + '</td><td style="border:1px solid #dfe4ec;padding:6px 10px">' +
-        esc_(r[7]) + (r[8] !== '' ? '<br>Rates: ' + esc_(String(r[8]).replace(/; /g, ' | ')) : '') + (r[9] ? '<br>' + esc_(r[9]) : '') + '</td></tr>';
+        esc_(r[7]) + (r[8] !== '' ? '<br>Lanes:<br>' + String(r[8]).split('; ').map(esc_).join('<br>') : '') + (r[9] ? '<br>' + esc_(r[9]) : '') + '</td></tr>';
     }).join('') + '</table></div>';
   try {
-    MailApp.sendEmail({ to: rep, subject: 'Visit ' + overall.toLowerCase() + ': ' + sv[4] + ' | ' + sv[5], htmlBody: html, name: 'Sugam Customer Visit' });
+    MailApp.sendEmail({ to: rep, subject: 'Visit ' + word.toLowerCase() + ': ' + sv[4] + ' | ' + sv[5], htmlBody: html, name: 'Sugam Customer Visit' });
     ss.getSheetByName('Mail_Log').appendRow([new Date(), sv[4], sv[5], rep, 'SENT (field rep, ' + overall + ', ' + id + ')']);
   } catch (err) {
     ss.getSheetByName('Mail_Log').appendRow([new Date(), sv[4], sv[5], rep, 'FAILED: ' + err.message]);
@@ -692,7 +763,7 @@ function adminLoad(pin, fresh) {
   });
   var s = settingsWithDefaults_(ss);
   var c = masterCounts_(masters);
-  c.source = masters.source; c.error = masters.error || '';
+  c.source = masters.source; c.error = masters.error || ''; c.cardNote = masters.cardNote || '';
   return {
     config: readConfig_(ss),
     zones: ze.getDataRange().getValues().slice(1).filter(function (r) { return String(r[0]).trim(); })

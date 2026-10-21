@@ -24,7 +24,7 @@
   header { background: radial-gradient(120% 140% at 100% 0%, var(--navy-2) 0%, var(--navy) 55%, #1e2459 100%); color: #fff; padding: 20px 16px 66px; position: relative; overflow: hidden; }
   header::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: linear-gradient(90deg, var(--accent), var(--amber)); }
   header::before { content: ''; position: absolute; right: -60px; top: -60px; width: 220px; height: 220px; border-radius: 50%; background: rgba(248,174,64,.10); }
-  .wrap { max-width: 760px; margin: 0 auto; }
+  .wrap { max-width: 900px; margin: 0 auto; }
   .brand { font-size: 11px; letter-spacing: .16em; color: var(--amber); font-weight: 700; }
   h1 { margin: 4px 0 4px; font-size: 24px; font-weight: 700; letter-spacing: -.01em; }
   .sub { opacity: .8; font-size: 13px; }
@@ -122,7 +122,41 @@
   .lr-t b { display: block; font-size: 14px; color: var(--navy); word-break: break-word; }
   .lr-t small { color: var(--muted); font-size: 12px; }
   .sugg { display: inline-block; margin-top: 4px; font-size: 12px; font-weight: 700; color: var(--ok); background: #e9f6ee; border-radius: 999px; padding: 2px 9px; }
-  .lr-i { width: 130px; flex: 0 0 auto; }
+  .lr-i { width: 112px; }
+  .lr-i input { padding: 7px 8px 7px 24px; }
+  .lr-i span { left: 9px; }
+  table.ap td { vertical-align: middle; }
+  table.ap td b { display: block; color: var(--navy); font-size: 13px; }
+  table.ap td small { color: var(--muted); font-size: 11px; }
+  table.ap .n { text-align: right; white-space: nowrap; }
+  table.ap th.n { text-align: right; }
+  table.ap .c { text-align: center; }
+  table.ap .sg { color: var(--ok); font-weight: 700; }
+  table.ap tr.ya td { background: #f1faf4; }
+  table.ap tr.yr td { background: #fdf2f3; }
+  .yn { display: inline-flex; gap: 6px; }
+  .yn button { width: 38px; height: 34px; border-radius: 9px; border: 1.5px solid var(--line); background: #fff; font-size: 17px; font-weight: 700; cursor: pointer; color: var(--muted); }
+  .yn .y.on { background: var(--ok); border-color: var(--ok); color: #fff; }
+  .yn .r.on { background: var(--crimson); border-color: var(--crimson); color: #fff; }
+  .ok2 { color: var(--ok) !important; } .no2 { color: var(--crimson) !important; }
+  .allrow { flex-wrap: wrap; }
+  .allrow .pre { min-width: 150px; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; background: #b0b7c3; }
+  .dot.APPROVED { background: var(--ok); } .dot.REJECTED { background: var(--crimson); }
+  .pill2.PARTIAL { background: #fff4e0; color: #b26a00; }
+  /* phone: each lane becomes a small card, rates side by side */
+  @media (max-width: 640px) {
+    table.ap, table.ap tbody, table.ap tr, table.ap td { display: block; }
+    table.ap tr.hd { display: none; }
+    table.ap tr { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px 8px; border: 1.5px solid var(--line); border-radius: 12px; padding: 10px; margin-bottom: 10px; }
+    table.ap td { border: 0; padding: 2px 0; text-align: left !important; background: none !important; }
+    table.ap td:first-child { grid-column: 1 / -1; margin-bottom: 4px; }
+    table.ap td[data-l]::before { content: attr(data-l); display: block; font-size: 10px; font-weight: 700; letter-spacing: .04em; color: var(--muted); text-transform: uppercase; }
+    table.ap td.ip { grid-column: span 3; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    table.ap td.ip::before { display: inline; }
+    table.ap tr.ya { background: #f1faf4; border-color: #bfe3cc; } table.ap tr.yr { background: #fdf2f3; border-color: #f3c2c6; }
+    .lr-i { width: 140px; }
+  }
   .allrow { display: flex; gap: 8px; margin-bottom: 6px; }
   .allrow .pre { flex: 1; }
   .saved { border: 1.5px solid #bfe3cc; background: #f1faf4; border-radius: 12px; padding: 12px 14px; margin-top: 12px; display: none; }
@@ -147,7 +181,7 @@
 
 <script>
 var B = <?!= boot ?>;
-var choice = '';
+var DEC = null;   // per-lane APPROVED / REJECTED
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
 function toast(t) { var el = document.getElementById('toast'); el.textContent = t; el.style.display = 'block'; clearTimeout(toast.t); toast.t = setTimeout(function () { el.style.display = 'none'; }, 4000); }
 function money(v) { return v === '' || v == null ? '-' : '&#8377; ' + esc(v); }
@@ -156,7 +190,9 @@ function render() {
   var r = document.getElementById('root');
   if (!B.ok) { r.innerHTML = '<section class="card"><h2>Link not valid</h2><p class="hint">' + esc(B.error) + '</p></section>'; return; }
   var v = B.visit;
-  choice = choice || (B.status === 'APPROVED' || B.status === 'REJECTED' ? B.status : '');
+  if (!DEC) DEC = B.lanes.map(function (l) { return l.dec === 'APPROVED' || l.dec === 'REJECTED' ? l.dec : ''; });
+  var hasOther = B.lanes.some(function (l) { return l.otherDec || (l.otherRate !== '' && l.otherRate != null); });
+  var otherShort = B.role === 'Costing Head' ? 'RM' : 'Costing Head';
   r.innerHTML =
     '<section class="card"><div class="tag">VISIT ' + esc(B.id) + '</div><h2>' + esc(v.customer) + '</h2>' +
     '<p class="hint" style="margin-bottom:0">' + esc(v.city) + ' &middot; Zone ' + esc(v.zone) + ' &middot; by ' + esc(v.rep) + ' &middot; ' + esc(v.submitted) + '</p>' +
@@ -166,18 +202,21 @@ function render() {
     (B.others.length ? '<p class="hint" style="margin:12px 0 0">' + B.others.map(function (o) { return esc(o.role) + ': <span class="pill2 ' + esc(o.status) + '">' + esc(o.status) + '</span>'; }).join(' &nbsp; ') + '</p>' : '') +
     '<p class="hint" style="margin:12px 0 0">' + B.lanes.length + ' lane' + (B.lanes.length === 1 ? '' : 's') + ' below. Full details are in the mail.</p></section>' +
 
-    '<section class="card"><div class="tag">YOUR DECISION &middot; ' + esc(String(B.role).toUpperCase()) + '</div><h2>Approve this proposal?</h2>' +
-    '<p class="hint">Current status: <span class="pill2 ' + esc(B.status) + '">' + esc(B.status) + '</span>' + (B.decidedAt ? ' &middot; ' + esc(B.decidedAt) : '') + '</p>' +
-    '<div class="choice"><button type="button" class="ch ap' + (choice === 'APPROVED' ? ' on' : '') + '" onclick="pick(\'APPROVED\')"><span class="ic2">&#10003;</span>Approve</button>' +
-    '<button type="button" class="ch rj' + (choice === 'REJECTED' ? ' on' : '') + '" onclick="pick(\'REJECTED\')"><span class="ic2">&#10007;</span>Reject</button></div>' +
-    '<div class="sec-h" style="margin-top:18px">APPROVED RATE PER LANE (OPTIONAL)</div>' +
-    (B.lanes.length > 1 ? '<div class="allrow"><div class="pre"><span>&#8377;</span><input id="allRate" type="number" inputmode="decimal" min="0" step="any" placeholder="Same rate for all lanes"></div><button type="button" class="btn sec" onclick="applyAll()">Apply to all</button></div>' : '') +
+    '<section class="card"><div class="tag">YOUR DECISION &middot; ' + esc(String(B.role).toUpperCase()) + '</div><h2>Approve each lane</h2>' +
+    '<p class="hint">Your status: <span class="pill2 ' + esc(B.status) + '">' + esc(B.status) + '</span>' + (B.decidedAt ? ' &middot; ' + esc(B.decidedAt) : '') + '</p>' +
+    '<div class="allrow"><button type="button" class="btn sec ok2" onclick="setAll(\'APPROVED\')">&#10003; Approve all</button><button type="button" class="btn sec no2" onclick="setAll(\'REJECTED\')">&#10007; Reject all</button>' +
+    (B.lanes.length > 1 ? '<div class="pre"><span>&#8377;</span><input id="allRate" type="number" inputmode="decimal" min="0" step="any" placeholder="Same approved price"></div><button type="button" class="btn sec" onclick="applyAll()">Apply</button>' : '') + '</div>' +
+    '<div class="tbl"><table class="l ap"><tr class="hd"><th>Lane</th><th class="n">Card rate</th><th class="n">Field rep</th>' + (hasOther ? '<th class="n">' + esc(otherShort) + '</th>' : '') + '<th class="n">Approved price</th><th class="c">Decision</th></tr>' +
     B.lanes.map(function (l, k) {
-      return '<div class="lr"><div class="lr-t"><b>' + esc(l.o) + ' &rarr; ' + esc(l.d) + (l.dp ? ' &rsaquo; ' + esc(l.dp) : '') + '</b>' +
-        '<small>' + esc(l.oz) + ' &rarr; ' + esc(l.dz) + (l.mt ? ' &middot; ' + esc(l.mt) + ' MT/month' : '') + (l.otherRate !== '' && l.otherRate != null ? ' &middot; other approver: ' + money(l.otherRate) : '') + '</small>' +
-        (l.suggested !== '' && l.suggested != null ? '<span class="sugg">Field rep suggested ' + money(l.suggested) + '</span>' : '') + '</div>' +
-        '<div class="pre lr-i"><span>&#8377;</span><input class="lrate" data-k="' + k + '" type="number" inputmode="decimal" min="0" step="any" placeholder="Rate" value="' + esc(l.rate) + '"></div></div>';
-    }).join('') +
+      var d = DEC[k];
+      return '<tr class="' + (d === 'APPROVED' ? 'ya' : d === 'REJECTED' ? 'yr' : '') + '" id="lr' + k + '"><td><b>' + esc(l.o) + ' &rarr; ' + esc(l.d) + (l.dp ? ' &rsaquo; ' + esc(l.dp) : '') + '</b>' +
+        '<small>' + esc(l.dz) + (l.mt ? ' &middot; ' + esc(l.mt) + ' MT/mo' : '') + '</small></td>' +
+        '<td class="n" data-l="Card rate">' + money(l.card) + '</td><td class="n sg" data-l="Field rep">' + money(l.suggested) + '</td>' +
+        (hasOther ? '<td class="n" data-l="' + esc(otherShort) + '">' + (l.otherDec ? '<span class="dot ' + esc(l.otherDec) + '"></span>' : '') + money(l.otherRate) + '</td>' : '') +
+        '<td class="n ip" data-l="Approved price"><div class="pre lr-i"><span>&#8377;</span><input class="lrate" data-k="' + k + '" type="number" inputmode="decimal" min="0" step="any" placeholder="Price" value="' + esc(l.rate) + '"></div></td>' +
+        '<td class="c ip" data-l="Decision"><div class="yn"><button type="button" class="y' + (d === 'APPROVED' ? ' on' : '') + '" title="Approve" onclick="setDec(' + k + ',\'APPROVED\')">&#10003;</button>' +
+        '<button type="button" class="r' + (d === 'REJECTED' ? ' on' : '') + '" title="Reject" onclick="setDec(' + k + ',\'REJECTED\')">&#10007;</button></div></td></tr>';
+    }).join('') + '</table></div>' +
     '<div class="grid" style="margin-top:14px">' +
     '<div class="full"><label class="f">Remark (optional)</label><textarea id="remark" placeholder="Conditions, reason, revised terms...">' + esc(B.remark) + '</textarea></div></div>' +
     '<button class="btn sub" id="saveBtn" style="width:100%;margin-top:14px" onclick="saveIt()">Submit decision</button>' +
@@ -187,19 +226,28 @@ function applyAll() {
   var v = document.getElementById('allRate').value;
   Array.prototype.forEach.call(document.querySelectorAll('.lrate'), function (i) { i.value = v; });
 }
-function pick(c) { choice = c; Array.prototype.forEach.call(document.querySelectorAll('.ch'), function (b) { b.classList.toggle('on', b.classList.contains(c === 'APPROVED' ? 'ap' : 'rj')); }); }
+function keepRates() { return B.lanes.map(function (l, k) { var x = document.querySelector('.lrate[data-k="' + k + '"]'); return x ? x.value : l.rate; }); }
+function setDec(k, d) {
+  DEC[k] = d;
+  var tr = document.getElementById('lr' + k);
+  tr.className = d === 'APPROVED' ? 'ya' : 'yr';
+  tr.querySelector('.y').classList.toggle('on', d === 'APPROVED'); tr.querySelector('.r').classList.toggle('on', d === 'REJECTED');
+}
+function setAll(d) { DEC.forEach(function (_, k) { setDec(k, d); }); }
 function saveIt() {
-  if (!choice) return toast('Choose Approve or Reject');
+  var miss = DEC.indexOf('');
+  if (miss >= 0) { document.getElementById('lr' + miss).scrollIntoView({ behavior: 'smooth', block: 'center' }); return toast('Approve or reject every lane (' + DEC.filter(function (d) { return !d; }).length + ' left)'); }
+  var rates = keepRates();
   var b = document.getElementById('saveBtn'); b.disabled = true; b.textContent = 'Saving...';
   google.script.run.withSuccessHandler(function (nb) {
-    B = nb; render();
+    B = nb; DEC = null; render();
     var s = document.getElementById('saved');
-    s.innerHTML = '<b>Saved.</b> Your decision is recorded in the sheet. You can change it from this page any time.';
+    s.innerHTML = '<b>Saved.</b> Your decision for every lane is recorded in the sheet. You can change it from this page any time.';
     s.style.display = 'block'; s.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }).withFailureHandler(function (e) {
     b.disabled = false; b.textContent = 'Submit decision'; toast(e && e.message ? e.message : String(e));
-  }).approveSave(B.token, choice, B.lanes.map(function (l, k) {
-    return { tab: l.tab, row: l.row, rate: document.querySelector('.lrate[data-k="' + k + '"]').value };
+  }).approveSave(B.token, '', B.lanes.map(function (l, k) {
+    return { tab: l.tab, row: l.row, decision: DEC[k], rate: rates[k] };
   }), document.getElementById('remark').value);
 }
 render();

@@ -69,23 +69,24 @@ Apps Script project (Business_Flow) me ye files honi chahiye. Naam exactly aise 
 Code badalne ke baad hamesha: **Deploy > Manage deployments > pencil > Version: New version > Deploy** (link wahi rehta hai).
 
 ## Kya hota hai
-1. Field rep form bharta hai (zones / origin / destination / delivery point GR PNL data master se, unique). Destination tick karte hi usi line me ₹ price box aata hai (optional suggested price), neeche bhi har origin → destination ki list me wahi price dikhta hai (`Customer_Lanes` > "Suggested Price (Field Rep)").
-2. **Costing Head** aur zone ke **Regional Manager** ko alag-alag mail jata hai: upar "Approve / Reject & enter rate"
-   button, neeche lanes aur poori visit details.
-3. Button se approval page khulta hai: Approve / Reject, har lane (origin > destination / delivery point) ka approved rate (optional, "Apply to all" bhi), remark (optional). Lane rate `Customer_Lanes` ke "Costing Head Rate" / "RM Rate" columns me save hota hai.
-4. Sheet me save hota hai:
-   - `Approvals` - har approver ki ek row (status, rate, remark, time)
-   - `Visit_Summary` - columns S se AB: Visit ID, Costing Head status/rate/remark/time, RM status/rate/remark/time, Overall Status
-5. Dono ka decision aane pe field rep ko result ka mail (Approved / Rejected + rate).
+1. Field rep form bharta hai (zones / origin / destination / delivery point GR PNL data master se, unique). List table jaisi hai: **Destination / delivery point | Card rate | Your price**. Har destination aur har delivery point alag se tick / untick hota hai (har ek apni lane). Tick karte hi usi line me price box aata hai.
+2. **Card rate** GR PNL master ke CARD RATE column se: delivery point chuna = origin + delivery point, warna origin + destination. Ek lane ke kai GR hon to sabse naya GR DT wala rate, barabar ho to zyada wala. Origin "Any branch in zone" ho to card rate "–".
+3. **Costing Head** aur zone ke **Regional Manager** ko alag-alag mail jata hai: upar "Approve / Reject & enter rate" button, neeche lanes (card rate + field rep price ke saath) aur poori visit details.
+4. Approval page pe har lane ki row: Card rate | Field rep | doosre approver ka rate | Approved price | ✓ / ✗. Upar "Approve all" / "Reject all" aur "same price for all". Har lane ka decision dena zaroori hai.
+5. Sheet me save hota hai:
+   - `Customer_Lanes` - har lane: Card Rate, Suggested Price, CH Decision, Costing Head Rate, RM Decision, RM Rate, Lane Status (dono approve = APPROVED, koi reject = REJECTED)
+   - `Approvals` - har approver ki ek row: APPROVED (sab lanes), REJECTED (sab lanes) ya PARTIAL
+   - `Visit_Summary` - columns S se AB: Visit ID, Costing Head status/lanes/remark/time, RM status/lanes/remark/time, Overall Status
+6. Dono ka decision aane pe field rep ko result ka mail (Approved / Partly approved / Rejected + har lane).
 
 ## Zones & places (GR PNL data master)
 Settings me `GR_MASTER_SHEET` (default: GR PNL mirror sheet) aur `GR_MASTER_TAB` (default `DASHBOARD_MASTER`).
-Columns jo padhe jaate hain: Origin Zone, Origin, Dest Zone, Destname, Delivery Point (naam me space/underscore/case
+Columns jo padhe jaate hain: Origin Zone, Origin, Dest Zone, Destname, Delivery Point, Card Rate, GR DT (naam me space/underscore/case
 se farak nahi padta). "UNSPECIFIED" values chhod di jaati hain. Har 10 minute me refresh, ya Admin > Master data >
 Reload master now. Agar padh nahi paya to Admin me error dikhega aur purani lane file copy use hogi.
 
 ## Sheet tabs
 - `Form_Config` - saare sawaal (admin panel isi ko badalta hai)
 - `Web_Responses` - ek visit = ek row, har sawaal ka column
-- `Customer_Lanes` - customer-wise har origin > destination (> delivery point) ki alag row: Customer, Visit ID, rep, origin, destination, delivery point, suggested price, MT, CH rate, RM rate, Overall Status. Filter laga hua hai, Customer pe filter karo to us customer ka poora split ek saath. (Purana `Visit_Lanes` tab ho to rehne do, purane visits wahin se padhe jaate hain.)
+- `Customer_Lanes` - customer-wise har origin > destination (> delivery point) ki alag row: Customer, Visit ID, rep, origin, destination, delivery point, card rate, suggested price, MT, CH decision + rate, RM decision + rate, Lane Status, Overall Status. Filter laga hua hai, Customer pe filter karo to us customer ka poora split ek saath. (Purana `Visit_Lanes` tab ho to rehne do, purane visits wahin se padhe jaate hain.)
 - `Visit_Summary`, `Approvals`, `Mail_Log`, `Zone_Emails`, `Settings`
