@@ -1,92 +1,83 @@
-# Sugam Customer Visit Form - Setup (10 minute ka kaam)
+# Sugam Customer Onboarding - Setup and How It Works
 
-## 1. Script chalao (sirf ek baar)
-1. https://script.google.com kholo (wahi Google account jisse mail jaani hai) > **New project**.
-2. Jo code hai usse hata ke `Sugam_Customer_Visit_Form.gs` ka pura content paste karo > **Save** (Ctrl+S).
-3. Upar function dropdown me **setup** select karo > **Run**.
-4. Permission maangega: *Review permissions* > apna account > *Advanced* > *Go to project (unsafe)* > **Allow**.
-   (Ye aapka khud ka script hai, isliye Google ye warning dikhata hai.)
-5. Run khatam hone pe niche **Execution log** me 3 link aayenge:
-   - **FORM LINK** - ye field representatives ko bhejo (WhatsApp / mail)
-   - **FORM EDIT LINK** - form edit karne ke liye
-   - **RESPONSE SHEET** - saara data yahan aayega
-
-## 2. Emails bharo (Response sheet me)
-**Tab `Zone_Emails`** - 17 zones pehle se likhe hain, bas ye bharo:
-
-| Zone | Regional Manager Name | RM Email | Extra CC (comma separated) |
-|---|---|---|---|
-| DELHI-NCR | (RM ka naam) | rm.delhi@company.com | (optional) |
-| GUJARAT | ... | ... | |
-
-**Tab `Settings`**:
-
-| Key | Value |
-|---|---|
-| COSTING_HEAD_EMAIL | costing head ki email (ek se zyada ho to comma laga ke) |
-| ALWAYS_CC | optional, jaise sales head |
-| CC_FIELD_REP | YES (field rep ko bhi copy jayegi) / NO |
-
-Zone ka naam form ke zone se exact match hona chahiye (jo pehle se likha hai wahi rehne do).
-
-## 3. Kya hoga har submission pe
-- `Form Responses 1` - har sawaal ka pura jawab
-- `Visit_Summary` - ek line me clean summary (customer, zone, potential, origins, destinations, rate, mail status)
-- Costing Head (To) + us zone ka RM (To) + field rep (CC) ko HTML mail, subject:
-  `New Customer Visit: <Customer> | <Zone> | Potential Rs <x>/month`
-- `Mail_Log` - kisko gaya, sent / failed
-
-## 4. Form me kya hai (journey ke Step 01-05)
-1. **Customer Visit** - rep, date, customer, zone, contact, decision makers, current transporter, pain points
-2. **Monthly Business Potential** - monthly spend, MT, shipments, frequency, seasonality, potential
-3. **Material Understanding** - commodity, category, load type, weight, dimensions, packing, risks
-4. **Origin & Destination Mapping** - origin zones (multiple), har zone ke Sugam branches (multiple, lane master ke 208 branches), destination regions (multiple), key destination cities, lane-wise detail, branch coverage
-5. **Indicative Rate** - rate basis, current / expected / indicative rate, other charges, credit period, follow-up date
-
-## 5. Branch / zone list badalni ho
-Response sheet ke tab `Masters` me branch / destination add-remove karo, phir script me function
-**refreshFormOptions** select karke Run karo. Naya zone add kiya to `Zone_Emails` me bhi line daal do.
-
-## Dhyan rakhne wali baatein
-- Free Gmail se roz ~100 mail limit hai, Google Workspace se ~1500.
-- `setup` dobara mat chalao (naya form ban jayega); script khud rok degi.
-- Mail nahi gaya to `Mail_Log` ka Status dekho, waha reason likha hoga.
-
----
-
-# Custom HTML form + Admin panel + Approval (recommended)
-
-Apps Script project (Business_Flow) me ye files honi chahiye. Naam exactly aise (capital letter ke saath):
+## 1. Files in the Apps Script project (Business_Flow)
+File names must match exactly, including capital letters.
 
 | File | Type | Content |
 |---|---|---|
-| `Code` | Script | Sugam_Customer_Visit_Form.gs (setup wala, ek baar chal chuka) |
-| `WebApp` (ya webapp.gs) | Script | WebApp.gs |
+| `Code` | Script | Sugam_Customer_Visit_Form.gs (the setup script, already run once) |
+| `WebApp` (or webapp.gs) | Script | WebApp.gs |
 | `Index` | HTML | Index.html (field rep form) |
 | `Admin` | HTML | Admin.html (admin panel) |
-| `Approve` | HTML | Approve.html (Costing Head / RM approval page) |
+| `Approve` | HTML | Approve.html (RM, Head Costing and field rep outcome page) |
+| `Tracker` | HTML | Tracker.html (Head Costing tracker with stage filters) |
 
-Code badalne ke baad hamesha: **Deploy > Manage deployments > pencil > Version: New version > Deploy** (link wahi rehta hai).
+After any code change: **Deploy > Manage deployments > pencil > Version: New version > Deploy**. The link stays the same.
+Deployment settings: **Execute as: Me**, **Who has access: Anyone**.
 
-## Kya hota hai
-1. Field rep form bharta hai (zones / origin / destination / delivery point GR PNL data master se, unique). List table jaisi hai: **Destination / delivery point | Card rate | Your price**. Har destination aur har delivery point alag se tick / untick hota hai (har ek apni lane). Tick karte hi usi line me price box aata hai.
-2. **Card rate** GR PNL master ke CARD RATE column se: delivery point chuna = origin + delivery point, warna origin + destination. Ek lane ke kai GR hon to sabse naya GR DT wala rate, barabar ho to zyada wala. Origin "Any branch in zone" ho to card rate "–". **Via border**: master me VIA BORDER column ho aur ek lane ke rate border ke hisaab se alag hon, to tick ki hui line ke neeche "Via ..." dropdown aata hai (har border ka rate saath me). Na chuno to bina border wala rate, warna akela border ho to wahi. Chuna hua border `Customer_Lanes` > "Via Border" me save hota hai.
-3. **Costing Head** aur zone ke **Regional Manager** ko alag-alag mail jata hai: upar "Approve / Reject & enter rate" button, neeche lanes (card rate + field rep price ke saath) aur poori visit details.
-4. Approval page pe har lane ki row: Card rate | Field rep | doosre approver ka rate | Approved price | ✓ / ✗. Upar "Approve all" / "Reject all" aur "same price for all". Har lane ka decision dena zaroori hai.
-5. Sheet me save hota hai:
-   - `Customer_Lanes` - har lane: Card Rate, Suggested Price, CH Decision, Costing Head Rate, RM Decision, RM Rate, Lane Status (dono approve = APPROVED, koi reject = REJECTED)
-   - `Approvals` - har approver ki ek row: APPROVED (sab lanes), REJECTED (sab lanes) ya PARTIAL
-   - `Visit_Summary` - columns S se AB: Visit ID, Costing Head status/lanes/remark/time, RM status/lanes/remark/time, Overall Status
-6. Dono ka decision aane pe field rep ko result ka mail (Approved / Partly approved / Rejected + har lane).
+The first time after this update, Google asks for permission again (the digest needs a time trigger). Approve it once.
+Check **Project Settings > Time zone** is `(GMT+05:30) India Standard Time` so the digest goes at 2:00 pm and 5:00 pm IST.
 
-## Zones & places (GR PNL data master)
-Settings me `GR_MASTER_SHEET` (default: GR PNL mirror sheet) aur `GR_MASTER_TAB` (default `DASHBOARD_MASTER`).
-Columns jo padhe jaate hain: Origin Zone, Origin, Dest Zone, Destname, Delivery Point, Via Border, Card Rate, GR DT (naam me space/underscore/case
-se farak nahi padta). "UNSPECIFIED" values chhod di jaati hain. Har 10 minute me refresh, ya Admin > Master data >
-Reload master now. Agar padh nahi paya to Admin me error dikhega aur purani lane file copy use hogi.
+## 2. Links
 
-## Sheet tabs
-- `Form_Config` - saare sawaal (admin panel isi ko badalta hai)
-- `Web_Responses` - ek visit = ek row, har sawaal ka column
-- `Customer_Lanes` - customer-wise har origin > destination (> delivery point) ki alag row: Customer, Visit ID, rep, origin, destination, delivery point, card rate, suggested price, MT, CH decision + rate, RM decision + rate, Lane Status, Overall Status. Filter laga hua hai, Customer pe filter karo to us customer ka poora split ek saath. (Purana `Visit_Lanes` tab ho to rehne do, purane visits wahin se padhe jaate hain.)
-- `Visit_Summary`, `Approvals`, `Mail_Log`, `Zone_Emails`, `Settings`
+| Who | Link |
+|---|---|
+| Field rep | `<web app URL>` |
+| Admin | `<web app URL>?page=admin` (PIN = Settings > ADMIN_PIN) |
+| Head Costing tracker | Admin > Approvals & mails > tracker link (`?page=tracker&k=...`) |
+| RM / Head Costing / field rep | Their own link inside each digest or mail (`?page=approve&t=...`) |
+
+## 3. Who sends the mails
+Every mail is sent from the Google account that deployed the web app ("Execute as: Me"), never from the
+field rep's account. Replies come back to that account, except the field rep mails, which reply to the Head Costing email.
+Google limit: about 100 mails a day from a personal Gmail, about 1,500 from Google Workspace.
+
+## 4. Flow
+
+| # | Who | What happens | TAT |
+|---|---|---|---|
+| 1 | Field rep | Fills the form: name, Employee ID, customer, lanes (origin to many destinations / delivery points) with a suggested price per lane | - |
+| 2 | Regional Manager of the customer zone | Approves or rejects each lane and gives the RM rate. Remark required when a lane is rejected. If every lane is rejected the visit stops here and the field rep is told | 2 days |
+| 3 | Head Costing | Sees the field rep price and RM rate. Approves or rejects each lane the RM approved and gives the HO approved rate (empty = RM rate). Remark required when a lane is rejected | 2 days |
+| 4 | Sheet | HO approved rates go into `Web_Responses` on the same Visit ID row | - |
+| 5 | Field rep | Gets a mail with the HO approved rates, revisits the customer and records: Finalized / Pending at customer / Customer refused (reason required). Rates cannot be changed | 2 days |
+
+Stages: Pending at RM, Rejected by RM, Pending at Head Costing, Rejected by Head Costing, Pending at Field Rep,
+Pending at Customer, Customer Refused, Finalized. A pending stage past its TAT shows as overdue.
+
+## 5. Digest mails (default 2:00 pm and 5:00 pm)
+One list per person instead of one mail per visit. Nobody gets a mail when nothing is pending.
+
+| Goes to | Contains |
+|---|---|
+| Regional Manager | Visits pending at RM, own zones only |
+| Head Costing | Visits pending at Head Costing, counts of every stage, tracker link |
+| Field rep | Their visits with HO rates to discuss (pending at field rep / customer) |
+
+Each row: Visit ID, field rep, Employee ID, customer, zone, potential, submitted date, days pending (red when overdue) and an Open link.
+The field rep also gets an immediate mail when Head Costing approves (or a rejection mail when RM / Head Costing rejects).
+
+## 6. Admin panel
+- **Questions**: add, edit, delete and reorder questions. Sheet columns follow automatically.
+- **Approvals & mails**: Head Costing email, CC, TAT days per level, digest on/off, digest times, **Send now**, tracker link, RM per zone.
+- **Master data**: GR PNL data master link and tab; zones and places reload every 10 minutes.
+
+## 7. Sheet tabs
+- `Web_Responses`: one row per visit, one column per question, then Stage, RM Status, RM Remark, RM At,
+  HO Status, HO Approved Rates, HO Remark, HO At, Outcome, Outcome Remark, Outcome At.
+- `Customer_Lanes`: one row per customer x origin > destination / delivery point: suggested price, RM decision and rate,
+  HO decision and approved rate, Final Rate, Lane Status, Stage. Filter on Customer to see one customer's full split.
+- `Visit_Tracker`: one row per visit: stage, stage since, due by, RM / HO / outcome details and link tokens.
+- `Form_Config`, `Zone_Emails`, `Settings`, `Mail_Log`.
+
+Old test tabs from earlier versions (`Approvals`, `Visit_Summary`, `Visit_Lanes`) are no longer used by the web form.
+Delete the test rows in `Customer_Lanes` before going live so the new columns start clean.
+
+## 8. Zones and places (GR PNL data master)
+Settings `GR_MASTER_SHEET` (default: GR PNL mirror) and `GR_MASTER_TAB` (default `DASHBOARD_MASTER`).
+Columns read: Origin Zone, Origin, Dest Zone, Destname, Delivery Point (spaces, underscores and case do not matter).
+"UNSPECIFIED" values are skipped. If the master cannot be read, Admin shows the error and the built-in lane copy is used.
+
+## 9. Things to remember
+- Do not run `setup` again (it would create a new Google Form); the script stops it anyway.
+- If a mail did not go, check `Mail_Log`; the reason is written there.

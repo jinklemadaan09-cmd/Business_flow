@@ -1,25 +1,26 @@
 /**
- * SUGAM GROUP - Customer Visit web app (custom HTML form, admin panel, approvals)
+ * SUGAM GROUP - Customer Visit web app (custom HTML form, admin panel, two-level approval)
  *
  * Lives in the SAME Apps Script project as Code.gs (setup() must have been run there once).
- * Files in the project: Code.gs, WebApp.gs, Index.html, Admin.html, Approve.html
+ * Files in the project: Code.gs, WebApp.gs, Index.html, Admin.html, Approve.html, Tracker.html
  *
  * Deploy > New deployment > Web app > Execute as: Me > Who has access: Anyone.
- *   Field reps:  <web app URL>
- *   Admin:       <web app URL>?page=admin   (PIN = ADMIN_PIN in tab Settings)
- *   Approvers:   get their own link in the visit mail (<web app URL>?page=approve&t=<token>)
+ *   Field reps:    <web app URL>
+ *   Admin:         <web app URL>?page=admin            (PIN = ADMIN_PIN in tab Settings)
+ *   Approvals:     <web app URL>?page=approve&t=<token> (link in the digest mail; RM, Head Costing and field rep each have their own)
+ *   Head Costing:  <web app URL>?page=tracker&k=<TRACKER_KEY> (all visits with stage filters)
+ *
+ * Flow: field rep submits > Regional Manager of the customer zone (per lane approve / reject + RM rate)
+ *   > Head Costing (per lane approve / reject + HO approved rate) > HO rates go into Web_Responses and
+ *   the field rep gets a mail > field rep revisits the customer and sets Finalized / Pending at customer / Customer refused.
+ *   RM and Head Costing get a digest mail at the times in Settings > DIGEST_TIMES (default 2:00 pm and 5:00 pm).
  *
  * Tabs it uses in the response sheet:
  *   Form_Config    every question (admin edits it from the admin page)
- *   Web_Responses  one row per visit; one column per question, kept in sync with Form_Config
- *   Customer_Lanes one row per customer x origin > destination / delivery point, customer first, with a filter
- *   Visit_Summary  one row per visit, with Costing Head / RM approval, rate and overall status
- *   Approvals      one row per approver per visit (token, status, rate, remark, time)
+ *   Web_Responses  one row per visit; one column per question + stage / RM / HO / outcome columns
+ *   Customer_Lanes one row per customer x origin > destination / delivery point, with RM and HO decision and rate
+ *   Visit_Tracker  one row per visit: stage, due date, RM / HO / outcome details and the links' tokens
  *   Mail_Log, Zone_Emails, Settings
- *
- * Zones and places come from the GR PNL data master (tab DASHBOARD_MASTER of the spreadsheet in
- * Settings > GR_MASTER_SHEET): unique Origin Zone > Origin and Destination Zone > Destination >
- * Delivery Point, the same fields the dashboard filters on.
  */
 
 var CONFIG_SHEET = 'Form_Config';
@@ -27,7 +28,7 @@ var CONFIG_HEADERS = ['Field_ID', 'Step', 'Order', 'Label', 'Type', 'Required', 
 var STEP_NAMES = ['Customer Visit', 'Monthly Business Potential', 'Material Understanding',
   'Origin & Destination Mapping', 'Indicative Rate Discussion'];
 var FIELD_TYPES = ['text', 'textarea', 'number', 'money', 'date', 'email', 'tel', 'single', 'multi', 'dropdown', 'zone', 'flows'];
-var MASTER_CACHE_KEY = 'visit_masters_v5';
+var MASTER_CACHE_KEY = 'visit_masters_v6';
 var FLOWS_HELP = 'One block per origin. Tick all its destinations in one go, then add a new block for the next origin.';
 var OLD_FLOWS_HELP = 'One card per flow. Add stops in order: origin, then every place the material goes next.';
 
@@ -35,7 +36,14 @@ var SETTING_DEFAULTS = [
   ['GR_MASTER_SHEET', 'https://docs.google.com/spreadsheets/d/1bX6umTLJ88weATME31MhC0SiGRinnLIF9cX9aIMOF2o/edit',
     'GR PNL data master spreadsheet (zones and places for the form)'],
   ['GR_MASTER_TAB', 'DASHBOARD_MASTER', 'Tab in that spreadsheet'],
-  ['ADMIN_PIN', '', 'PIN for the admin page (<web app URL>?page=admin). Empty = admin page locked']
+  ['ADMIN_PIN', '', 'PIN for the admin page (<web app URL>?page=admin). Empty = admin page locked'],
+  ['COSTING_HEAD_EMAIL', '', 'Head Costing email (second approval level, gets the Head Costing digest)'],
+  ['DIGEST_ON', 'YES', 'YES = send the digest mails at DIGEST_TIMES'],
+  ['DIGEST_TIMES', '14:00, 17:00', 'Digest mail times (24h, comma separated). Google sends within that hour'],
+  ['TAT_RM_DAYS', '2', 'Days the Regional Manager has to decide'],
+  ['TAT_HO_DAYS', '2', 'Days Head Costing has to decide'],
+  ['TAT_FR_DAYS', '2', 'Days the field rep has to set the customer outcome'],
+  ['TRACKER_KEY', '', 'Key in the Head Costing tracker link. Filled automatically; change it to stop old links']
 ];
 
 // Column names accepted in the GR master (compared without spaces, _ or case)
@@ -44,21 +52,14 @@ var GR_COLS = {
   origin: ['origin', 'originname', 'origincity', 'bookingbranch', 'branch'],
   destZone: ['destzone', 'destinationzone', 'dstzone'],
   dest: ['destname', 'destination', 'destinationname', 'destcity'],
-  deliveryPoint: ['deliverypoint', 'delpoint', 'deliverypointname', 'dp'],
-  viaBorder: ['viaborder', 'via', 'border', 'viaborderpoint', 'borderpoint'],
-  cardRate: ['cardrate', 'cardratekg', 'cardrateperkg', 'cardratepkg', 'tariffrate', 'card'],
-  grDate: ['grdt', 'grdate', 'bookingdate', 'date']
+  deliveryPoint: ['deliverypoint', 'delpoint', 'deliverypointname', 'dp']
 };
-var GR_OPTIONAL = ['deliveryPoint', 'viaBorder', 'cardRate', 'grDate'];
-
-var SUMMARY_APPROVAL_HEADERS = ['Visit ID', 'Costing Head Status', 'Costing Head Rate', 'Costing Head Remark', 'Costing Head Time',
-  'RM Status', 'RM Rate', 'RM Remark', 'RM Time', 'Overall Status'];
-var ROLES = { CH: 'Costing Head', RM: 'Regional Manager' };
-var LANE_RATE_HEADERS = { 'Costing Head': 'Costing Head Rate', 'Regional Manager': 'RM Rate' };
+var GR_OPTIONAL = ['deliveryPoint'];
 
 // Field_ID, Step, Label, Type, Required, Options (one per line), Help, Locked
 var DEFAULT_FIELDS = [
   ['repName', 1, 'Your name', 'text', 1, '', '', 1],
+  ['repId', 1, 'Employee ID', 'text', 1, '', '', 1],
   ['repEmail', 1, 'Your email', 'email', 1, '', '', 1],
   ['visitDate', 1, 'Visit date', 'date', 1, '', '', 1],
   ['customer', 1, 'Customer / company name', 'text', 1, '', '', 1],
@@ -126,21 +127,23 @@ var DEST_BY_ZONE_FALLBACK = {
 
 function doGet(e) {
   var page = (e && e.parameter && e.parameter.page) || '';
-  var file = page === 'admin' ? 'Admin' : page === 'approve' ? 'Approve' : 'Index';
+  var file = page === 'admin' ? 'Admin' : page === 'approve' ? 'Approve' : page === 'tracker' ? 'Tracker' : 'Index';
   var t = HtmlService.createTemplateFromFile(file);
   var boot;
   if (file === 'Index') {
     var ss = responseSheet_();
     var m = getMasters_(ss);
-    boot = { steps: STEP_NAMES, fields: activeFields_(readConfig_(ss)), masters: { origins: m.origins, dests: m.dests, card: m.card || {} } };
+    boot = { steps: STEP_NAMES, fields: activeFields_(readConfig_(ss)), masters: { origins: m.origins, dests: m.dests } };
   } else if (file === 'Approve') {
     boot = approvalView_(e.parameter.t);
+  } else if (file === 'Tracker') {
+    boot = trackerView_(e.parameter.k);
   } else {
     boot = { steps: STEP_NAMES, types: FIELD_TYPES };
   }
   t.boot = JSON.stringify(boot).replace(/</g, '\\u003c');
   return t.evaluate()
-    .setTitle(file === 'Admin' ? 'Sugam - Visit Form Admin' : file === 'Approve' ? 'Sugam - Visit Approval' : 'Sugam - Customer Visit')
+    .setTitle({ Admin: 'Sugam - Visit Form Admin', Approve: 'Sugam - Visit Approval', Tracker: 'Sugam - Visit Tracker' }[file] || 'Sugam - Customer Visit')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
@@ -164,6 +167,10 @@ function readConfig_(ss) {
     sh.setFrozenRows(1);
   }
   var vals = sh.getDataRange().getValues();
+  if (!vals.some(function (r) { return String(r[0]).trim() === 'repId'; })) {   // one-time: Employee ID after the rep name
+    var er = ['repId', 1, 1.5, 'Employee ID', 'text', 'YES', '', '', 'YES', 'YES'];
+    sh.appendRow(er); vals.push(er);
+  }
   vals.forEach(function (r, i) {   // one-time update of the old multi-stop wording
     if (String(r[0]).trim() === 'flows' && String(r[7]) === OLD_FLOWS_HELP) {
       sh.getRange(i + 1, 4).setValue('Origin & destination lanes');
@@ -237,13 +244,6 @@ function readGrMaster_(settings) {
   if (missing.length) throw new Error('Columns not found in ' + tab + ': ' + missing.join(', '));
   var read = function (k) { return col[k] < 0 ? null : sh.getRange(2, col[k] + 1, lastRow - 1, 1).getValues(); };
   var oz = read('originZone'), o = read('origin'), dz = read('destZone'), d = read('dest'), dp = read('deliveryPoint');
-  var cr = read('cardRate'), gd = read('grDate'), vb = read('viaBorder'), card = {}, cardAt = {};
-  // Card rate per lane and via border ('' = no border): newest GR date wins, then the higher rate.
-  var putCard = function (key, via, rate, t) {
-    var c = card[key] = card[key] || {}, at = key + '|' + via;
-    if (!(via in c) || t > cardAt[at] || (t === cardAt[at] && rate > c[via])) { c[via] = rate; cardAt[at] = t; }
-  };
-  var timeOf = function (v) { if (v instanceof Date) return v.getTime(); var t = Date.parse(v); return isNaN(t) ? 0 : t; };
   var clean = function (v) { v = String(v == null ? '' : v).trim(); return v && v.toUpperCase() !== 'UNSPECIFIED' ? v : ''; };
   var origins = {}, dests = {}, seenO = {}, seenD = {};
   for (var r = 0; r < lastRow - 1; r++) {
@@ -255,41 +255,10 @@ function readGrMaster_(settings) {
       dests[z2][dn] = dests[z2][dn] || [];
       if (p && p !== dn && !seenD[z2 + '|' + dn + '|' + p]) { seenD[z2 + '|' + dn + '|' + p] = 1; dests[z2][dn].push(p); }
     }
-    var rate = cr ? Number(cr[r][0]) : 0;
-    if (on && rate > 0) {
-      var t = gd ? timeOf(gd[r][0]) : 0, via = vb ? clean(vb[r][0]).toUpperCase() : '';
-      if (p) putCard(cardKey_(on, '', p), via, Math.round(rate * 100) / 100, t);
-      if (dn) putCard(cardKey_(on, dn, ''), via, Math.round(rate * 100) / 100, t);
-    }
   }
   Object.keys(origins).forEach(function (z) { origins[z].sort(); });
   Object.keys(dests).forEach(function (z) { Object.keys(dests[z]).forEach(function (n) { dests[z][n].sort(); }); });
-  return { source: 'GR PNL data master: ' + file.getName() + ' / ' + tab + ' (' + (lastRow - 1) + ' GR rows)', origins: origins, dests: dests, card: card,
-    cardNote: (cr ? '' : 'No card rate column found in ' + tab + ' (looked for: CARD RATE). ') + (vb ? '' : 'No via border column found (looked for: VIA BORDER), card rates ignore the border.') };
-}
-
-/**
- * Card rate key. Delivery point picked: origin + delivery point. Otherwise origin + destination.
- * The same function runs in the form page so both sides match.
- */
-function cardKey_(origin, dest, dp) {
-  var u = function (v) { return String(v || '').trim().toUpperCase(); };
-  return u(dp) ? 'P|' + u(origin) + '|' + u(dp) : 'D|' + u(origin) + '|' + u(dest);
-}
-
-/**
- * Card rate for one lane, '' when the origin is a whole zone or no rate is known.
- * Via border: the picked border's rate, else the rate with no border, else the only border there is.
- * Same order as cardPick() in Index.html.
- */
-function cardRateOf_(m, origin, d) {
-  if (!m || !m.card || !origin || !origin.place || !d.place) return '';
-  var c = m.card[cardKey_(origin.place, d.place, d.dp)];
-  if (!c) return '';
-  var via = String(d.via || '').trim().toUpperCase(), vias = Object.keys(c);
-  if (via && via in c) return c[via];
-  if ('' in c) return c[''];
-  return vias.length === 1 ? c[vias[0]] : '';
+  return { source: 'GR PNL data master: ' + file.getName() + ' / ' + tab + ' (' + (lastRow - 1) + ' GR rows)', origins: origins, dests: dests };
 }
 
 /** Lane master copy inside the script, used only when the GR master cannot be read. */
@@ -303,7 +272,7 @@ function fallbackMasters_() {
 }
 
 function masterCounts_(m) {
-  var c = { originZones: Object.keys(m.origins).length, origins: 0, destZones: Object.keys(m.dests).length, dests: 0, deliveryPoints: 0, cardRates: Object.keys(m.card || {}).length };
+  var c = { originZones: Object.keys(m.origins).length, origins: 0, destZones: Object.keys(m.dests).length, dests: 0, deliveryPoints: 0 };
   Object.keys(m.origins).forEach(function (z) { c.origins += m.origins[z].length; });
   Object.keys(m.dests).forEach(function (z) {
     Object.keys(m.dests[z]).forEach(function (n) { c.dests += 1; c.deliveryPoints += m.dests[z][n].length; });
@@ -397,11 +366,10 @@ function submitVisit(p) {
   var lock = LockService.getScriptLock();
   lock.waitLock(20000);
   try {
-    var now = new Date(), masters = getMasters_(ss);
-    flows.forEach(function (fl) { fl.dests.forEach(function (d) { d.card = cardRateOf_(masters, fl.origin, d); }); });
+    var now = new Date();
     var id = 'SV-' + Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyyMMdd-HHmmss') + '-' + Math.floor(Math.random() * 900 + 100);
     var flowText = flows.map(function (fl) {
-      return originName_(fl.origin) + ' > ' + fl.dests.map(function (d) { return destName_(d) + (d.via ? ' via ' + d.via : '') + (priceOf_(d) !== '' ? ' (Rs ' + priceOf_(d) + ')' : ''); }).join(', ') +
+      return originName_(fl.origin) + ' > ' + fl.dests.map(function (d) { return destName_(d) + (priceOf_(d) !== '' ? ' (Rs ' + priceOf_(d) + ')' : ''); }).join(', ') +
         (fl.mt ? ' | ' + fl.mt + ' MT/month' : '') + (fl.freq ? ' | ' + fl.freq : '') + (fl.note ? ' | ' + fl.note : '');
     }).join('\n');
 
@@ -420,38 +388,35 @@ function submitVisit(p) {
     fields.forEach(function (f) { if (cols.colOf[f.id]) row[cols.colOf[f.id] - 1] = a[f.id]; });
     cols.sheet.appendRow(row);
 
+    // First approval level: RM of the customer zone (Head Costing straight away if the zone has no RM email)
+    var settings = settingsWithDefaults_(ss), rm = findZone_(ss, a.zone || '');
+    var stage = rm.email ? STAGE.RM : STAGE.HO;
+    var due = addDays_(now, tat_(settings, rm.email ? 'RM' : 'HO'));
+
     // Customer_Lanes: one row per customer x origin > destination / delivery point
     var total = flows.reduce(function (t, x) { return t + x.dests.length; }, 0), lanes = [], n = 0;
     flows.forEach(function (fl, i) {
       fl.dests.forEach(function (d) {
         n++;
         lanes.push({ 'Customer': a.customer || '', 'Customer Zone': a.zone || '', 'Visit ID': id, 'Visit Date': a.visitDate || '', 'Submitted At': now,
-          'Field Rep': a.repName || '', 'Lane': n + ' of ' + total, 'Origin #': i + 1, 'Origin Zone': fl.origin.zone, 'Origin': originName_(fl.origin),
-          'Destination Zone': d.zone, 'Destination': d.place || ('ALL OF ' + d.zone), 'Delivery Point': d.dp || '',
-          'Lane (From > To)': originName_(fl.origin) + ' > ' + destName_(d) + (d.via ? ' (via ' + d.via + ')' : ''), 'Via Border': d.via || '', 'Card Rate': d.card, 'Suggested Price (Field Rep)': priceOf_(d),
-          'Origin MT / month': fl.mt || '', 'Frequency': fl.freq || '', 'Note': fl.note || '', 'Lane Status': 'PENDING', 'Overall Status': 'PENDING' });
+          'Field Rep': a.repName || '', 'Employee ID': a.repId || '', 'Lane': n + ' of ' + total, 'Origin #': i + 1, 'Origin Zone': fl.origin.zone,
+          'Origin': originName_(fl.origin), 'Destination Zone': d.zone, 'Destination': d.place || ('ALL OF ' + d.zone), 'Delivery Point': d.dp || '',
+          'Lane (From > To)': originName_(fl.origin) + ' > ' + destName_(d), 'Suggested Price (Field Rep)': priceOf_(d),
+          'Origin MT / month': fl.mt || '', 'Frequency': fl.freq || '', 'Note': fl.note || '', 'Lane Status': stage, 'Stage': stage });
       });
     });
     writeLanes_(customerLanesSheet_(ss), lanes);
 
-    // Approvals + mail
-    var rows = fields.map(function (f) { return [f.label, a[f.id]]; });
-    var sent = sendVisitMails_(ss, id, now, a, rows, flows);
-
-    // Visit_Summary
-    var origins = [], finals = [], finalZones = [];
-    var addU = function (arr, v) { if (v && arr.indexOf(v) < 0) arr.push(v); };
-    flows.forEach(function (fl) {
-      addU(origins, originName_(fl.origin));
-      fl.dests.forEach(function (d) { addU(finals, destName_(d)); addU(finalZones, d.zone); });
-    });
-    var vs = summarySheet_(ss);
-    var base = [now, a.visitDate || '', a.repName || '', a.repEmail || '', a.customer || '', a.zone || '',
-      a.city || '', a.contact || '', a.phone || '', a.commodity || '', a.mValue || '', a.mVolume || '',
-      a.potValue || '', origins.join(', '), finalZones.join(', '), finals.join(', '), a.expRate || '', sent.status];
-    vs.appendRow(base.concat([id, sent.roles.CH ? 'PENDING' : 'NO EMAIL', '', '', '', sent.roles.RM ? 'PENDING' : 'NO EMAIL', '', '', '',
-      (sent.roles.CH || sent.roles.RM) ? 'PENDING' : 'NO APPROVER']));
-    return { id: id, status: sent.status };
+    // Visit_Tracker: stage, due date and one link token per person
+    var tok = function () { return Utilities.getUuid().replace(/-/g, ''); };
+    appendTracker_(ss, { 'Visit ID': id, 'Submitted At': now, 'Visit Date': a.visitDate || '', 'Field Rep': a.repName || '',
+      'Employee ID': a.repId || '', 'Rep Email': a.repEmail || '', 'Customer': a.customer || '', 'Customer Zone': a.zone || '',
+      'City': a.city || '', 'Potential / month': a.potValue || '', 'Lanes': total, 'Stage': stage, 'Stage Since': now, 'Due By': due,
+      'RM Email': rm.email, 'RM Status': rm.email ? 'PENDING' : 'NO RM EMAIL', 'HO Status': 'PENDING',
+      'RM Token': tok(), 'HO Token': tok(), 'FR Token': tok() });
+    writeResponseStatus_(ss, id, { 'Stage': stage });
+    ss.getSheetByName('Mail_Log').appendRow([now, a.customer, a.zone, '', 'NEW VISIT ' + id + ' > ' + stage + ' (goes out in the next digest)']);
+    return { id: id, status: stage + '. ' + (rm.email ? 'The Regional Manager' : 'Head Costing') + ' gets it in the next digest mail.' };
   } finally {
     lock.releaseLock();
   }
@@ -462,13 +427,12 @@ function submitVisit(p) {
  * so all of one customer's origin > destination splits can be read in one go.
  */
 var CL_TAB = 'Customer_Lanes';
-var CL_HEADERS = ['Customer', 'Customer Zone', 'Visit ID', 'Visit Date', 'Submitted At', 'Field Rep', 'Lane',
+var CL_HEADERS = ['Customer', 'Customer Zone', 'Visit ID', 'Visit Date', 'Submitted At', 'Field Rep', 'Employee ID', 'Lane',
   'Origin #', 'Origin Zone', 'Origin', 'Destination Zone', 'Destination', 'Delivery Point', 'Lane (From > To)',
-  'Via Border', 'Card Rate', 'Suggested Price (Field Rep)', 'Origin MT / month', 'Frequency', 'Note',
-  'CH Decision', 'Costing Head Rate', 'RM Decision', 'RM Rate', 'Lane Status', 'Overall Status'];
-var LANE_DEC_HEADERS = { 'Costing Head': 'CH Decision', 'Regional Manager': 'RM Decision' };
-var CL_COLORS = { 'Card Rate': '#3b45a3', 'Suggested Price (Field Rep)': '#127a43', 'CH Decision': '#e9622b', 'Costing Head Rate': '#e9622b',
-  'RM Decision': '#e9622b', 'RM Rate': '#e9622b' };
+  'Suggested Price (Field Rep)', 'Origin MT / month', 'Frequency', 'Note',
+  'RM Decision', 'RM Rate', 'HO Decision', 'HO Approved Rate', 'Final Rate', 'Lane Status', 'Stage'];
+var CL_COLORS = { 'Suggested Price (Field Rep)': '#127a43', 'RM Decision': '#e9622b', 'RM Rate': '#e9622b',
+  'HO Decision': '#c62f3b', 'HO Approved Rate': '#c62f3b', 'Final Rate': '#127a43' };
 var LANE_TABS = [CL_TAB, 'Visit_Lanes', 'Visit_Lanes_v2', 'Visit_Lanes_v3'];   // older tabs are still read for old visits
 
 function customerLanesSheet_(ss) {
@@ -496,261 +460,483 @@ function writeLanes_(sh, objs) {
   sh.getRange(sh.getLastRow() + 1, 1, rows.length, head.length).setValues(rows);
 }
 
-/** Header index helper for any lanes tab. */
-function laneCols_(sh) {
-  var h = sh.getRange(1, 1, 1, Math.max(sh.getLastColumn(), 1)).getValues()[0];
-  return function (name) { return h.indexOf(name); };
-}
-
-/** Sets Overall Status on every Customer_Lanes row of a visit. */
-function setLaneStatus_(ss, id, status) {
-  var sh = ss.getSheetByName(CL_TAB); if (!sh || sh.getLastRow() < 2) return;
-  var ix = laneCols_(sh), vc = ix('Visit ID'), sc = ix('Overall Status'); if (vc < 0 || sc < 0) return;
-  var v = sh.getRange(2, vc + 1, sh.getLastRow() - 1, 1).getValues();
-  v.forEach(function (r, k) { if (String(r[0]) === id) sh.getRange(k + 2, sc + 1).setValue(status); });
-}
-
-/** Visit_Summary with the approval columns from column 19 on. */
-function summarySheet_(ss) {
-  var vs = ss.getSheetByName('Visit_Summary');
-  var cell = vs.getRange(1, 19);
-  if (cell.getValue() !== SUMMARY_APPROVAL_HEADERS[0]) {
-    vs.getRange(1, 19, 1, SUMMARY_APPROVAL_HEADERS.length).setValues([SUMMARY_APPROVAL_HEADERS])
-      .setFontWeight('bold').setBackground('#2a3273').setFontColor('#ffffff');
-  }
-  return vs;
-}
-
-/* ------------------------------------------------------------------- mail */
-
-/** One mail to the Costing Head and one to the zone RM, each with its own approval link on top. */
-function sendVisitMails_(ss, id, now, a, rows, flows) {
-  var settings = readSettings_(ss);
-  var rm = findZone_(ss, a.zone || '');
-  var url = ScriptApp.getService().getUrl();
-  var ap = ss.getSheetByName('Approvals');
-  var AH = ['Visit ID', 'Submitted At', 'Customer', 'Customer Zone', 'Role', 'Approver Email', 'Token', 'Status',
-    'Approved Rate', 'Remark', 'Decided At'];
-  if (!ap) {
-    ap = ss.insertSheet('Approvals');
-    ap.getRange(1, 1, 1, AH.length).setValues([AH]).setFontWeight('bold').setBackground('#2a3273').setFontColor('#ffffff');
-    ap.setFrozenRows(1);
-  }
-  var repCc = String(settings.CC_FIELD_REP).toUpperCase() === 'YES' ? a.repEmail : '';
-  var targets = [
-    { role: 'CH', to: settings.COSTING_HEAD_EMAIL, cc: [settings.ALWAYS_CC, repCc], name: 'Costing Head' },
-    { role: 'RM', to: rm.email, cc: [rm.cc], name: rm.name || 'Regional Manager' }
-  ];
-  var roles = {}, log = [];
-  targets.forEach(function (t) {
-    var to = String(t.to || '').trim();
-    if (!to) { log.push(ROLES[t.role] + ': no email'); return; }
-    var token = Utilities.getUuid().replace(/-/g, '');
-    ap.appendRow([id, now, a.customer || '', a.zone || '', ROLES[t.role], to, token, 'PENDING', '', '', '']);
-    roles[t.role] = true;
-    var link = url + '?page=approve&t=' + token;
-    var subject = 'Approval needed: ' + (a.customer || '-') + ' | ' + (a.zone || '-') + ' | Potential Rs ' + (a.potValue || '-') + '/month';
-    try {
-      var mail = { to: to, subject: subject, htmlBody: visitMailHtml_(ss, id, a, rows, flows, link, t.name, ROLES[t.role]), name: 'Sugam Customer Visit' };
-      var cc = t.cc.filter(function (x) { return x && String(x).trim(); }).join(',');
-      if (cc) mail.cc = cc;
-      if (a.repEmail) mail.replyTo = a.repEmail;
-      MailApp.sendEmail(mail);
-      log.push(ROLES[t.role] + ': SENT');
-      ss.getSheetByName('Mail_Log').appendRow([new Date(), a.customer, a.zone, to + (cc ? ' | cc: ' + cc : ''), 'SENT (' + ROLES[t.role] + ', ' + id + ')']);
-    } catch (err) {
-      log.push(ROLES[t.role] + ': FAILED ' + err.message);
-      ss.getSheetByName('Mail_Log').appendRow([new Date(), a.customer, a.zone, to, 'FAILED: ' + err.message]);
-    }
-  });
-  var status = log.join(' | ');
-  if (!roles.CH && !roles.RM) status = 'NOT SENT - fill Costing Head email / RM email for ' + a.zone + ' (Admin > Zone emails)';
-  return { status: status, roles: roles };
-}
-
-function visitMailHtml_(ss, id, a, rows, flows, link, greetName, roleLabel) {
-  var td = 'border:1px solid #dfe4ec;padding:7px 10px;vertical-align:top;font-size:13px;';
-  var kv = function (label, v) { return '<td style="padding:4px 18px 4px 0"><div style="font-size:11px;color:#667085">' + label + '</div><div style="font-weight:bold;font-size:14px">' + esc_(v || '-') + '</div></td>'; };
-  var laneRows = [];
-  flows.forEach(function (fl) {
-    fl.dests.forEach(function (d) {
-      laneRows.push('<tr><td style="' + td + '">' + esc_(fl.origin.zone) + '</td><td style="' + td + '">' + esc_(originName_(fl.origin)) +
-        '</td><td style="' + td + '">' + esc_(d.zone) + '</td><td style="' + td + '">' + esc_(d.place || 'ALL') + '</td><td style="' + td + '">' +
-        esc_(d.dp || '') + (d.via ? '<br><small>via ' + esc_(d.via) + '</small>' : '') + '</td><td style="' + td + '">' + (d.card !== '' && d.card != null ? 'Rs ' + d.card : '-') + '</td><td style="' + td + 'font-weight:bold;color:#127a43">' + (priceOf_(d) !== '' ? 'Rs ' + priceOf_(d) : '-') + '</td><td style="' + td + '">' + esc_(fl.mt || '') + '</td><td style="' + td + '">' + esc_(fl.freq || '') + '</td></tr>');
-    });
-  });
-  var th = function (t) { return '<th style="' + td + 'background:#2a3273;color:#fff;text-align:left;font-size:12px">' + t + '</th>'; };
-  return '<div style="font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#1b2333;max-width:760px">' +
-    '<div style="background:#2a3273;color:#fff;padding:16px 20px;border-radius:10px 10px 0 0;border-bottom:4px solid #e9622b">' +
-    '<div style="font-size:11px;letter-spacing:2px;color:#f8ae40;font-weight:bold">SUGAM GROUP &middot; CUSTOMER ONBOARDING JOURNEY</div>' +
-    '<div style="font-size:20px;font-weight:bold;margin-top:4px">' + esc_(a.customer) + '</div>' +
-    '<div style="opacity:.85">' + esc_(a.city) + ' &middot; Zone ' + esc_(a.zone) + ' &middot; Visit ID ' + esc_(id) + '</div></div>' +
-    '<div style="background:#fdf0e9;border:1px solid #f9d5c3;border-top:0;padding:16px 20px">' +
-    '<div style="margin-bottom:10px">Dear ' + esc_(greetName) + ', your approval is needed as <b>' + esc_(roleLabel) + '</b>. Approve or reject each lane and enter its approved rate.</div>' +
-    '<a href="' + link + '" style="display:inline-block;background:#e9622b;color:#fff;text-decoration:none;font-weight:bold;font-size:15px;padding:12px 26px;border-radius:8px">Approve / Reject &amp; enter rate &rarr;</a>' +
-    '</div>' +
-    '<table style="margin:16px 0 6px"><tr>' + kv('Potential / month', 'Rs ' + (a.potValue || '-')) + kv('Current spend / month', 'Rs ' + (a.mValue || '-')) +
-    kv('Volume / month', (a.mVolume || '-') + ' MT') + kv('Expected rate', a.expRate ? 'Rs ' + a.expRate : '-') + '</tr></table>' +
-    '<div style="font-weight:bold;color:#e9622b;font-size:12px;letter-spacing:1px;margin:16px 0 6px">ORIGIN &gt; DESTINATION LANES</div>' +
-    '<table style="border-collapse:collapse;width:100%"><tr>' + th('Origin zone') + th('Origin') + th('Dest zone') + th('Destination') +  th('Delivery point') + th('Card rate') + th('Field rep price') + th('MT/month') + th('Frequency') + '</tr>' +
-    (laneRows.join('') || '<tr><td colspan="9" style="' + td + '">-</td></tr>') + '</table>' +
-    '<div style="font-weight:bold;color:#e9622b;font-size:12px;letter-spacing:1px;margin:18px 0 6px">FULL VISIT DETAILS</div>' +
-    '<table style="border-collapse:collapse;width:100%">' +
-    rows.filter(function (r) { return r[1]; }).map(function (r, i) {
-      return '<tr style="background:' + (i % 2 ? '#ffffff' : '#f4f6fa') + '"><td style="' + td + 'width:240px;font-weight:bold">' + esc_(r[0]) +
-        '</td><td style="' + td + '">' + esc_(r[1]).replace(/\n/g, '<br>') + '</td></tr>';
-    }).join('') + '</table>' +
-    '<p style="margin-top:16px"><a href="' + link + '" style="color:#e9622b;font-weight:bold">Approve / Reject &amp; enter rate</a> &middot; ' +
-    '<a href="' + ss.getUrl() + '" style="color:#2a3273">Open response sheet</a></p></div>';
-}
-
-/* -------------------------------------------------------------- approvals */
-
-function findApproval_(ss, token) {
-  token = String(token || '').trim();
-  if (!/^[a-f0-9]{32}$/.test(token)) return null;
-  var ap = ss.getSheetByName('Approvals');
-  if (!ap) return null;
-  var v = ap.getDataRange().getValues();
-  for (var i = 1; i < v.length; i++) if (String(v[i][6]) === token) return { sheet: ap, row: i + 1, r: v[i], all: v };
-  return null;
-}
-
-function summaryRow_(ss, id) {
-  var vs = summarySheet_(ss);
-  var ids = vs.getRange(1, 19, Math.max(vs.getLastRow(), 1), 1).getValues();
-  for (var i = ids.length - 1; i >= 1; i--) if (String(ids[i][0]) === id) return { sheet: vs, row: i + 1 };
-  return null;
-}
-
-/** Data for the approval page. */
-function approvalView_(token) {
-  var ss = responseSheet_();
-  var f = findApproval_(ss, token);
-  if (!f) return { ok: false, error: 'This approval link is not valid.' };
-  var id = String(f.r[0]);
-  var s = summaryRow_(ss, id), sv = s ? s.sheet.getRange(s.row, 1, 1, 28).getValues()[0] : [];
-  var lanes = [], role = String(f.r[4]);
+/** Every lane of one visit, from Customer_Lanes (and the older lane tabs). */
+function visitLanes_(ss, id) {
+  var lanes = [];
   LANE_TABS.forEach(function (n) {
     var sh = ss.getSheetByName(n); if (!sh) return;
     var v = sh.getDataRange().getValues(), h = v[0];
     var ix = function (name) { return h.indexOf(name); };
-    var otherRole = role === ROLES.CH ? ROLES.RM : ROLES.CH;
-    var vid = ix('Visit ID'), sug = ix('Suggested Price (Field Rep)'), mine = ix(LANE_RATE_HEADERS[role]), other = ix(LANE_RATE_HEADERS[otherRole]);
-    var card = ix('Card Rate'), myDec = ix(LANE_DEC_HEADERS[role]), otherDec = ix(LANE_DEC_HEADERS[otherRole]);
-    if (vid < 0) return;
+    var get = function (r, name) { return ix(name) >= 0 ? r[ix(name)] : ''; };
+    if (ix('Visit ID') < 0) return;
     v.forEach(function (r, i) {
-      if (i === 0 || String(r[vid]) !== id) return;
-      lanes.push({ tab: n, row: i + 1, oz: r[ix('Origin Zone')], o: r[ix('Origin')], dz: r[ix('Destination Zone')], d: r[ix('Destination')],
-        dp: ix('Delivery Point') >= 0 ? r[ix('Delivery Point')] : '', mt: r[ix('Origin MT / month')], fq: r[ix('Frequency')],
-        rate: mine >= 0 ? r[mine] : '', otherRate: other >= 0 ? r[other] : '', suggested: sug >= 0 ? r[sug] : '', card: card >= 0 ? r[card] : '',
-        via: ix('Via Border') >= 0 ? r[ix('Via Border')] : '', dec: myDec >= 0 ? r[myDec] : '', otherDec: otherDec >= 0 ? r[otherDec] : '' });
+      if (i === 0 || String(r[ix('Visit ID')]) !== id) return;
+      lanes.push({ tab: n, row: i + 1, oz: get(r, 'Origin Zone'), o: get(r, 'Origin'), dz: get(r, 'Destination Zone'), d: get(r, 'Destination'),
+        dp: get(r, 'Delivery Point'), mt: get(r, 'Origin MT / month'), fq: get(r, 'Frequency'), suggested: get(r, 'Suggested Price (Field Rep)'),
+        rmDec: get(r, 'RM Decision'), rmRate: get(r, 'RM Rate'), hoDec: get(r, 'HO Decision'), hoRate: get(r, 'HO Approved Rate'),
+        finalRate: get(r, 'Final Rate'), status: get(r, 'Lane Status') });
     });
   });
-  var others = f.all.slice(1).filter(function (r) { return String(r[0]) === id && String(r[6]) !== String(token); })
-    .map(function (r) { return { role: r[4], status: r[7], rate: r[8], remark: r[9] }; });
-  var fmt = function (d) { return d instanceof Date ? Utilities.formatDate(d, Session.getScriptTimeZone(), 'dd MMM yyyy, HH:mm') : String(d || ''); };
+  return lanes;
+}
+
+/** Writes some columns of one lane row (columns are added when missing). */
+function setLane_(ss, lane, obj) {
+  var sh = ss.getSheetByName(lane.tab);
+  Object.keys(obj).forEach(function (k) { sh.getRange(lane.row, laneColumn_(sh, k, CL_COLORS[k] || '#2a3273')).setValue(obj[k]); });
+}
+
+/** Stage on every lane row of a visit. */
+function setLanesStage_(ss, id, stage) {
+  var sh = ss.getSheetByName(CL_TAB); if (!sh || sh.getLastRow() < 2) return;
+  var col = laneColumn_(sh, 'Stage', '#2a3273');
+  var h = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0], vc = h.indexOf('Visit ID');
+  if (vc < 0) return;
+  sh.getRange(2, vc + 1, sh.getLastRow() - 1, 1).getValues().forEach(function (r, k) {
+    if (String(r[0]) === id) sh.getRange(k + 2, col).setValue(stage);
+  });
+}
+
+function laneName_(l) { return l.o + ' > ' + l.d + (l.dp ? ' > ' + l.dp : ''); }
+function num_(v) { v = String(v == null ? '' : v).trim(); return v === '' ? '' : Number(v); }
+
+/* --------------------------------------------------------------- tracker */
+
+var TRACKER_TAB = 'Visit_Tracker';
+var TR_HEADERS = ['Visit ID', 'Submitted At', 'Visit Date', 'Field Rep', 'Employee ID', 'Rep Email', 'Customer', 'Customer Zone', 'City',
+  'Potential / month', 'Lanes', 'Stage', 'Stage Since', 'Due By', 'RM Email', 'RM Status', 'RM Remark', 'RM At',
+  'HO Status', 'HO Approved Rates', 'HO Remark', 'HO At', 'Outcome', 'Outcome Remark', 'Outcome At', 'RM Token', 'HO Token', 'FR Token'];
+var STAGE = { RM: 'Pending at RM', RM_REJ: 'Rejected by RM', HO: 'Pending at Head Costing', HO_REJ: 'Rejected by Head Costing',
+  FR: 'Pending at Field Rep', CUST: 'Pending at Customer', REFUSED: 'Customer Refused', FINAL: 'Finalized' };
+var OUTCOMES = { FINALIZED: STAGE.FINAL, PENDING_CUSTOMER: STAGE.CUST, REFUSED: STAGE.REFUSED };
+var TOKEN_COLS = { RM: 'RM Token', HO: 'HO Token', FR: 'FR Token' };
+
+function trackerSheet_(ss) {
+  var sh = ss.getSheetByName(TRACKER_TAB);
+  if (sh) return sh;
+  sh = ss.insertSheet(TRACKER_TAB);
+  sh.getRange(1, 1, 1, TR_HEADERS.length).setValues([TR_HEADERS]).setFontWeight('bold').setBackground('#2a3273').setFontColor('#ffffff');
+  sh.getRange(1, TR_HEADERS.indexOf('Stage') + 1, 1, 3).setBackground('#e9622b');
+  sh.setFrozenRows(1);
+  sh.setFrozenColumns(1);
+  sh.getRange(1, 1, sh.getMaxRows(), TR_HEADERS.length).createFilter();
+  return sh;
+}
+
+function appendTracker_(ss, obj) {
+  var sh = trackerSheet_(ss);
+  sh.getRange(sh.getLastRow() + 1, 1, 1, TR_HEADERS.length).setValues([TR_HEADERS.map(function (h) { return obj[h] === undefined ? '' : obj[h]; })]);
+}
+
+/** All tracker rows as objects (newest first). */
+function trackerRows_(ss) {
+  var sh = trackerSheet_(ss), v = sh.getDataRange().getValues(), h = v[0];
+  return v.slice(1).map(function (r, i) {
+    var o = { _row: i + 2 };
+    h.forEach(function (k, j) { o[k] = r[j]; });
+    return o;
+  }).filter(function (o) { return o['Visit ID']; }).reverse();
+}
+
+/** The tracker row whose RM / HO / FR token matches, with its role. */
+function trackerByToken_(ss, token) {
+  token = String(token || '').trim();
+  if (!/^[a-f0-9]{32}$/.test(token)) return null;
+  var rows = trackerRows_(ss);
+  for (var i = 0; i < rows.length; i++) {
+    for (var role in TOKEN_COLS) if (String(rows[i][TOKEN_COLS[role]]) === token) return { t: rows[i], role: role };
+  }
+  return null;
+}
+
+/** Updates some columns of a tracker row in one write. */
+function updateTracker_(ss, t, obj) {
+  var sh = trackerSheet_(ss);
+  Object.keys(obj).forEach(function (k) { t[k] = obj[k]; });
+  sh.getRange(t._row, 1, 1, TR_HEADERS.length).setValues([TR_HEADERS.map(function (h) { return t[h] === undefined ? '' : t[h]; })]);
+}
+
+/**
+ * Stage / RM / HO / outcome columns at the end of Web_Responses, filled on the visit's own row.
+ * They carry the note "sys:<name>" so the question columns sync never touches them.
+ */
+function writeResponseStatus_(ss, id, obj) {
+  var sh = ss.getSheetByName('Web_Responses'); if (!sh) return;
+  var lastCol = Math.max(sh.getLastColumn(), 2), colOf = {};
+  sh.getRange(1, 1, 1, lastCol).getNotes()[0].forEach(function (n, i) { var m = String(n).match(/^sys:(.+)$/); if (m) colOf[m[1]] = i + 1; });
+  var ids = sh.getRange(1, 2, Math.max(sh.getLastRow(), 1), 1).getValues(), row = 0;
+  for (var i = ids.length - 1; i >= 1; i--) if (String(ids[i][0]) === id) { row = i + 1; break; }
+  if (!row) return;
+  Object.keys(obj).forEach(function (k) {
+    if (!colOf[k]) {
+      lastCol += 1;
+      if (lastCol > sh.getMaxColumns()) sh.insertColumnAfter(sh.getMaxColumns());
+      sh.getRange(1, lastCol).setValue(k).setNote('sys:' + k).setFontWeight('bold').setBackground(/^HO/.test(k) ? '#c62f3b' : '#e9622b').setFontColor('#ffffff');
+      colOf[k] = lastCol;
+    }
+    sh.getRange(row, colOf[k]).setValue(obj[k]);
+  });
+}
+
+/** A visit's answers by question id, read from Web_Responses. */
+function responseValues_(ss, id) {
+  var sh = ss.getSheetByName('Web_Responses'), out = {};
+  if (!sh || sh.getLastRow() < 2) return out;
+  var lastCol = sh.getLastColumn(), notes = sh.getRange(1, 1, 1, lastCol).getNotes()[0];
+  var v = sh.getRange(1, 1, sh.getLastRow(), lastCol).getValues();
+  for (var i = v.length - 1; i >= 1; i--) {
+    if (String(v[i][1]) !== id) continue;
+    notes.forEach(function (n, j) { var m = String(n).match(/^fid:(.+)$/); if (m) out[m[1]] = v[i][j]; });
+    break;
+  }
+  return out;
+}
+
+function tat_(settings, role) { var n = Number(settings['TAT_' + role + '_DAYS']); return n > 0 ? n : 2; }
+function addDays_(d, n) { return new Date(d.getTime() + n * 86400000); }
+function fmtDate_(d, withTime) {
+  if (!(d instanceof Date)) return String(d || '');
+  return Utilities.formatDate(d, Session.getScriptTimeZone(), withTime ? 'dd MMM yyyy, hh:mm a' : 'dd MMM yyyy');
+}
+function daysSince_(d) { return d instanceof Date ? Math.max(0, Math.floor((Date.now() - d.getTime()) / 86400000)) : ''; }
+function isOverdue_(t) { return t['Due By'] instanceof Date && Date.now() > t['Due By'].getTime() && [STAGE.RM, STAGE.HO, STAGE.FR, STAGE.CUST].indexOf(t['Stage']) >= 0; }
+function linkFor_(t, role) { return ScriptApp.getService().getUrl() + '?page=approve&t=' + t[TOKEN_COLS[role]]; }
+
+/** Key for the Head Costing tracker link (made once, kept in Settings). */
+function trackerKey_(ss) {
+  var s = settingsWithDefaults_(ss);
+  if (s.TRACKER_KEY) return s.TRACKER_KEY;
+  var key = Utilities.getUuid().replace(/-/g, '').slice(0, 20);
+  saveSetting_(ss, 'TRACKER_KEY', key);
+  return key;
+}
+function trackerUrl_(ss) { return ScriptApp.getService().getUrl() + '?page=tracker&k=' + trackerKey_(ss); }
+
+function saveSetting_(ss, k, v) {
+  var st = ss.getSheetByName('Settings'), data = st.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++) if (String(data[i][0]).trim() === k) { st.getRange(i + 1, 2).setValue(v); return; }
+  st.appendRow([k, v, '']);
+}
+
+/* -------------------------------------------------------------- approvals */
+
+/** Data for the approval page: RM, Head Costing or field rep, decided by whose token it is. */
+function approvalView_(token) {
+  var ss = responseSheet_();
+  var f = trackerByToken_(ss, token);
+  if (!f) return { ok: false, error: 'This link is not valid.' };
+  var t = f.t, role = f.role, stage = String(t['Stage']), id = String(t['Visit ID']);
+  var canEdit = false, wait = '';
+  if (role === 'RM') {
+    canEdit = [STAGE.RM, STAGE.RM_REJ, STAGE.HO].indexOf(stage) >= 0 && String(t['HO At']) === '';
+    if (!canEdit) wait = 'Head Costing has already decided. Your decision is locked.';
+  } else if (role === 'HO') {
+    canEdit = [STAGE.HO, STAGE.HO_REJ, STAGE.FR].indexOf(stage) >= 0 && String(t['Outcome']) === '';
+    if (stage === STAGE.RM) wait = 'Waiting for the Regional Manager. This opens for you after the RM decides.';
+    else if (stage === STAGE.RM_REJ) wait = 'The Regional Manager rejected every lane, so this visit stopped there.';
+    else if (!canEdit) wait = 'The field rep has already recorded the customer outcome. Your decision is locked.';
+  } else {
+    canEdit = [STAGE.FR, STAGE.CUST].indexOf(stage) >= 0;
+    if ([STAGE.RM, STAGE.HO].indexOf(stage) >= 0) wait = 'Still under approval (' + stage + '). You get a mail when Head Costing approves the rates.';
+    else if (stage === STAGE.RM_REJ || stage === STAGE.HO_REJ) wait = 'This visit was ' + stage.toLowerCase() + '.';
+    else if (!canEdit) wait = 'Outcome recorded: ' + stage + '.';
+  }
+  var ans = responseValues_(ss, id);
   return {
-    ok: true, token: token, id: id, role: f.r[4], email: f.r[5], status: f.r[7], rate: f.r[8], remark: f.r[9], decidedAt: fmt(f.r[10]),
-    visit: { customer: f.r[2], zone: f.r[3], submitted: fmt(f.r[1]), rep: sv[2] || '', city: sv[6] || '', commodity: sv[9] || '',
-      mValue: sv[10] || '', mVolume: sv[11] || '', potValue: sv[12] || '', expRate: sv[16] || '' },
-    lanes: lanes, others: others
+    ok: true, token: token, role: role, stage: stage, canEdit: canEdit, wait: wait, id: id,
+    due: fmtDate_(t['Due By'], true), overdue: isOverdue_(t),
+    visit: { customer: t['Customer'], zone: t['Customer Zone'], city: t['City'], rep: t['Field Rep'], empId: t['Employee ID'],
+      submitted: fmtDate_(t['Submitted At'], true), visitDate: fmtDate_(t['Visit Date']), potValue: t['Potential / month'],
+      mValue: ans.mValue || '', mVolume: ans.mVolume || '', commodity: ans.commodity || '', expRate: ans.expRate || '' },
+    rm: { status: t['RM Status'], remark: t['RM Remark'], at: fmtDate_(t['RM At'], true) },
+    ho: { status: t['HO Status'], remark: t['HO Remark'], at: fmtDate_(t['HO At'], true) },
+    outcome: { value: t['Outcome'], remark: t['Outcome Remark'], at: fmtDate_(t['Outcome At'], true) },
+    lanes: visitLanes_(ss, id).map(function (l) {
+      return { tab: l.tab, row: l.row, oz: l.oz, o: l.o, dz: l.dz, d: l.d, dp: l.dp, mt: l.mt, suggested: l.suggested,
+        rmDec: l.rmDec, rmRate: l.rmRate, hoDec: l.hoDec, hoRate: l.hoRate, finalRate: l.finalRate };
+    })
   };
 }
 
 /**
- * Called from the approval page.
- * lanes = [{ tab, row, decision, rate }]: every lane gets its own APPROVED / REJECTED and an optional rate.
- * decision is the fallback for a lane sent without one (older approval pages).
- * The approver's status becomes APPROVED (all lanes), REJECTED (all lanes) or PARTIAL.
+ * RM or Head Costing decision from the approval page.
+ * lanes = [{ tab, row, decision: APPROVED | REJECTED, rate }]. A remark is required when any lane is rejected.
+ * RM: all lanes rejected = stop (Rejected by RM), otherwise on to Head Costing.
+ * Head Costing: decides only the lanes the RM approved. Approved rate left empty = the RM rate.
  */
-function approveSave(token, decision, lanes, remark) {
+function approveSave(token, lanes, remark) {
   var OK = ['APPROVED', 'REJECTED'];
   lanes = Array.isArray(lanes) ? lanes : [];
-  lanes.forEach(function (x) {
-    x.rate = String(x.rate == null ? '' : x.rate).trim();
-    if (x.rate && isNaN(Number(x.rate))) throw new Error('Rates must be numbers');
-    x.decision = OK.indexOf(x.decision) >= 0 ? x.decision : decision;
-    if (OK.indexOf(x.decision) < 0) throw new Error('Approve or reject every lane');
-  });
-  if (!lanes.length && OK.indexOf(decision) < 0) throw new Error('Choose Approve or Reject');
+  remark = String(remark || '').trim();
   var ss = responseSheet_();
   var lock = LockService.getScriptLock();
   lock.waitLock(20000);
   try {
-    var f = findApproval_(ss, token);
-    if (!f) throw new Error('This approval link is not valid.');
-    var now = new Date(), id = String(f.r[0]), role = String(f.r[4]);
-    var roles = f.all.slice(1).filter(function (r) { return String(r[0]) === id; }).map(function (r) { return String(r[4]); });
-
-    // per-lane decision + rate (only rows of this visit)
-    var done = [], summary = [];
-    lanes.forEach(function (x) {
-      if (LANE_TABS.indexOf(x.tab) < 0) return;
-      var sh = ss.getSheetByName(x.tab); if (!sh) return;
-      var ix = laneCols_(sh), row = Number(x.row);
-      if (!(row >= 2) || ix('Visit ID') < 0 || String(sh.getRange(row, ix('Visit ID') + 1).getValue()) !== id) return;
-      sh.getRange(row, laneColumn_(sh, LANE_DEC_HEADERS[role], '#e9622b')).setValue(x.decision);
-      sh.getRange(row, laneColumn_(sh, LANE_RATE_HEADERS[role], '#e9622b')).setValue(x.rate ? Number(x.rate) : '');
-      ix = laneCols_(sh);
-      var lr = sh.getRange(row, 1, 1, sh.getLastColumn()).getValues()[0], dp = lr[ix('Delivery Point')];
-      // lane status from every approver of this visit
-      var decs = roles.map(function (r) { var c = ix(LANE_DEC_HEADERS[r]); return c >= 0 ? String(lr[c]) : ''; });
-      var ls = decs.indexOf('REJECTED') >= 0 ? 'REJECTED' : decs.every(function (d) { return d === 'APPROVED'; }) ? 'APPROVED' : 'PENDING';
-      sh.getRange(row, laneColumn_(sh, 'Lane Status', '#2a3273')).setValue(ls);
-      done.push(x.decision);
-      summary.push(lr[ix('Origin')] + ' > ' + lr[ix('Destination')] + (dp ? ' > ' + dp : '') + ': ' +
-        (x.decision === 'APPROVED' ? 'OK' : 'NO') + (x.rate ? ' ' + x.rate : ''));
+    var f = trackerByToken_(ss, token);
+    if (!f || f.role === 'FR') throw new Error('This approval link is not valid.');
+    var view = approvalView_(token);
+    if (!view.canEdit) throw new Error(view.wait || 'This visit can no longer be changed.');
+    var t = f.t, role = f.role, id = String(t['Visit ID']), now = new Date(), settings = settingsWithDefaults_(ss);
+    var byKey = {};
+    lanes.forEach(function (x) { byKey[x.tab + '|' + x.row] = x; });
+    var mine = visitLanes_(ss, id).filter(function (l) { return role === 'RM' || l.rmDec !== 'REJECTED'; });
+    if (!mine.length) throw new Error('No lanes to decide.');
+    var decided = mine.map(function (l) {
+      var x = byKey[l.tab + '|' + l.row];
+      if (!x || OK.indexOf(x.decision) < 0) throw new Error('Approve or reject every lane.');
+      var rate = String(x.rate == null ? '' : x.rate).trim();
+      if (rate && !(Number(rate) >= 0)) throw new Error('Rates must be numbers.');
+      return { l: l, dec: x.decision, rate: num_(rate) };
     });
-    var mine = !done.length ? decision
-      : done.every(function (d) { return d === 'APPROVED'; }) ? 'APPROVED'
-      : done.every(function (d) { return d === 'REJECTED'; }) ? 'REJECTED' : 'PARTIAL';
-    var rateText = summary.join('; ');
-    f.sheet.getRange(f.row, 8, 1, 4).setValues([[mine, rateText, String(remark || '').trim(), now]]);
+    var rejected = decided.filter(function (d) { return d.dec === 'REJECTED'; }).length;
+    if (rejected && !remark) throw new Error('A remark is required when a lane is rejected.');
+    var status = !rejected ? 'APPROVED' : rejected === decided.length ? 'REJECTED' : 'PARTIAL';
 
-    var all = f.sheet.getDataRange().getValues().slice(1).filter(function (r) { return String(r[0]) === id; });
-    var st = all.map(function (r) { return String(r[7]); });
-    var overall = st.indexOf('REJECTED') >= 0 ? 'REJECTED'
-      : st.indexOf('PENDING') >= 0 ? 'PENDING'
-      : st.every(function (x) { return x === 'APPROVED'; }) ? 'APPROVED' : 'PARTIAL';
-
-    var s = summaryRow_(ss, id);
-    if (s) {
-      var off = role === ROLES.CH ? 20 : 24;   // Costing Head cols 20-23, RM cols 24-27
-      s.sheet.getRange(s.row, off, 1, 4).setValues([[mine, rateText, String(remark || '').trim(), now]]);
-      var oldOverall = s.sheet.getRange(s.row, 28).getValue();
-      s.sheet.getRange(s.row, 28).setValue(overall);
-      if (overall !== 'PENDING' && overall !== oldOverall) notifyRep_(ss, s, id, overall, all);
+    if (role === 'RM') {
+      decided.forEach(function (d) {
+        setLane_(ss, d.l, { 'RM Decision': d.dec, 'RM Rate': d.dec === 'REJECTED' ? '' : d.rate, 'Lane Status': d.dec === 'REJECTED' ? STAGE.RM_REJ : STAGE.HO });
+      });
+      var stage = status === 'REJECTED' ? STAGE.RM_REJ : STAGE.HO;
+      updateTracker_(ss, t, { 'RM Status': status, 'RM Remark': remark, 'RM At': now, 'Stage': stage, 'Stage Since': now,
+        'HO Status': stage === STAGE.RM_REJ ? 'NOT SENT' : 'PENDING',
+        'Due By': stage === STAGE.HO ? addDays_(now, tat_(settings, 'HO')) : '' });
+      writeResponseStatus_(ss, id, { 'Stage': stage, 'RM Status': status, 'RM Remark': remark, 'RM At': now });
+      setLanesStage_(ss, id, stage);
+      if (stage === STAGE.RM_REJ) mailRep_(ss, t, 'RM_REJ');
+    } else {
+      var rates = [];
+      decided.forEach(function (d) {
+        var fin = d.dec === 'APPROVED' ? (d.rate !== '' ? d.rate : num_(d.l.rmRate)) : '';
+        setLane_(ss, d.l, { 'HO Decision': d.dec, 'HO Approved Rate': d.dec === 'REJECTED' ? '' : d.rate, 'Final Rate': fin,
+          'Lane Status': d.dec === 'REJECTED' ? STAGE.HO_REJ : 'Approved' });
+        if (d.dec === 'APPROVED') rates.push(laneName_(d.l) + ': ' + (fin !== '' ? 'Rs ' + fin : 'rate not set'));
+      });
+      var stage2 = status === 'REJECTED' ? STAGE.HO_REJ : STAGE.FR;
+      updateTracker_(ss, t, { 'HO Status': status, 'HO Approved Rates': rates.join('; '), 'HO Remark': remark, 'HO At': now,
+        'Stage': stage2, 'Stage Since': now, 'Due By': stage2 === STAGE.FR ? addDays_(now, tat_(settings, 'FR')) : '' });
+      writeResponseStatus_(ss, id, { 'Stage': stage2, 'HO Status': status, 'HO Approved Rates': rates.join('; '), 'HO Remark': remark, 'HO At': now });
+      setLanesStage_(ss, id, stage2);
+      mailRep_(ss, t, stage2 === STAGE.HO_REJ ? 'HO_REJ' : 'RATES');
     }
-    setLaneStatus_(ss, id, overall);
     return approvalView_(token);
   } finally {
     lock.releaseLock();
   }
 }
 
-/** Tells the field rep the final outcome. */
-function notifyRep_(ss, s, id, overall, all) {
-  var sv = s.sheet.getRange(s.row, 1, 1, 18).getValues()[0];
-  var rep = String(sv[3] || '').trim();
-  if (!rep) return;
-  var word = overall === 'PARTIAL' ? 'PARTLY APPROVED' : overall;
-  var color = overall === 'APPROVED' ? '#127a43' : overall === 'PARTIAL' ? '#b26a00' : '#c62f3b';
-  var html = '<div style="font-family:Arial;font-size:13px;color:#1b2333;max-width:640px">' +
-    '<div style="background:#2a3273;color:#fff;padding:14px 18px;border-radius:10px 10px 0 0;border-bottom:4px solid #e9622b">' +
-    '<div style="font-size:11px;letter-spacing:2px;color:#f8ae40;font-weight:bold">SUGAM GROUP &middot; CUSTOMER ONBOARDING JOURNEY</div>' +
-    '<div style="font-size:18px;font-weight:bold">' + esc_(sv[4]) + ': <span style="color:' + (overall === 'APPROVED' ? '#7fe0a8' : overall === 'PARTIAL' ? '#f8ae40' : '#ff9aa2') + '">' + word + '</span></div></div>' +
-    '<p>Hi ' + esc_(sv[2]) + ', the visit ' + esc_(id) + ' is <b style="color:' + color + '">' + word.toLowerCase() + '</b>.</p>' +
-    '<table style="border-collapse:collapse">' + all.map(function (r) {
-      return '<tr><td style="border:1px solid #dfe4ec;padding:6px 10px;font-weight:bold">' + esc_(r[4]) + '</td><td style="border:1px solid #dfe4ec;padding:6px 10px">' +
-        esc_(r[7]) + (r[8] !== '' ? '<br>Lanes:<br>' + String(r[8]).split('; ').map(esc_).join('<br>') : '') + (r[9] ? '<br>' + esc_(r[9]) : '') + '</td></tr>';
-    }).join('') + '</table></div>';
+/** Field rep outcome after the revisit: FINALIZED | PENDING_CUSTOMER | REFUSED. Rates cannot be changed here. */
+function outcomeSave(token, outcome, remark) {
+  remark = String(remark || '').trim();
+  if (!OUTCOMES[outcome]) throw new Error('Choose an outcome.');
+  if (outcome === 'REFUSED' && !remark) throw new Error('Please write why the customer refused.');
+  var ss = responseSheet_();
+  var lock = LockService.getScriptLock();
+  lock.waitLock(20000);
   try {
-    MailApp.sendEmail({ to: rep, subject: 'Visit ' + word.toLowerCase() + ': ' + sv[4] + ' | ' + sv[5], htmlBody: html, name: 'Sugam Customer Visit' });
-    ss.getSheetByName('Mail_Log').appendRow([new Date(), sv[4], sv[5], rep, 'SENT (field rep, ' + overall + ', ' + id + ')']);
-  } catch (err) {
-    ss.getSheetByName('Mail_Log').appendRow([new Date(), sv[4], sv[5], rep, 'FAILED: ' + err.message]);
+    var f = trackerByToken_(ss, token);
+    if (!f || f.role !== 'FR') throw new Error('This link is not valid.');
+    var view = approvalView_(token);
+    if (!view.canEdit) throw new Error(view.wait || 'This visit can no longer be changed.');
+    var t = f.t, now = new Date(), stage = OUTCOMES[outcome], settings = settingsWithDefaults_(ss);
+    updateTracker_(ss, t, { 'Outcome': stage, 'Outcome Remark': remark, 'Outcome At': now, 'Stage': stage, 'Stage Since': now,
+      'Due By': stage === STAGE.CUST ? addDays_(now, tat_(settings, 'FR')) : '' });
+    writeResponseStatus_(ss, String(t['Visit ID']), { 'Stage': stage, 'Outcome': stage, 'Outcome Remark': remark, 'Outcome At': now });
+    setLanesStage_(ss, String(t['Visit ID']), stage);
+    return approvalView_(token);
+  } finally {
+    lock.releaseLock();
   }
+}
+
+/* ------------------------------------------------------------------- mail */
+
+var MAIL_FROM_NAME = 'Sugam Customer Onboarding';
+
+function mailShell_(title, sub, body) {
+  return '<div style="font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#1b2333;max-width:820px">' +
+    '<div style="background:#2a3273;color:#fff;padding:16px 20px;border-radius:10px 10px 0 0;border-bottom:4px solid #e9622b">' +
+    '<div style="font-size:11px;letter-spacing:2px;color:#f8ae40;font-weight:bold">SUGAM GROUP &middot; CUSTOMER ONBOARDING JOURNEY</div>' +
+    '<div style="font-size:20px;font-weight:bold;margin-top:4px">' + title + '</div>' +
+    (sub ? '<div style="opacity:.85">' + sub + '</div>' : '') + '</div><div style="padding:16px 4px">' + body + '</div></div>';
+}
+var TD_ = 'border:1px solid #dfe4ec;padding:7px 10px;vertical-align:top;font-size:13px;';
+function th_(t) { return '<th style="' + TD_ + 'background:#2a3273;color:#fff;text-align:left;font-size:12px">' + t + '</th>'; }
+function td_(v, style) { return '<td style="' + TD_ + (style || '') + '">' + v + '</td>'; }
+function btn_(href, text) {
+  return '<a href="' + href + '" style="display:inline-block;background:#e9622b;color:#fff;text-decoration:none;font-weight:bold;font-size:14px;padding:10px 22px;border-radius:8px">' + text + '</a>';
+}
+function rs_(v) { return v === '' || v == null ? '-' : 'Rs ' + esc_(v); }
+
+function sendMail_(ss, m, what) {
+  try {
+    m.name = MAIL_FROM_NAME;
+    MailApp.sendEmail(m);
+    ss.getSheetByName('Mail_Log').appendRow([new Date(), what, '', m.to + (m.cc ? ' | cc: ' + m.cc : ''), 'SENT']);
+    return true;
+  } catch (err) {
+    ss.getSheetByName('Mail_Log').appendRow([new Date(), what, '', m.to, 'FAILED: ' + err.message]);
+    return false;
+  }
+}
+
+/** Mail to the field rep: HO approved rates (with the outcome link), or a rejection. */
+function mailRep_(ss, t, kind) {
+  var to = String(t['Rep Email'] || '').trim();
+  if (!to) return;
+  var id = String(t['Visit ID']), lanes = visitLanes_(ss, id), settings = settingsWithDefaults_(ss);
+  var sub = esc_(t['Customer Zone']) + ' &middot; Visit ID ' + esc_(id);
+  var rows = lanes.map(function (l) {
+    var ok = l.hoDec === 'APPROVED';
+    var res = l.rmDec === 'REJECTED' ? 'Rejected by RM' : l.hoDec === 'REJECTED' ? 'Rejected by Head Costing' : ok ? 'Approved' : '-';
+    return '<tr>' + td_(esc_(laneName_(l))) + td_(rs_(l.suggested)) + td_(rs_(l.rmRate)) +
+      td_(ok ? rs_(l.finalRate) : '-', 'font-weight:bold;color:#127a43') + td_(res, ok ? 'color:#127a43' : 'color:#c62f3b') + '</tr>';
+  }).join('');
+  var table = '<table style="border-collapse:collapse;width:100%"><tr>' + th_('Lane') + th_('Your price') + th_('RM rate') + th_('HO approved rate') + th_('Result') + '</tr>' + rows + '</table>';
+  var subject, body;
+  if (kind === 'RATES') {
+    subject = 'HO approved rates: ' + t['Customer'] + ' | discuss with the customer';
+    body = '<p>Hi ' + esc_(t['Field Rep']) + ',</p><p>Head Costing has approved the rates below for <b>' + esc_(t['Customer']) + '</b>. ' +
+      'Please revisit the customer, discuss these rates and record the outcome within <b>' + tat_(settings, 'FR') + ' days</b> ' +
+      '(by ' + esc_(fmtDate_(t['Due By'], true)) + '). Rates cannot be changed on the outcome page.</p>' +
+      '<p>' + btn_(linkFor_(t, 'FR'), 'Record customer outcome &rarr;') + '</p>' + table +
+      (t['HO Remark'] ? '<p><b>Head Costing remark:</b> ' + esc_(t['HO Remark']) + '</p>' : '') +
+      (t['RM Remark'] ? '<p><b>RM remark:</b> ' + esc_(t['RM Remark']) + '</p>' : '');
+  } else {
+    var who = kind === 'RM_REJ' ? 'the Regional Manager' : 'Head Costing';
+    subject = 'Visit rejected by ' + (kind === 'RM_REJ' ? 'RM' : 'Head Costing') + ': ' + t['Customer'];
+    body = '<p>Hi ' + esc_(t['Field Rep']) + ',</p><p>The visit for <b>' + esc_(t['Customer']) + '</b> was rejected by ' + who + '.</p>' +
+      '<p><b>Reason:</b> ' + esc_(kind === 'RM_REJ' ? t['RM Remark'] : t['HO Remark']) + '</p>' + table;
+  }
+  var m = { to: to, subject: subject, htmlBody: mailShell_(esc_(t['Customer']), sub, body) };
+  if (settings.COSTING_HEAD_EMAIL) m.replyTo = settings.COSTING_HEAD_EMAIL;
+  sendMail_(ss, m, 'Field rep mail (' + kind + ', ' + id + ')');
+}
+
+/* ----------------------------------------------------------------- digest */
+
+/**
+ * Digest mails: one per Regional Manager (their zones, pending at RM), one to Head Costing
+ * (pending at Head Costing + stage counts + tracker link), one per field rep (rates to discuss).
+ * A person gets a mail only when something is waiting for them.
+ */
+function sendDigests_(ss) {
+  var rows = trackerRows_(ss), settings = settingsWithDefaults_(ss), out = { rm: 0, ho: 0, fr: 0 };
+  var zones = {};
+  ss.getSheetByName('Zone_Emails').getDataRange().getValues().slice(1).forEach(function (r) {
+    var z = String(r[0]).trim().toUpperCase(); if (z) zones[z] = { name: String(r[1]).trim(), email: String(r[2]).trim(), cc: String(r[3]).trim() };
+  });
+  var digestTable = function (list, role, extraHead, extraCell) {
+    return '<table style="border-collapse:collapse;width:100%"><tr>' + th_('Visit ID') + th_('Field rep') + th_('Employee ID') + th_('Customer') +
+      th_('Zone') + th_('Potential / month') + th_('Submitted') + th_('Days pending') + (extraHead || '') + th_('Action') + '</tr>' +
+      list.map(function (t) {
+        var late = isOverdue_(t);
+        return '<tr>' + td_(esc_(t['Visit ID'])) + td_(esc_(t['Field Rep'])) + td_(esc_(t['Employee ID'])) + td_('<b>' + esc_(t['Customer']) + '</b>') +
+          td_(esc_(t['Customer Zone'])) + td_(rs_(t['Potential / month'])) + td_(esc_(fmtDate_(t['Submitted At']))) +
+          td_(daysSince_(t['Stage Since']) + (late ? ' (overdue)' : ''), late ? 'color:#c62f3b;font-weight:bold' : '') + (extraCell ? extraCell(t) : '') +
+          td_('<a href="' + linkFor_(t, role) + '" style="color:#e9622b;font-weight:bold">Open &amp; ' + (role === 'FR' ? 'update' : 'approve') + '</a>') + '</tr>';
+      }).join('') + '</table>';
+  };
+
+  // Regional Managers: their own zones only
+  var byRm = {};
+  rows.filter(function (t) { return t['Stage'] === STAGE.RM; }).forEach(function (t) {
+    var z = zones[String(t['Customer Zone']).trim().toUpperCase()] || {}, email = z.email || String(t['RM Email'] || '');
+    if (!email) return;
+    (byRm[email] = byRm[email] || { name: z.name, cc: z.cc, list: [] }).list.push(t);
+  });
+  Object.keys(byRm).forEach(function (email) {
+    var g = byRm[email];
+    var body = '<p>Dear ' + esc_(g.name || 'Regional Manager') + ',</p><p><b>' + g.list.length + '</b> customer visit' + (g.list.length > 1 ? 's are' : ' is') +
+      ' waiting for your approval. Open each one, approve or reject every lane and enter the RM rate. You have ' + tat_(settings, 'RM') + ' days per visit.</p>' +
+      digestTable(g.list, 'RM');
+    var m = { to: email, subject: 'Pending your approval: ' + g.list.length + ' customer visit' + (g.list.length > 1 ? 's' : ''),
+      htmlBody: mailShell_('Approvals pending at RM', 'Regional Manager digest', body) };
+    if (g.cc) m.cc = g.cc;
+    if (sendMail_(ss, m, 'RM digest (' + g.list.length + ')')) out.rm++;
+  });
+
+  // Head Costing: everything pending at HO + counts of every stage
+  var ho = String(settings.COSTING_HEAD_EMAIL || '').trim();
+  var pendHo = rows.filter(function (t) { return t['Stage'] === STAGE.HO; });
+  if (ho && pendHo.length) {
+    var counts = {};
+    rows.forEach(function (t) { counts[t['Stage']] = (counts[t['Stage']] || 0) + 1; });
+    var countRow = '<table style="border-collapse:collapse;margin:6px 0 14px"><tr>' + Object.keys(STAGE).map(function (k) { return th_(STAGE[k]); }).join('') + '</tr><tr>' +
+      Object.keys(STAGE).map(function (k) { return td_('<b>' + (counts[STAGE[k]] || 0) + '</b>', 'text-align:center'); }).join('') + '</tr></table>';
+    var body2 = '<p>Dear Head Costing,</p><p><b>' + pendHo.length + '</b> visit' + (pendHo.length > 1 ? 's are' : ' is') +
+      ' approved by the Regional Manager and waiting for your approved rates.</p>' + countRow +
+      '<p>' + btn_(trackerUrl_(ss), 'Open the visit tracker &rarr;') + '</p>' +
+      digestTable(pendHo, 'HO', th_('RM decision'), function (t) { return td_(esc_(t['RM Status'])); });
+    var m2 = { to: ho, subject: 'Pending Head Costing approval: ' + pendHo.length + ' customer visit' + (pendHo.length > 1 ? 's' : ''),
+      htmlBody: mailShell_('Approvals pending at Head Costing', 'Head Costing digest', body2) };
+    if (settings.ALWAYS_CC) m2.cc = settings.ALWAYS_CC;
+    if (sendMail_(ss, m2, 'Head Costing digest (' + pendHo.length + ')')) out.ho++;
+  }
+
+  // Field reps: HO rates received, customer outcome pending
+  var byRep = {};
+  rows.filter(function (t) { return [STAGE.FR, STAGE.CUST].indexOf(t['Stage']) >= 0 && t['Rep Email']; }).forEach(function (t) {
+    (byRep[t['Rep Email']] = byRep[t['Rep Email']] || []).push(t);
+  });
+  Object.keys(byRep).forEach(function (email) {
+    var list = byRep[email];
+    var body3 = '<p>Hi ' + esc_(list[0]['Field Rep']) + ',</p><p>Head Costing has replied on these visits. Please discuss the approved rates with the customer and record the outcome (' +
+      tat_(settings, 'FR') + ' days per visit).</p>' + digestTable(list, 'FR', th_('Stage'), function (t) { return td_(esc_(t['Stage'])); });
+    var m3 = { to: email, subject: 'Action pending: ' + list.length + ' customer visit' + (list.length > 1 ? 's' : '') + ' with HO approved rates',
+      htmlBody: mailShell_('Customer outcome pending', 'Field representative digest', body3) };
+    if (settings.COSTING_HEAD_EMAIL) m3.replyTo = settings.COSTING_HEAD_EMAIL;
+    if (sendMail_(ss, m3, 'Field rep digest (' + list.length + ')')) out.fr++;
+  });
+  return out;
+}
+
+/** Runs from the time triggers set in Admin (DIGEST_TIMES). Not callable from a page. */
+function runDigest(e) {
+  if (!e || !e.triggerUid) return;
+  var ss = responseSheet_();
+  if (String(settingsWithDefaults_(ss).DIGEST_ON).toUpperCase() !== 'YES') return;
+  sendDigests_(ss);
+}
+
+/** Hours from DIGEST_TIMES, e.g. "14:00, 17:00" > [14, 17]. */
+function digestHours_(txt) {
+  var out = [];
+  String(txt || '').split(/[,;]/).forEach(function (p) {
+    var m = p.trim().match(/^(\d{1,2})(?::\d{2})?\s*(am|pm)?$/i); if (!m) return;
+    var h = Number(m[1]); if (m[2]) h = (h % 12) + (/pm/i.test(m[2]) ? 12 : 0);
+    if (h >= 0 && h < 24 && out.indexOf(h) < 0) out.push(h);
+  });
+  return out.sort(function (a, b) { return a - b; });
+}
+
+/** Recreates the digest triggers from Settings. Returns the hours in use. */
+function installDigestTriggers_(ss) {
+  ScriptApp.getProjectTriggers().forEach(function (tr) { if (tr.getHandlerFunction() === 'runDigest') ScriptApp.deleteTrigger(tr); });
+  var s = settingsWithDefaults_(ss);
+  if (String(s.DIGEST_ON).toUpperCase() !== 'YES') return [];
+  var hours = digestHours_(s.DIGEST_TIMES);
+  hours.forEach(function (h) {
+    ScriptApp.newTrigger('runDigest').timeBased().atHour(h).nearMinute(0).everyDays(1).inTimezone(Session.getScriptTimeZone()).create();
+  });
+  return hours;
+}
+
+/* ---------------------------------------------------------- tracker page */
+
+/** Every visit with its stage, for the Head Costing tracker page. */
+function trackerView_(key) {
+  var ss = responseSheet_();
+  if (!key || String(key) !== trackerKey_(ss)) return { ok: false, error: 'This tracker link is not valid.' };
+  return {
+    ok: true, stages: STAGE,
+    rows: trackerRows_(ss).map(function (t) {
+      return { id: t['Visit ID'], submitted: fmtDate_(t['Submitted At']), rep: t['Field Rep'], empId: t['Employee ID'], customer: t['Customer'],
+        zone: t['Customer Zone'], city: t['City'], potential: t['Potential / month'], lanes: t['Lanes'], stage: t['Stage'],
+        days: daysSince_(t['Stage Since']), due: fmtDate_(t['Due By'], true), overdue: isOverdue_(t),
+        rm: t['RM Status'], rmRemark: t['RM Remark'], ho: t['HO Status'], hoRates: t['HO Approved Rates'], hoRemark: t['HO Remark'],
+        outcome: t['Outcome'], outcomeRemark: t['Outcome Remark'], link: linkFor_(t, 'HO') };
+    })
+  };
 }
 
 /* ------------------------------------------------------------------ admin */
@@ -773,15 +959,17 @@ function adminLoad(pin, fresh) {
   });
   var s = settingsWithDefaults_(ss);
   var c = masterCounts_(masters);
-  c.source = masters.source; c.error = masters.error || ''; c.cardNote = masters.cardNote || '';
+  c.source = masters.source; c.error = masters.error || '';
   return {
     config: readConfig_(ss),
     zones: ze.getDataRange().getValues().slice(1).filter(function (r) { return String(r[0]).trim(); })
       .map(function (r) { return { zone: String(r[0]), name: String(r[1]), email: String(r[2]), cc: String(r[3]) }; }),
-    settings: { COSTING_HEAD_EMAIL: s.COSTING_HEAD_EMAIL || '', ALWAYS_CC: s.ALWAYS_CC || '', CC_FIELD_REP: s.CC_FIELD_REP || 'YES',
-      GR_MASTER_SHEET: s.GR_MASTER_SHEET || '', GR_MASTER_TAB: s.GR_MASTER_TAB || 'DASHBOARD_MASTER' },
+    settings: ADMIN_SETTINGS.reduce(function (o, k) { o[k] = s[k] == null ? '' : s[k]; return o; }, {}),
     masters: c,
-    sheetUrl: ss.getUrl()
+    sheetUrl: ss.getUrl(),
+    trackerUrl: trackerUrl_(ss),
+    digestHours: ScriptApp.getProjectTriggers().filter(function (tr) { return tr.getHandlerFunction() === 'runDigest'; }).length ? digestHours_(s.DIGEST_TIMES) : [],
+    timeZone: Session.getScriptTimeZone()
   };
 }
 
@@ -826,7 +1014,10 @@ function adminSaveConfig(pin, fields) {
   return readConfig_(ss);
 }
 
-/** Saves zone emails + mail settings + GR master link. */
+var ADMIN_SETTINGS = ['COSTING_HEAD_EMAIL', 'ALWAYS_CC', 'GR_MASTER_SHEET', 'GR_MASTER_TAB',
+  'DIGEST_ON', 'DIGEST_TIMES', 'TAT_RM_DAYS', 'TAT_HO_DAYS', 'TAT_FR_DAYS'];
+
+/** Saves zone emails, approval and digest settings, GR master link; re-creates the digest triggers. */
 function adminSaveMail(pin, zones, settings) {
   var ss = responseSheet_();
   checkPin_(ss, pin);
@@ -839,13 +1030,24 @@ function adminSaveMail(pin, zones, settings) {
   var st = ss.getSheetByName('Settings');
   var data = st.getDataRange().getValues();
   Object.keys(settings).forEach(function (k) {
-    if (['COSTING_HEAD_EMAIL', 'ALWAYS_CC', 'CC_FIELD_REP', 'GR_MASTER_SHEET', 'GR_MASTER_TAB'].indexOf(k) < 0) return;
+    if (ADMIN_SETTINGS.indexOf(k) < 0) return;
+    if (k === 'DIGEST_TIMES' && !digestHours_(settings[k]).length) throw new Error('Digest times look wrong. Example: 14:00, 17:00');
     for (var i = 1; i < data.length; i++) {
       if (String(data[i][0]).trim() === k) { st.getRange(i + 1, 2).setValue(settings[k]); return; }
     }
     st.appendRow([k, settings[k], '']);
   });
+  installDigestTriggers_(ss);
   return adminLoad(pin, true);
+}
+
+/** "Send now" in Admin: sends the digest mails right away. */
+function adminSendDigest(pin) {
+  var ss = responseSheet_();
+  checkPin_(ss, pin);
+  var r = sendDigests_(ss);
+  return 'Sent: ' + r.rm + ' RM digest' + (r.rm === 1 ? '' : 's') + ', ' + r.ho + ' Head Costing digest, ' + r.fr + ' field rep digest' + (r.fr === 1 ? '' : 's') +
+    (r.rm + r.ho + r.fr ? '' : ' (nothing is pending)');
 }
 
 /** Re-reads the GR master now (otherwise it refreshes every 10 minutes). */

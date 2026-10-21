@@ -124,16 +124,12 @@
   .opt span small { display: block; white-space: normal; margin-top: 1px; }
   .opt em { font-style: normal; flex: 0 0 76px; text-align: right; font-size: 13px; font-weight: 600; color: var(--navy-2); }
   .opt em.pc { flex: 0 0 112px; }
-  .opt em.na { color: #b0b7c3; font-weight: 500; font-size: 12px; }
   .opt.lh { position: sticky; top: 0; z-index: 2; background: var(--soft); font-size: 11px; font-weight: 700; letter-spacing: .04em; color: var(--muted); text-transform: uppercase; padding: 7px 12px; }
   .opt.lh span { padding-left: 28px; }
   .opt.lh em { color: var(--muted); font-size: 11px; font-weight: 700; }
   .opt.lh:hover { background: var(--soft); }
   .rowprice { display: block; width: 112px; }
   .opt { flex-wrap: wrap; }
-  .viarow { flex: 0 0 100%; padding: 0 0 8px 28px; margin-top: -4px; }
-  .opt.sub .viarow { padding-left: 28px; }
-  .opt select.via { display: block; width: auto; max-width: 100%; padding: 4px 8px; font-size: 12px; border-radius: 8px; border-color: #c9d1e3; color: var(--navy); font-weight: 600; }
   .opt .rowprice input { width: 100%; height: 34px; padding: 6px 8px 6px 24px; font-size: 14px; border-color: #9fd3b4; background: #fff; }
   .rowprice span { left: 9px; font-size: 13px; }
   @media (max-width: 560px) { .card { padding: 18px 14px; } }
@@ -300,28 +296,6 @@ function addDest(i, it) {
   if (hasDest(i, it)) return;
   flows[i].dests.push({ zone: it.zone, place: it.place || '', dp: it.dp || '' });
 }
-/** Card rate: delivery point picked = origin + delivery point, else origin + destination (same as cardKey_ in WebApp.gs). */
-function cardKey(o, dest, dp) { var u = function (v) { return String(v || '').trim().toUpperCase(); }; return u(dp) ? 'P|' + u(o) + '|' + u(dp) : 'D|' + u(o) + '|' + u(dest); }
-/** { via: rate } for a lane ('' = no via border), or null. */
-function cardMap(i, it) {
-  var o = flows[i].origin.place; if (!o || !it.place || !M.card) return null;
-  return M.card[cardKey(o, it.place, it.dp)] || null;
-}
-/** Picked border's rate, else the rate with no border, else the only border (same order as cardRateOf_ in WebApp.gs). */
-function cardPick(c, via) {
-  if (!c) return '';
-  var v = Object.keys(c);
-  if (via && via in c) return c[via];
-  if ('' in c) return c[''];
-  return v.length === 1 ? c[v[0]] : '';
-}
-function cardText(c, via, ticked) {
-  if (!c) return '';
-  var r = cardPick(c, via); if (r !== '' && (ticked || Object.keys(c).length === 1)) return '&#8377; ' + esc(r);
-  var all = Object.keys(c).map(function (k) { return c[k]; }), lo = Math.min.apply(null, all), hi = Math.max.apply(null, all);
-  return lo === hi ? '&#8377; ' + esc(lo) : '&#8377; ' + esc(lo) + '&ndash;' + esc(hi);
-}
-function setVia(i, k, v) { flows[i].dests[k].via = v; renderList(i); renderChips(i); save(); }
 function toggleIdx(i, k) {
   var it = (LIST[i] || [])[k]; if (!it) return;
   if (hasDest(i, it)) flows[i].dests = flows[i].dests.filter(function (d) { return !sameD(d, it); });
@@ -367,8 +341,8 @@ function listItems(i) {
 }
 function renderList(i) {
   var el = document.getElementById('list' + i); if (!el) return;
-  var items = LIST[i] = listItems(i), p = pick[i] || { zone: '', q: '', open: {} }, hasO = !!flows[i].origin.place;
-  var head = '<div class="opt lh"><span>Destination / delivery point</span><em>Card rate</em><em class="pc">Your price</em></div>';
+  var items = LIST[i] = listItems(i), p = pick[i] || { zone: '', q: '', open: {} };
+  var head = '<div class="opt lh"><span>Destination / delivery point</span><em class="pc">Your price</em></div>';
   el.innerHTML = items.length ? head + items.map(function (it, k) {
     var on = hasDest(i, it), n = it.place ? dps(it.zone, it.place).length : 0;
     var label = !it.place ? 'Whole ' + esc(it.zone) : it.dp ? (it.sub ? esc(it.dp) : esc(it.place) + ' &rsaquo; ' + esc(it.dp)) : esc(it.place);
@@ -376,14 +350,7 @@ function renderList(i) {
       : it.dp ? (it.sub ? 'delivery point' : esc(it.zone))
       : (n && p.zone && !p.q ? '<button type="button" class="more" onclick="toggleOpen(' + i + ',' + k + ')">' + n + ' delivery pt ' + (p.open && p.open[it.place] ? '&#9652;' : '&#9662;') + '</button>'
         : (p.zone ? (n ? n + ' delivery pt' : '') : esc(it.zone)));
-    var cm = cardMap(i, it), dk = on ? destIdx(i, it) : -1, via = on ? flows[i].dests[dk].via || '' : '';
-    var c = cardText(cm, via, on), card = '<em class="cr' + (c === '' ? ' na' : '') + '">' + (c === '' ? (it.place && hasO ? 'no card' : '&ndash;') : c) + '</em>';
-    var vias = cm ? Object.keys(cm).filter(function (v) { return v; }).sort() : [];
-    var viaRow = '';
-    if (on && vias.length && (vias.length > 1 || '' in cm)) {   // card rate changes with the border: pick it here
-      viaRow = '<div class="viarow"><select class="via" onchange="setVia(' + i + ',' + dk + ',this.value)"><option value="">' + ('' in cm ? 'No via border &middot; &#8377;' + esc(cm['']) : 'Via border?') + '</option>' +
-        vias.map(function (v) { return '<option value="' + esc(v) + '"' + (v === via ? ' selected' : '') + '>Via ' + esc(v) + ' &middot; &#8377;' + esc(cm[v]) + '</option>'; }).join('') + '</select></div>';
-    } else if (on && vias.length === 1) meta += '<small>via ' + esc(vias[0]) + '</small>';
+    var dk = on ? destIdx(i, it) : -1;
     var price = '<em class="pc">';
     if (on) {
       price += '<span class="pre rowprice"><span>&#8377;</span><input type="number" inputmode="decimal" min="0" step="any" placeholder="Price" data-pk="' + i + '-' + dk +
@@ -391,7 +358,7 @@ function renderList(i) {
     }
     price += '</em>';
     return '<div class="opt' + (on ? ' on' : '') + (it.place ? '' : ' zone') + (it.sub ? ' sub' : '') + '"><label><input type="checkbox"' + (on ? ' checked' : '') +
-      ' onchange="toggleIdx(' + i + ',' + k + ')"><span>' + label + (meta ? '<small>' + meta + '</small>' : '') + '</span></label>' + card + price + viaRow + '</div>';
+      ' onchange="toggleIdx(' + i + ',' + k + ')"><span>' + label + (meta ? '<small>' + meta + '</small>' : '') + '</span></label>' + price + '</div>';
   }).join('') : '<div class="opt"><span class="hint" style="margin:0">No match</span></div>';
 }
 /** Compact list of what is ticked (price is typed in the row above). */
@@ -400,7 +367,7 @@ function renderChips(i) {
   var ds = flows[i].dests;
   el.innerHTML = ds.length ? '<div class="cnt">' + ds.length + ' lane' + (ds.length > 1 ? 's' : '') + ' from ' + esc(originLabel(i)) + ' <button class="clear" onclick="clearDests(' + i + ')">Clear all</button></div>' +
     '<div class="chips">' + ds.map(function (d, k) {
-      return '<span class="chip">' + esc(placeName(d)) + (d.via ? ' <small>via ' + esc(d.via) + '</small>' : '') + (d.price ? ' <small>&#8377;' + esc(d.price) + '</small>' : '') +
+      return '<span class="chip">' + esc(placeName(d)) + (d.price ? ' <small>&#8377;' + esc(d.price) + '</small>' : '') +
         '<button title="Remove" onclick="removeChip(' + i + ',' + k + ')">&times;</button></span>';
     }).join('') + '</div>' : '';
 }
@@ -500,7 +467,7 @@ function submit() {
       document.getElementById('donePage').classList.remove('hidden');
       document.getElementById('toast').style.display = 'none';
       document.getElementById('doneText').innerHTML = 'Visit ID <b>' + esc(r.id) + '</b> saved to the sheet.<br>' +
-        (r.status.indexOf('SENT') === 0 ? 'Costing Head and Regional Manager have been emailed.' : 'Mail: ' + esc(r.status));
+        esc(r.status) + '<br>You get a mail with the Head Costing approved rates once both levels approve.';
       nb.disabled = false;
       try { localStorage.removeItem(DRAFT_KEY); } catch (e) {}
       window.scrollTo(0, 0);

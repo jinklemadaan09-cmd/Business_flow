@@ -94,6 +94,7 @@
 
   .done { text-align: center; padding: 36px 20px; }
   .done .ic { width: 64px; height: 64px; border-radius: 50%; background: #e6f4ec; color: var(--ok); display: grid; place-items: center; margin: 0 auto 12px; font-size: 32px; }
+  .copy { display: flex; gap: 8px; } .copy input { flex: 1; font-size: 12px; color: var(--muted); }
   .toast { pointer-events: none; position: fixed; left: 50%; bottom: 84px; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 10px 16px; border-radius: 10px; font-size: 13px; display: none; z-index: 20; max-width: 90%; }
   .hidden { display: none !important; }
 </style>
@@ -216,7 +217,7 @@ function setDirty(v) {
 }
 
 function render() {
-  document.getElementById('tabs').innerHTML = [['q', 'Questions'], ['m', 'Zone emails'], ['d', 'Master data']].map(function (t) {
+  document.getElementById('tabs').innerHTML = [['q', 'Questions'], ['m', 'Approvals & mails'], ['d', 'Master data']].map(function (t) {
     return '<button class="tab' + (tab === t[0] ? ' on' : '') + '" onclick="setTab(\'' + t[0] + '\')">' + t[1] + '</button>';
   }).join('');
   var v = document.getElementById('view');
@@ -314,21 +315,38 @@ function moveQ(id, dir) {
 
 // ---- zone emails ------------------------------------------------------
 function mailHtml() {
-  return '<section class="card"><div class="tag">MAIL</div><h2>Who gets the visit mail</h2>' +
-    '<p class="hint">Every visit goes to the Costing Head and to the Regional Manager of the customer zone.</p>' +
-    '<div class="grid">' +
-    sInput('COSTING_HEAD_EMAIL', 'Costing Head email (comma for more than one)', 1) +
-    sInput('ALWAYS_CC', 'Always CC (optional)', 1) +
-    '<label class="tog full"><input type="checkbox"' + (String(settings.CC_FIELD_REP).toUpperCase() === 'YES' ? ' checked' : '') +
-      ' onchange="settings.CC_FIELD_REP=this.checked?\'YES\':\'NO\';setDirty(true)"> Send a copy to the field representative</label></div></section>' +
+  var on = String(settings.DIGEST_ON).toUpperCase() === 'YES';
+  return '<section class="card"><div class="tag">APPROVAL FLOW</div><h2>Who approves</h2>' +
+    '<p class="hint">Level 1: the Regional Manager of the customer zone approves or rejects each lane and gives an RM rate. If the RM rejects every lane the visit stops there. ' +
+    'Level 2: Head Costing gives the HO approved rate. The rates then go into Web_Responses and the field rep gets a mail to discuss them with the customer.</p>' +
+    '<div class="grid">' + sInput('COSTING_HEAD_EMAIL', 'Head Costing email (comma for more than one)', 1) +
+    sInput('ALWAYS_CC', 'CC on the Head Costing digest (optional)', 1) +
+    sInput('TAT_RM_DAYS', 'Regional Manager TAT (days)') + sInput('TAT_HO_DAYS', 'Head Costing TAT (days)') +
+    sInput('TAT_FR_DAYS', 'Field rep outcome TAT (days)') + '</div>' +
+    '<p class="hint" style="margin:14px 0 4px">Head Costing tracker (all visits with filters). Share this link only with Head Costing.</p>' +
+    '<div class="copy"><input readonly value="' + esc(D.trackerUrl) + '" onclick="this.select()"><a class="btn sec" style="text-decoration:none" href="' + esc(D.trackerUrl) + '" target="_blank">Open</a></div></section>' +
+    '<section class="card"><div class="tag">DIGEST MAILS</div><h2>Daily digest</h2>' +
+    '<p class="hint">Approvers get one list per digest instead of one mail per visit. RM: their zones only. Head Costing: everything pending at Head Costing. ' +
+    'Field rep: visits with HO rates to discuss. Nobody gets a mail when nothing is pending. All mails go from the Google account that deployed the web app.</p>' +
+    '<div class="grid"><label class="tog full"><input type="checkbox"' + (on ? ' checked' : '') +
+      ' onchange="settings.DIGEST_ON=this.checked?\'YES\':\'NO\';setDirty(true)"> Send digest mails</label>' +
+    sInput('DIGEST_TIMES', 'Digest times (24 hour, comma separated, e.g. 14:00, 17:00)', 1) + '</div>' +
+    '<p class="hint" style="margin:10px 0">' + (D.digestHours.length ? 'Scheduled daily at <b>' + D.digestHours.map(function (h) { return (h % 12 || 12) + ':00 ' + (h < 12 ? 'am' : 'pm'); }).join(' and ') +
+      '</b> (' + esc(D.timeZone) + '). Google sends within that hour.' : '<b style="color:var(--crimson)">Not scheduled yet.</b> Press Save to schedule.') + '</p>' +
+    '<button class="btn pri" onclick="sendNow()">Send now</button></section>' +
     '<section class="card"><div class="tag">ZONES</div><h2>Regional Manager per zone</h2>' +
-    '<p class="hint">Zones are the origin zones of the GR data master. A new zone there appears here automatically.</p>' +
+    '<p class="hint">The customer zone decides the RM. Zones are the origin zones of the GR data master; a new zone there appears here automatically.</p>' +
     '<table class="z"><thead><tr><th>Zone</th><th>RM name</th><th>RM email</th><th>Extra CC</th></tr></thead><tbody>' +
     zones.map(function (z, i) {
       return '<tr><td>' + esc(z.zone) + '</td>' + ['name', 'email', 'cc'].map(function (k) {
         return '<td><input value="' + esc(z[k]) + '" placeholder="' + { name: 'Name', email: 'name@company.com', cc: 'optional' }[k] +
           '" oninput="zones[' + i + '].' + k + '=this.value;setDirty(true)"></td>'; }).join('') + '</tr>';
     }).join('') + '</tbody></table></section>';
+}
+function sendNow() {
+  if (dirty) return toast('Save your changes first');
+  if (!confirm('Send the digest mails now?')) return;
+  run('adminSendDigest', [pin], function (msg) { toast(msg); });
 }
 function sInput(k, label, full) {
   return '<div' + (full ? ' class="full"' : '') + '><label class="f">' + label + '</label><input value="' + esc(settings[k]) +
@@ -344,8 +362,7 @@ function masterHtml() {
     '<p class="hint" style="margin:0">Source: <b>' + esc(m.source) + '</b></p>' +
     '<div class="stat"><div><b>' + m.originZones + '</b><span>Origin zones</span></div><div><b>' + m.origins + '</b><span>Origins</span></div>' +
     '<div><b>' + m.destZones + '</b><span>Destination zones</span></div><div><b>' + m.dests + '</b><span>Destinations</span></div>' +
-    '<div><b>' + m.deliveryPoints + '</b><span>Delivery points</span></div><div><b>' + (m.cardRates || 0) + '</b><span>Card rate lanes</span></div></div>' +
-    (m.cardNote ? '<p class="hint" style="color:var(--crimson)">' + esc(m.cardNote) + '</p>' : '') +
+    '<div><b>' + m.deliveryPoints + '</b><span>Delivery points</span></div></div>' +
     '<div class="grid">' + sInput('GR_MASTER_SHEET', 'GR PNL data master spreadsheet link', 1) +
     sInput('GR_MASTER_TAB', 'Tab name') + '</div>' +
     '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px"><button class="btn pri" onclick="saveMaster()">Save & reload master</button>' +
