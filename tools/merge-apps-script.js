@@ -16,3 +16,21 @@ fs.readdirSync(src).filter(f => /\.(gs|html)$/.test(f)).forEach(f => {
   fs.writeFileSync(path.join(live, target), fs.readFileSync(path.join(src, f)));
   console.log(f + ' > ' + target + (match ? '' : ' (new file)'));
 });
+
+// Report: every file in the project and any function defined in more than one file
+// (Apps Script uses the last one loaded, so an old copy can silently override new code).
+const report = [], seen = {};
+fs.readdirSync(live).filter(f => /\.(js|gs)$/.test(f)).forEach(f => {
+  const code = fs.readFileSync(path.join(live, f), 'utf8');
+  report.push(f + '  (' + code.length + ' chars)');
+  (code.match(/^function\s+([A-Za-z0-9_$]+)\s*\(/gm) || []).forEach(m => {
+    const n = m.replace(/^function\s+/, '').replace(/\s*\($/, '');
+    (seen[n] = seen[n] || []).push(f);
+  });
+});
+fs.readdirSync(live).filter(f => /\.html$/.test(f)).forEach(f => report.push(f));
+const dup = Object.keys(seen).filter(n => seen[n].length > 1).map(n => n + ': ' + seen[n].join(', '));
+report.push('', 'Functions defined in more than one file: ' + (dup.length ? '' : 'none'));
+dup.forEach(d => report.push('  ' + d));
+fs.writeFileSync(process.env.REPORT || '/dev/null', report.join('\n') + '\n');
+console.log(report.join('\n'));
