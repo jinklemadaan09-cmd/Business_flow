@@ -217,7 +217,7 @@ function fieldHtml(f) {
   var k = f.id, v = data[k] == null ? '' : data[k], t = f.type;
   var full = t === 'textarea' || t === 'single' || t === 'multi' || (f.options && f.options.length > 4);
   var h = '<div class="fld' + (full ? ' full' : '') + '" id="w_' + k + '"><label class="f">' + esc(f.label) + (f.required ? ' <span class="req">*</span>' : '') + '</label>';
-  if (t === 'zone') h += '<select data-k="' + k + '">' + opts(ORIGIN_ZONES, v, 'Select...') + '</select>';
+  if (t === 'zone') h += '<select data-k="' + k + '">' + opts(BOOT.zones && BOOT.zones.length ? BOOT.zones : ORIGIN_ZONES, v, 'Select...') + '</select>';
   else if (t === 'dropdown') h += '<select data-k="' + k + '">' + opts(f.options, v, 'Select...') + '</select>';
   else if (t === 'textarea') h += '<textarea data-k="' + k + '">' + esc(v) + '</textarea>';
   else if (t === 'single' || t === 'multi') {
@@ -276,7 +276,7 @@ var pick = {};   // per block picker state: { zone, q }
 function addFlow(silent) {
   var z = '';
   var zf = BOOT.fields.filter(function (f) { return f.type === 'zone'; })[0];
-  if (zf && data[zf.id]) z = data[zf.id];
+  if (zf && data[zf.id] && M.origins[data[zf.id]]) z = data[zf.id];
   flows.push({ origin: { zone: z, place: '' }, dests: [], mt: '', freq: '', note: '' });
   renderFlows(); save();
   if (!silent) { var c = document.querySelectorAll('.flow'); c[c.length - 1].scrollIntoView({ behavior: 'smooth', block: 'start' }); }

@@ -23,7 +23,7 @@
  *   Mail_Log, Zone_Emails, Settings
  */
 
-var APP_VERSION = 'v3.5 (21 Oct 2026)';   // shown on the form and admin page, to check the deployed version
+var APP_VERSION = 'v3.6 (21 Oct 2026)';   // shown on the form and admin page, to check the deployed version
 var CONFIG_SHEET = 'Form_Config';
 var CONFIG_HEADERS = ['Field_ID', 'Step', 'Order', 'Label', 'Type', 'Required', 'Options', 'Help', 'Active', 'Locked'];
 var STEP_NAMES = ['Customer Visit', 'Monthly Business Potential', 'Material Understanding',
@@ -135,7 +135,7 @@ function doGet(e) {
   if (file === 'Index') {
     var ss = responseSheet_();
     var m = getMasters_(ss);
-    boot = { steps: STEP_NAMES, fields: activeFields_(readConfig_(ss)), masters: { origins: m.origins, dests: m.dests }, version: APP_VERSION };
+    boot = { steps: STEP_NAMES, fields: activeFields_(readConfig_(ss)), masters: { origins: m.origins, dests: m.dests }, zones: customerZones_(ss), version: APP_VERSION };
   } else if (file === 'Approve') {
     boot = approvalView_(e.parameter.t);
   } else if (file === 'Tracker') {
@@ -1063,10 +1063,6 @@ function adminLoad(pin, fresh) {
   checkPin_(ss, pin);
   var masters = getMasters_(ss, fresh);
   var ze = ss.getSheetByName('Zone_Emails');
-  var have = ze.getDataRange().getValues().slice(1).map(function (r) { return String(r[0]).trim().toUpperCase(); });
-  Object.keys(masters.origins).sort().forEach(function (z) {
-    if (have.indexOf(z.toUpperCase()) < 0) ze.appendRow([z, '', '', '']);
-  });
   var triggers = [];
   try {
     triggers = ScriptApp.getProjectTriggers();
@@ -1134,7 +1130,7 @@ var ADMIN_SETTINGS = ['COSTING_HEAD_EMAIL', 'ALWAYS_CC', 'GR_MASTER_SHEET', 'GR_
   'DIGEST_ON', 'INSTANT_MAIL', 'DIGEST_TIMES', 'TAT_RM_DAYS', 'TAT_HO_DAYS', 'TAT_FR_DAYS'];
 
 /** Saves zone emails, approval and digest settings, GR master link; re-creates the digest triggers. */
-function adminSaveMail(pin, zones, settings, fresh) {
+function adminSaveMail(pin, zones, settings, fresh, removed) {
   var ss = responseSheet_();
   checkPin_(ss, pin);
   zones = Array.isArray(zones) ? zones : [];
@@ -1151,9 +1147,14 @@ function adminSaveMail(pin, zones, settings, fresh) {
   if (String(settings.DIGEST_ON).toUpperCase() === 'YES' && !digestHours_(settings.DIGEST_TIMES).length)
     throw new Error('Digest times look wrong. Example: 14:00, 17:00');
 
+  var ze = ss.getSheetByName('Zone_Emails');
+  // Zones removed on the page
+  (Array.isArray(removed) ? removed : []).forEach(function (zn) {
+    var d = ze.getDataRange().getValues();
+    for (var i = d.length - 1; i >= 1; i--) if (String(d[i][0]).trim().toUpperCase() === String(zn).trim().toUpperCase()) ze.deleteRow(i + 1);
+  });
   // Only the zones changed on the page are written, by zone name, so emails typed straight
   // into the Zone_Emails tab are never wiped by an Admin page that was opened earlier.
-  var ze = ss.getSheetByName('Zone_Emails');
   var data = ze.getDataRange().getValues();
   zones.filter(function (z) { return String(z.zone).trim(); }).forEach(function (z) {
     var row = [String(z.zone).trim(), String(z.name || '').trim(), String(z.email || '').trim(), String(z.cc || '').trim()];
@@ -1179,6 +1180,12 @@ function adminSaveMail(pin, zones, settings, fresh) {
   var out = adminLoad(pin, !!fresh);
   out.warning = warning;
   return out;
+}
+
+/** Customer zones for the form = the zones listed in Zone_Emails (managed in Admin). */
+function customerZones_(ss) {
+  return ss.getSheetByName('Zone_Emails').getDataRange().getValues().slice(1)
+    .map(function (r) { return String(r[0]).trim(); }).filter(String).sort();
 }
 
 /** Tabs from earlier versions (old Google Form and old approval flow). The web form does not write to them. */

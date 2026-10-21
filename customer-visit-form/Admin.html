@@ -209,6 +209,7 @@ function load(d) {
   fields = d.config.map(function (f) { return JSON.parse(JSON.stringify(f)); });
   zones = d.zones.map(function (z) { return JSON.parse(JSON.stringify(z)); });
   settings = JSON.parse(JSON.stringify(d.settings));
+  removedZones = [];
   setDirty(false); render();
 }
 function setDirty(v) {
@@ -338,13 +339,15 @@ function mailHtml() {
       '</b> (' + esc(D.timeZone) + '). Google sends within that hour.' : '<b style="color:var(--crimson)">Not scheduled yet.</b> Press Save to schedule.') + '</p>' +
     '<button class="btn pri" onclick="sendNow()">Send now</button></section>' +
     '<section class="card"><div class="tag">ZONES</div><h2>Regional Manager per zone</h2>' +
-    '<p class="hint">The customer zone decides the RM. Zones are the origin zones of the GR data master; a new zone there appears here automatically.</p>' +
-    '<table class="z"><thead><tr><th>Zone</th><th>RM name</th><th>RM email</th><th>Extra CC</th></tr></thead><tbody>' +
+    '<p class="hint">These zones are the <b>Customer zone</b> list on the form, and the customer zone decides the RM. Remove anything that is not a zone, and add new zones here.</p>' +
+    '<table class="z"><thead><tr><th>Zone</th><th>RM name</th><th>RM email</th><th>Extra CC</th><th></th></tr></thead><tbody>' +
     zones.map(function (z, i) {
-      return '<tr><td>' + esc(z.zone) + '</td>' + ['name', 'email', 'cc'].map(function (k) {
+      return '<tr><td>' + (z.isNew ? '<input value="' + esc(z.zone) + '" placeholder="Zone name" oninput="zones[' + i + '].zone=this.value.toUpperCase();setDirty(true)">' : esc(z.zone)) + '</td>' + ['name', 'email', 'cc'].map(function (k) {
         return '<td><input value="' + esc(z[k]) + '" placeholder="' + { name: 'Name', email: 'name@company.com', cc: 'optional' }[k] +
-          '" oninput="zones[' + i + '].' + k + '=this.value;setDirty(true)"></td>'; }).join('') + '</tr>';
-    }).join('') + '</tbody></table></section>';
+          '" oninput="zones[' + i + '].' + k + '=this.value;setDirty(true)"></td>'; }).join('') +
+        '<td><button class="btn sec" style="padding:4px 10px" title="Remove zone" onclick="removeZone(' + i + ')">&times;</button></td></tr>';
+    }).join('') + '</tbody></table>' +
+    '<button class="btn sec" style="margin-top:10px" onclick="addZone()">+ Add zone</button></section>';
 }
 function sendNow() {
   if (dirty) return toast('Save your changes first');
@@ -385,9 +388,21 @@ function removeOldTabs() {
 }
 /** Only the zones edited on this page, so the save never overwrites emails typed in the sheet meanwhile. */
 function changedZones() {
-  return zones.filter(function (z, i) { var o = D.zones[i] || {}; return z.name !== o.name || z.email !== o.email || z.cc !== o.cc; });
+  return zones.filter(function (z) {
+    if (z.isNew) return String(z.zone).trim();
+    var o = D.zones.filter(function (x) { return x.zone === z.zone; })[0] || {};
+    return z.name !== o.name || z.email !== o.email || z.cc !== o.cc;
+  });
 }
-function saveMaster() { run('adminSaveMail', [pin, changedZones(), settings, true], function (d) { load(d); toast('Saved. Master reloaded'); }); }
+var removedZones = [];
+function removeZone(i) {
+  var z = zones[i];
+  if (!z.isNew && !confirm('Remove zone ' + z.zone + '? It will no longer appear in the Customer zone list.')) return;
+  if (!z.isNew) removedZones.push(z.zone);
+  zones.splice(i, 1); setDirty(true); render();
+}
+function addZone() { zones.push({ zone: '', name: '', email: '', cc: '', isNew: true }); setDirty(true); render(); }
+function saveMaster() { run('adminSaveMail', [pin, changedZones(), settings, true, removedZones], function (d) { load(d); toast('Saved. Master reloaded'); }); }
 
 // ---- save -------------------------------------------------------------
 function saveCurrent() {
@@ -402,7 +417,7 @@ function saveCurrent() {
       run('adminLoad', [pin], function (d) { load(d); toast('Saved. Form and sheet columns updated'); });
     });
   } else {
-    run('adminSaveMail', [pin, changedZones(), settings], function (d) { load(d); toast(d.warning || 'Saved. RM emails and settings are in the sheet'); });
+    run('adminSaveMail', [pin, changedZones(), settings, false, removedZones], function (d) { load(d); toast(d.warning || 'Saved. RM emails and settings are in the sheet'); });
   }
 }
 window.addEventListener('beforeunload', function (e) { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
