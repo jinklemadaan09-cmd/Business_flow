@@ -383,7 +383,11 @@ function removeOldTabs() {
   if (!confirm('Delete these tabs and their data from the sheet?\n\n' + D.oldTabs.join('\n') + '\n\nThis cannot be undone.')) return;
   run('adminRemoveOldTabs', [pin], function (d) { load(d); toast(d.removed.length ? 'Removed: ' + d.removed.join(', ') : 'Nothing to remove'); });
 }
-function saveMaster() { run('adminSaveMail', [pin, zones, settings, true], function (d) { load(d); toast('Saved. Master reloaded'); }); }
+/** Only the zones edited on this page, so the save never overwrites emails typed in the sheet meanwhile. */
+function changedZones() {
+  return zones.filter(function (z, i) { var o = D.zones[i] || {}; return z.name !== o.name || z.email !== o.email || z.cc !== o.cc; });
+}
+function saveMaster() { run('adminSaveMail', [pin, changedZones(), settings, true], function (d) { load(d); toast('Saved. Master reloaded'); }); }
 
 // ---- save -------------------------------------------------------------
 function saveCurrent() {
@@ -398,7 +402,7 @@ function saveCurrent() {
       run('adminLoad', [pin], function (d) { load(d); toast('Saved. Form and sheet columns updated'); });
     });
   } else {
-    run('adminSaveMail', [pin, zones, settings], function (d) { load(d); toast(d.warning || 'Saved. RM emails and settings are in the sheet'); });
+    run('adminSaveMail', [pin, changedZones(), settings], function (d) { load(d); toast(d.warning || 'Saved. RM emails and settings are in the sheet'); });
   }
 }
 window.addEventListener('beforeunload', function (e) { if (dirty) { e.preventDefault(); e.returnValue = ''; } });

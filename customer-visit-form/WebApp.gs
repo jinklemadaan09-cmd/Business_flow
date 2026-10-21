@@ -23,7 +23,7 @@
  *   Mail_Log, Zone_Emails, Settings
  */
 
-var APP_VERSION = 'v3.4 (21 Oct 2026)';   // shown on the form and admin page, to check the deployed version
+var APP_VERSION = 'v3.5 (21 Oct 2026)';   // shown on the form and admin page, to check the deployed version
 var CONFIG_SHEET = 'Form_Config';
 var CONFIG_HEADERS = ['Field_ID', 'Step', 'Order', 'Label', 'Type', 'Required', 'Options', 'Help', 'Active', 'Locked'];
 var STEP_NAMES = ['Customer Visit', 'Monthly Business Potential', 'Material Understanding',
@@ -454,7 +454,7 @@ function submitVisit(p) {
       'RM Email': rm.email, 'RM Status': rm.email ? 'PENDING' : 'NO RM EMAIL', 'HO Status': 'PENDING',
       'RM Token': tok(), 'HO Token': tok(), 'FR Token': tok() });
     writeResponseStatus_(ss, id, { 'Stage': stage });
-    mailLog_(ss).appendRow([now, a.customer, a.zone, '', 'NEW VISIT ' + id + ' > ' + stage]);
+    mailLog_(ss).appendRow([now, a.customer, a.zone, '', 'NEW VISIT ' + id + ' > ' + stage + (rm.email ? ' (RM ' + rm.email + ')' : ' (no RM email found for zone "' + (a.zone || '') + '" in Zone_Emails)')]);
     var instant = isInstant_(settings);
     if (instant) mailApprover_(ss, trackerRows_(ss).filter(function (x) { return String(x['Visit ID']) === id; })[0], rm.email ? 'RM' : 'HO');
     return { id: id, status: stage + '. ' + (rm.email ? 'The Regional Manager' : 'Head Costing') + (instant ? ' has been mailed now.' : ' gets it in the next digest mail.') };
@@ -1151,11 +1151,17 @@ function adminSaveMail(pin, zones, settings, fresh) {
   if (String(settings.DIGEST_ON).toUpperCase() === 'YES' && !digestHours_(settings.DIGEST_TIMES).length)
     throw new Error('Digest times look wrong. Example: 14:00, 17:00');
 
+  // Only the zones changed on the page are written, by zone name, so emails typed straight
+  // into the Zone_Emails tab are never wiped by an Admin page that was opened earlier.
   var ze = ss.getSheetByName('Zone_Emails');
-  var rows = zones.filter(function (z) { return String(z.zone).trim(); })
-    .map(function (z) { return [String(z.zone).trim(), String(z.name || '').trim(), String(z.email || '').trim(), String(z.cc || '').trim()]; });
-  ze.getRange(2, 1, Math.max(ze.getLastRow() - 1, 1), 4).clearContent();
-  if (rows.length) ze.getRange(2, 1, rows.length, 4).setNumberFormat('@').setValues(rows);
+  var data = ze.getDataRange().getValues();
+  zones.filter(function (z) { return String(z.zone).trim(); }).forEach(function (z) {
+    var row = [String(z.zone).trim(), String(z.name || '').trim(), String(z.email || '').trim(), String(z.cc || '').trim()];
+    for (var i = 1; i < data.length; i++) {
+      if (String(data[i][0]).trim().toUpperCase() === row[0].toUpperCase()) { ze.getRange(i + 1, 1, 1, 4).setNumberFormat('@').setValues([row]); return; }
+    }
+    ze.appendRow(row);
+  });
 
   var st = ss.getSheetByName('Settings');
   var data = st.getDataRange().getValues();
