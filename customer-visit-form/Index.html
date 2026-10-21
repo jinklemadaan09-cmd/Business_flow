@@ -88,6 +88,23 @@
   .toast { position: fixed; left: 50%; bottom: 84px; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 10px 16px; border-radius: 10px; font-size: 13px; display: none; z-index: 20; max-width: 90%; }
   .hidden { display: none !important; }
 </style>
+<style>
+  .flow { border: 1.5px solid var(--line); border-radius: 12px; padding: 14px; margin-top: 12px; background: #fbfcfe; }
+  .flow.err { border-color: var(--crimson); }
+  .route { font-size: 12px; color: var(--navy); background: var(--soft); border-radius: 8px; padding: 7px 10px; margin-bottom: 12px; font-weight: 600; word-break: break-word; }
+  .stops { position: relative; margin-left: 6px; }
+  .stop { position: relative; padding: 0 0 14px 26px; }
+  .stop::before { content: ''; position: absolute; left: 6px; top: 22px; bottom: -4px; width: 2px; background: var(--line); }
+  .stop:last-child::before { display: none; }
+  .dot { position: absolute; left: 0; top: 8px; width: 14px; height: 14px; border-radius: 50%; background: #fff; border: 3px solid var(--navy-2); }
+  .stop.first .dot { background: var(--navy); border-color: var(--navy); }
+  .stop.last .dot { border-color: var(--crimson); background: var(--crimson); }
+  .stop-h { display: flex; justify-content: space-between; align-items: center; font-size: 12px; font-weight: 700; letter-spacing: .06em; color: var(--muted); margin-bottom: 6px; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  @media (max-width: 560px) { .two { grid-template-columns: 1fr; } }
+  .addstop { border: 0; background: none; color: var(--navy-2); font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; padding: 4px 0 4px 26px; }
+  .empty { color: var(--muted); padding: 30px 0; text-align: center; }
+</style>
 </head>
 <body>
 <header>
@@ -119,97 +136,65 @@
 <div class="toast" id="toast"></div>
 
 <script>
-var MASTERS = <?!= masters ?>;
-var ZONES = Object.keys(MASTERS.originsByZone).sort();
-var ALL_CITIES = [];
-Object.keys(MASTERS.destByRegion).sort().forEach(function (r) {
-  MASTERS.destByRegion[r].forEach(function (c) { ALL_CITIES.push({ city: c, region: r }); });
-});
+var BOOT = <?!= boot ?>;
+var M = BOOT.masters;
+var ORIGIN_ZONES = Object.keys(M.origins).sort();
+var DEST_ZONES = Object.keys(M.dests).sort();
+var SHORT = ['Visit', 'Business', 'Material', 'Flows', 'Rate'];
 
-// ---- page definitions -------------------------------------------------
-var STEPS = [
-  { tag: 'STEP 01', title: 'Customer Visit', short: 'Visit', hint: 'Who you met and what they need.', fields: [
-    ['repName', 'Your name', 'text', 1], ['repEmail', 'Your email', 'email', 1],
-    ['visitDate', 'Visit date', 'date', 1], ['customer', 'Customer / company name', 'text', 1],
-    ['zone', 'Customer zone', 'select', 1, ZONES, 'Decides which Regional Manager gets the mail'],
-    ['city', 'Customer city / location', 'text', 1],
-    ['contact', 'Contact person & designation', 'text', 1], ['phone', 'Contact mobile', 'tel', 1],
-    ['custEmail', 'Customer email', 'email'], ['decision', 'Decision makers (name / role)', 'text'],
-    ['business', 'Business model / industry', 'text', 0, null, null, 1],
-    ['currentTpt', 'Current transport set-up', 'textarea', 0, null, 'Current transporter, mode, issues'],
-    ['pain', 'Pain points', 'textarea'],
-    ['expect', 'Service expectations', 'textarea', 0, null, 'TAT, pickup, POD, tracking etc.']
-  ]},
-  { tag: 'STEP 02', title: 'Monthly Business Potential', short: 'Business', hint: 'Is this commercially viable?', fields: [
-    ['mValue', 'Current monthly freight spend', 'money', 1], ['mVolume', 'Current monthly volume (MT)', 'number', 1],
-    ['mShip', 'Shipments / dockets per month', 'number'],
-    ['freq', 'Dispatch frequency', 'pills', 0, ['Daily', '2-3 times a week', 'Weekly', 'Fortnightly', 'Monthly'], null, 1],
-    ['season', 'Seasonality (peak / lean months)', 'text', 0, null, null, 1],
-    ['potValue', 'Potential monthly business with Sugam', 'money', 1], ['potVolume', 'Potential monthly volume (MT)', 'number']
-  ]},
-  { tag: 'STEP 03', title: 'Material Understanding', short: 'Material', hint: 'Plan safe, suitable, profitable transport.', fields: [
-    ['commodity', 'Commodity / material description', 'text', 1, null, null, 1],
-    ['matType', 'Material category', 'multi', 0, ['FMCG', 'Textiles / Garments', 'Pharma', 'Electronics', 'Auto parts', 'Machinery / Spares', 'Chemicals', 'Hardware / Building material', 'Paper / Printing', 'Plastic / Polymers', 'Food grains / Agro', 'Other'], null, 1],
-    ['load', 'Load type', 'pills', 1, ['Part load (LTL)', 'Full truck load (FTL)', 'Both'], null, 1],
-    ['pkgWt', 'Avg weight per package (kg)', 'number'], ['dims', 'Package dimensions (L x W x H)', 'text'],
-    ['packing', 'Packing type', 'multi', 0, ['Carton', 'Bags / Bora', 'Bundles', 'Drums', 'Wooden crate', 'Pallet', 'Loose'], null, 1],
-    ['handling', 'Special handling needs', 'textarea'],
-    ['risk', 'Special risks / restrictions', 'textarea', 0, null, 'Hazardous, fragile, high value, permits']
-  ]},
-  { tag: 'STEP 04', title: 'Origin & Destination Mapping', short: 'Lanes', hint: 'Add one card per origin branch. Each origin can go to many destinations.', lanes: true, fields: [
-    ['coverage', 'Branch coverage & feasibility', 'pills', 0, ['All lanes covered', 'Partly covered', 'Not covered / new arrangement'], null, 1]
-  ]},
-  { tag: 'STEP 05', title: 'Indicative Rate Discussion', short: 'Rate', hint: 'Indicative only. Final quotation goes after HO costing & approval.', fields: [
-    ['rateBasis', 'Rate basis', 'pills', 0, ['Per kg', 'Per package', 'Per vehicle (FTL)'], null, 1],
-    ['curRate', 'Customer current rate', 'money'], ['expRate', 'Rate expected by customer', 'money', 1],
-    ['indRate', 'Indicative rate discussed by us', 'money'],
-    ['charges', 'Other charges discussed', 'multi', 0, ['Fuel surcharge', 'FOV / Insurance', 'FOD', 'Docket charge', 'ODA', 'Handling', 'Door delivery'], null, 1],
-    ['credit', 'Credit period required', 'pills', 1, ['Advance / To pay', '15 days', '30 days', '45 days', '60 days', '90 days'], null, 1],
-    ['followup', 'Next follow-up date', 'date'],
-    ['remarks', 'Remarks / next steps', 'textarea', 0, null, null, 1]
-  ]},
-  { tag: 'REVIEW', title: 'Check & submit', short: 'Submit', review: true }
-];
+var STEPS = BOOT.steps.map(function (name, i) {
+  return { tag: 'STEP 0' + (i + 1), title: name, short: SHORT[i] || ('Step ' + (i + 1)),
+    fields: BOOT.fields.filter(function (f) { return f.step === i + 1; }) };
+}).concat([{ tag: 'REVIEW', title: 'Check & submit', short: 'Submit', review: true, fields: [] }]);
 
-var data = {}, lanes = [], cur = 0, maxSeen = 0;
+var DRAFT_KEY = 'sugamVisitDraft2';
+var data = {}, flows = [], cur = 0, maxSeen = 0;
+var FREQS = ['Daily', '2-3 times a week', 'Weekly', 'Fortnightly', 'Monthly'];
 
-function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+function opts(list, v, blank) {
+  return (blank != null ? '<option value="">' + esc(blank) + '</option>' : '') +
+    list.map(function (o) { return '<option' + (o === v ? ' selected' : '') + '>' + esc(o) + '</option>'; }).join('');
+}
 
-// ---- render -----------------------------------------------------------
+// ---- fields -------------------------------------------------------------
 function fieldHtml(f) {
-  var k = f[0], label = f[1], type = f[2], req = f[3], opts = f[4], hint = f[5], full = f[6] || type === 'textarea';
-  var v = data[k] == null ? '' : data[k];
-  var h = '<div class="fld' + (full ? ' full' : '') + '" id="w_' + k + '"><label class="f">' + esc(label) + (req ? ' <span class="req">*</span>' : '') + '</label>';
-  if (type === 'select') {
-    h += '<select data-k="' + k + '"><option value="">Select...</option>' + opts.map(function (o) {
-      return '<option' + (o === v ? ' selected' : '') + '>' + esc(o) + '</option>'; }).join('') + '</select>';
-  } else if (type === 'textarea') {
-    h += '<textarea data-k="' + k + '">' + esc(v) + '</textarea>';
-  } else if (type === 'pills' || type === 'multi') {
-    var sel = type === 'multi' ? (v || []) : [v];
-    h += '<div class="pills" data-k="' + k + '" data-multi="' + (type === 'multi' ? 1 : 0) + '">' + opts.map(function (o) {
+  if (f.type === 'flows') {
+    return '<div class="full" id="w_' + f.id + '"><label class="f">' + esc(f.label) + (f.required ? ' <span class="req">*</span>' : '') + '</label>' +
+      (f.help ? '<div class="hint" style="margin:0 0 4px">' + esc(f.help) + '</div>' : '') +
+      '<div id="flows"></div><button type="button" class="linkbtn" onclick="addFlow()">+ Add another flow</button></div>';
+  }
+  var k = f.id, v = data[k] == null ? '' : data[k], t = f.type;
+  var full = t === 'textarea' || t === 'single' || t === 'multi' || (f.options && f.options.length > 4);
+  var h = '<div class="fld' + (full ? ' full' : '') + '" id="w_' + k + '"><label class="f">' + esc(f.label) + (f.required ? ' <span class="req">*</span>' : '') + '</label>';
+  if (t === 'zone') h += '<select data-k="' + k + '">' + opts(ORIGIN_ZONES, v, 'Select...') + '</select>';
+  else if (t === 'dropdown') h += '<select data-k="' + k + '">' + opts(f.options, v, 'Select...') + '</select>';
+  else if (t === 'textarea') h += '<textarea data-k="' + k + '">' + esc(v) + '</textarea>';
+  else if (t === 'single' || t === 'multi') {
+    var sel = t === 'multi' ? (Array.isArray(v) ? v : []) : [v];
+    h += '<div class="pills" data-k="' + k + '" data-multi="' + (t === 'multi' ? 1 : 0) + '">' + f.options.map(function (o) {
       return '<button type="button" class="pill' + (sel.indexOf(o) >= 0 ? ' on' : '') + '" data-v="' + esc(o) + '">' + esc(o) + '</button>'; }).join('') + '</div>';
-  } else if (type === 'money') {
+  } else if (t === 'money') {
     h += '<div class="pre"><span>&#8377;</span><input data-k="' + k + '" type="number" inputmode="decimal" min="0" step="any" value="' + esc(v) + '"></div>';
   } else {
-    h += '<input data-k="' + k + '" type="' + type + '"' + (type === 'number' ? ' inputmode="decimal" min="0" step="any"' : '') + ' value="' + esc(v) + '">';
+    var it = { number: 'number', date: 'date', email: 'email', tel: 'tel' }[t] || 'text';
+    h += '<input data-k="' + k + '" type="' + it + '"' + (it === 'number' ? ' inputmode="decimal" min="0" step="any"' : '') + ' value="' + esc(v) + '">';
   }
-  if (hint) h += '<div class="hint" style="margin:4px 0 0">' + esc(hint) + '</div>';
+  if (f.help) h += '<div class="hint" style="margin:4px 0 0">' + esc(f.help) + '</div>';
   return h + '<span class="msg">Required</span></div>';
 }
 
 function render() {
   document.getElementById('stepper').innerHTML = STEPS.map(function (s, i) {
-    return '<button class="step' + (i === cur ? ' active' : '') + (i < maxSeen && i !== cur ? ' done' : '') + '" onclick="jump(' + i + ')"><span class="n">' + (i < maxSeen && i !== cur ? '&#10003;' : i + 1) + '</span><span class="t">' + s.short + '</span></button>';
+    var done = i < maxSeen && i !== cur;
+    return '<button class="step' + (i === cur ? ' active' : '') + (done ? ' done' : '') + '" onclick="jump(' + i + ')"><span class="n">' + (done ? '&#10003;' : i + 1) + '</span><span class="t">' + esc(s.short) + '</span></button>';
   }).join('');
-  var s = STEPS[cur], h = '<section class="card"><div class="tag">' + s.tag + '</div><h2>' + s.title + '</h2>';
-  if (s.hint) h += '<p class="hint">' + s.hint + '</p>';
+  var s = STEPS[cur], h = '<section class="card"><div class="tag">' + s.tag + '</div><h2>' + esc(s.title) + '</h2>';
   if (s.review) h += reviewHtml();
-  if (s.lanes) h += '<div id="lanes"></div><button type="button" class="linkbtn" onclick="addLane()">+ Add another origin branch</button><div style="height:14px"></div>';
-  if (s.fields) h += '<div class="grid">' + s.fields.map(fieldHtml).join('') + '</div>';
-  h += '</section>';
-  document.getElementById('pages').innerHTML = h;
-  if (s.lanes) { if (!lanes.length) addLane(true); else renderLanes(); }
+  else if (!s.fields.length) h += '<p class="empty">No questions in this step.</p>';
+  else h += '<div class="grid" style="margin-top:14px">' + s.fields.map(fieldHtml).join('') + '</div>';
+  document.getElementById('pages').innerHTML = h + '</section>';
+  if (document.getElementById('flows')) { if (!flows.length) addFlow(true); else renderFlows(); }
   document.getElementById('backBtn').style.visibility = cur ? 'visible' : 'hidden';
   var nb = document.getElementById('nextBtn');
   nb.textContent = s.review ? 'Submit visit' : 'Next';
@@ -218,21 +203,14 @@ function render() {
   window.scrollTo(0, 0);
 }
 
-// ---- inputs -----------------------------------------------------------
-document.addEventListener('input', function (e) {
-  var k = e.target.getAttribute('data-k');
-  if (k) { data[k] = e.target.value; clearErr(k); save(); }
-});
-document.addEventListener('change', function (e) {
-  var k = e.target.getAttribute('data-k');
-  if (k) { data[k] = e.target.value; clearErr(k); save(); }
-});
+document.addEventListener('input', onEdit);
+document.addEventListener('change', onEdit);
+function onEdit(e) { var k = e.target.getAttribute('data-k'); if (k) { data[k] = e.target.value; clearErr(k); save(); } }
 document.addEventListener('click', function (e) {
-  var p = e.target.closest('.pill');
-  if (!p) return;
+  var p = e.target.closest('.pill'); if (!p) return;
   var box = p.parentNode, k = box.getAttribute('data-k'), v = p.getAttribute('data-v');
   if (box.getAttribute('data-multi') === '1') {
-    var arr = data[k] || [], i = arr.indexOf(v);
+    var arr = Array.isArray(data[k]) ? data[k] : [], i = arr.indexOf(v);
     if (i >= 0) arr.splice(i, 1); else arr.push(v);
     data[k] = arr; p.classList.toggle('on');
   } else {
@@ -243,108 +221,99 @@ document.addEventListener('click', function (e) {
 });
 function clearErr(k) { var w = document.getElementById('w_' + k); if (w) w.classList.remove('err'); }
 
-// ---- lanes ------------------------------------------------------------
-function addLane(silent) {
-  lanes.push({ originZone: data.zone || '', origin: '', dests: [], mt: '', freq: '' });
-  renderLanes(); save();
-  if (!silent) { var c = document.querySelectorAll('.lane'); c[c.length - 1].scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+// ---- flows: origin > stop > stop ... ------------------------------------
+function newStop() { return { zone: '', place: '' }; }
+function addFlow(silent) {
+  var z = '';
+  var zf = BOOT.fields.filter(function (f) { return f.type === 'zone'; })[0];
+  if (zf && data[zf.id]) z = data[zf.id];
+  flows.push({ stops: [{ zone: z, place: '' }, newStop()], mt: '', freq: '', note: '' });
+  renderFlows(); save();
+  if (!silent) { var c = document.querySelectorAll('.flow'); c[c.length - 1].scrollIntoView({ behavior: 'smooth', block: 'center' }); }
 }
-function removeLane(i) { lanes.splice(i, 1); if (!lanes.length) addLane(true); renderLanes(); save(); }
-function laneSet(i, k, v) {
-  lanes[i][k] = v;
-  if (k === 'originZone') { lanes[i].origin = ''; renderLanes(); }
-  save();
+function removeFlow(i) { flows.splice(i, 1); if (!flows.length) addFlow(true); renderFlows(); save(); }
+function addStop(i) { flows[i].stops.push(newStop()); renderFlows(); save(); }
+function removeStop(i, k) { flows[i].stops.splice(k, 1); renderFlows(); save(); }
+function setStop(i, k, key, v) {
+  flows[i].stops[k][key] = v;
+  if (key === 'zone') flows[i].stops[k].place = '';
+  renderFlows(); save();
 }
-function renderLanes() {
-  var el = document.getElementById('lanes'); if (!el) return;
-  el.innerHTML = lanes.map(function (l, i) {
-    var branches = MASTERS.originsByZone[l.originZone] || [];
-    return '<div class="lane" id="lane' + i + '"><div class="lane-h"><b>Origin ' + (i + 1) + '</b>' +
-      (lanes.length > 1 ? '<button class="x" onclick="removeLane(' + i + ')">Remove</button>' : '') + '</div>' +
-      '<div class="grid">' +
-      '<div><label class="f">Origin zone <span class="req">*</span></label><select onchange="laneSet(' + i + ',\'originZone\',this.value)"><option value="">Select...</option>' +
-        ZONES.map(function (z) { return '<option' + (z === l.originZone ? ' selected' : '') + '>' + esc(z) + '</option>'; }).join('') + '</select></div>' +
-      '<div><label class="f">Sugam origin branch <span class="req">*</span></label><select onchange="laneSet(' + i + ',\'origin\',this.value)"' + (branches.length ? '' : ' disabled') + '><option value="">' + (branches.length ? 'Select...' : 'Pick zone first') + '</option>' +
-        branches.map(function (b) { return '<option' + (b === l.origin ? ' selected' : '') + '>' + esc(b) + '</option>'; }).join('') + '</select></div>' +
-      '<div class="full"><label class="f">Destinations <span class="req">*</span></label><div class="search"><input placeholder="Type city or region, e.g. KATHMANDU or WEST BENGAL" oninput="find(' + i + ',this)" onkeydown="findKey(event,' + i + ',this)" onblur="setTimeout(function(){hideRes(' + i + ')},200)"><div class="results" id="res' + i + '"></div></div>' +
-        '<div class="chips">' + l.dests.map(function (d, j) {
-          return '<span class="chip">' + esc(d.city) + ' <small>' + esc(d.region) + '</small><button onclick="rmDest(' + i + ',' + j + ')">&times;</button></span>'; }).join('') + '</div></div>' +
-      '<div><label class="f">Volume on this origin (MT / month)</label><input type="number" inputmode="decimal" min="0" step="any" value="' + esc(l.mt) + '" oninput="laneSet(' + i + ',\'mt\',this.value)"></div>' +
-      '<div><label class="f">Frequency</label><select onchange="laneSet(' + i + ',\'freq\',this.value)"><option value="">Select...</option>' +
-        ['Daily', '2-3 times a week', 'Weekly', 'Fortnightly', 'Monthly'].map(function (f) { return '<option' + (f === l.freq ? ' selected' : '') + '>' + f + '</option>'; }).join('') + '</select></div>' +
-      '</div><span class="msg" style="margin-top:8px">Pick origin branch and at least one destination</span></div>';
+function setFlow(i, key, v) { flows[i][key] = v; save(); }
+function stopName(s) { return s.place || (s.zone ? 'ALL OF ' + s.zone : '?'); }
+
+function renderFlows() {
+  var el = document.getElementById('flows'); if (!el) return;
+  el.innerHTML = flows.map(function (fl, i) {
+    var n = fl.stops.length;
+    return '<div class="flow" id="flow' + i + '"><div class="lane-h"><b>Flow ' + (i + 1) + '</b>' +
+      (flows.length > 1 ? '<button class="x" onclick="removeFlow(' + i + ')">Remove flow</button>' : '') + '</div>' +
+      '<div class="route">' + fl.stops.map(function (s) { return esc(stopName(s)); }).join(' &rarr; ') + '</div>' +
+      '<div class="stops">' + fl.stops.map(function (s, k) {
+        var first = k === 0, zones = first ? ORIGIN_ZONES : DEST_ZONES;
+        var places = s.zone ? ((first ? M.origins : M.dests)[s.zone] || []) : [];
+        return '<div class="stop' + (first ? ' first' : '') + (k === n - 1 && !first ? ' last' : '') + '"><span class="dot"></span>' +
+          '<div class="stop-h"><span>' + (first ? 'ORIGIN (BOOKING)' : (k === n - 1 ? 'GOES TO (FINAL)' : 'THEN GOES TO (STOP ' + k + ')')) + '</span>' +
+          (!first && n > 2 ? '<button class="x" onclick="removeStop(' + i + ',' + k + ')">Remove</button>' : '') + '</div>' +
+          '<div class="two"><select onchange="setStop(' + i + ',' + k + ',\'zone\',this.value)">' + opts(zones, s.zone, first ? 'Origin zone...' : 'Destination zone...') + '</select>' +
+          '<select onchange="setStop(' + i + ',' + k + ',\'place\',this.value)"' + (s.zone ? '' : ' disabled') + '>' +
+          '<option value="">' + (s.zone ? (first ? 'Any branch in zone' : 'Whole zone') : 'Pick zone first') + '</option>' + opts(places, s.place) + '</select></div></div>';
+      }).join('') + '</div>' +
+      '<button type="button" class="addstop" onclick="addStop(' + i + ')">+ Add next stop</button>' +
+      '<div class="two" style="margin-top:10px"><div><label class="f">MT / month on this flow</label><input type="number" inputmode="decimal" min="0" step="any" value="' + esc(fl.mt) + '" oninput="setFlow(' + i + ',\'mt\',this.value)"></div>' +
+      '<div><label class="f">Frequency</label><select onchange="setFlow(' + i + ',\'freq\',this.value)">' + opts(FREQS, fl.freq, 'Select...') + '</select></div></div>' +
+      '<div style="margin-top:8px"><label class="f">Note (optional)</label><input value="' + esc(fl.note) + '" oninput="setFlow(' + i + ',\'note\',this.value)" placeholder="e.g. transshipment at Siliguri"></div>' +
+      '<span class="msg" style="margin-top:8px">Pick a zone for every stop</span></div>';
   }).join('');
 }
-function find(i, inp) {
-  var q = inp.value.trim().toUpperCase(), box = document.getElementById('res' + i);
-  if (q.length < 2) { box.style.display = 'none'; return; }
-  var have = lanes[i].dests.map(function (d) { return d.city; });
-  var regions = Object.keys(MASTERS.destByRegion).filter(function (r) { return r.indexOf(q) >= 0; }).map(function (r) {
-    return { city: 'ALL OF ' + r, region: r, all: 1 }; });
-  var hits = regions.concat(ALL_CITIES.filter(function (c) { return c.city.indexOf(q) >= 0 && have.indexOf(c.city) < 0; }))
-    .sort(function (a, b) { return (b.all || 0) - (a.all || 0) || (a.city.indexOf(q) === 0 ? -1 : 0) - (b.city.indexOf(q) === 0 ? -1 : 0); })
-    .slice(0, 30);
-  box.innerHTML = hits.length ? hits.map(function (c, j) {
-    return '<div class="' + (j ? '' : 'hl') + '" onmousedown="pick(' + i + ',\'' + esc(c.city).replace(/'/g, "\\'") + '\',\'' + esc(c.region) + '\')"><span>' + esc(c.city) + '</span><small>' + (c.all ? MASTERS.destByRegion[c.region].length + ' cities' : esc(c.region)) + '</small></div>'; }).join('')
-    : '<div><span>No match. Press Enter to add "' + esc(q) + '"</span></div>';
-  box.style.display = 'block';
-}
-function findKey(e, i, inp) {
-  if (e.key !== 'Enter') return;
-  e.preventDefault();
-  var first = document.querySelector('#res' + i + ' div');
-  var q = inp.value.trim().toUpperCase();
-  if (first && first.getAttribute('onmousedown')) first.onmousedown();
-  else if (q) pick(i, q, 'OTHER');
-}
-function pick(i, city, region) {
-  if (!lanes[i].dests.some(function (d) { return d.city === city; })) lanes[i].dests.push({ city: city, region: region });
-  renderLanes(); save();
-  var inp = document.querySelector('#lane' + i + ' .search input'); if (inp) inp.focus();
-}
-function hideRes(i) { var b = document.getElementById('res' + i); if (b) b.style.display = 'none'; }
-function rmDest(i, j) { lanes[i].dests.splice(j, 1); renderLanes(); save(); }
+function flowsOk() { return flows.length && flows.every(function (fl) { return fl.stops.length >= 2 && fl.stops.every(function (s) { return s.zone; }); }); }
 
-// ---- navigation & validation -----------------------------------------
+// ---- validation & navigation ------------------------------------------
+function badField(f) {
+  if (f.type === 'flows') return f.required && !flowsOk();
+  var v = data[f.id];
+  var empty = v == null || (Array.isArray(v) ? !v.length : !String(v).trim());
+  if (f.required && empty) return true;
+  if (!empty && f.type === 'email' && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)) return true;
+  if (!empty && f.type === 'tel' && !/^[0-9+ -]{10,15}$/.test(v)) return true;
+  return false;
+}
 function valid(step) {
-  var s = STEPS[step], ok = true, first = null;
-  (s.fields || []).forEach(function (f) {
-    var v = data[f[0]], bad = f[3] && (!v || (Array.isArray(v) && !v.length) || !String(v).trim());
-    if (!bad && f[2] === 'email' && v && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)) bad = true;
-    if (!bad && f[2] === 'tel' && v && !/^[0-9+ -]{10,15}$/.test(v)) bad = true;
-    var w = document.getElementById('w_' + f[0]);
-    if (w) w.classList.toggle('err', !!bad);
+  var ok = true, first = null;
+  STEPS[step].fields.forEach(function (f) {
+    var bad = badField(f), w = document.getElementById('w_' + f.id);
+    if (f.type === 'flows') {
+      flows.forEach(function (fl, i) {
+        var b = !(fl.stops.length >= 2 && fl.stops.every(function (s) { return s.zone; }));
+        var el = document.getElementById('flow' + i);
+        if (el) { el.classList.toggle('err', b); el.querySelector(':scope > .msg').style.display = b ? 'block' : 'none'; if (b) first = first || el; }
+      });
+    } else if (w) w.classList.toggle('err', bad);
     if (bad) { ok = false; first = first || w; }
   });
-  if (s.lanes) {
-    lanes.forEach(function (l, i) {
-      var bad = !l.origin || !l.dests.length, el = document.getElementById('lane' + i);
-      if (el) { el.classList.toggle('err', bad); el.querySelector(':scope > .msg').style.display = bad ? 'block' : 'none'; }
-      if (bad) { ok = false; first = first || el; }
-    });
-  }
   if (first) { first.scrollIntoView({ behavior: 'smooth', block: 'center' }); toast('Please fill the highlighted fields'); }
   return ok;
 }
+function stepOk(step) { return STEPS[step].fields.every(function (f) { return !badField(f); }); }
 function go(i) { if (i < 0 || i >= STEPS.length) return; document.getElementById('toast').style.display = 'none'; cur = i; maxSeen = Math.max(maxSeen, cur); render(); }
 function jump(i) { if (i <= maxSeen || valid(cur)) go(i); }
-function next() {
-  if (STEPS[cur].review) return submit();
-  if (valid(cur)) go(cur + 1);
-}
+function next() { if (STEPS[cur].review) return submit(); if (valid(cur)) go(cur + 1); }
 
 function reviewHtml() {
   var h = '<div class="review">';
   STEPS.forEach(function (s, si) {
-    if (s.review) return;
-    h += '<h3>' + s.tag + ' &middot; ' + s.title.toUpperCase() + ' <button class="x" onclick="go(' + si + ')">Edit</button></h3><dl>';
-    if (s.lanes) lanes.forEach(function (l, i) {
-      h += '<dt>Origin ' + (i + 1) + ': ' + esc(l.origin || '-') + '</dt><dd>' + esc(l.dests.map(function (d) { return d.city; }).join(', ') || '-') +
-        (l.mt ? ' &middot; ' + esc(l.mt) + ' MT/month' : '') + (l.freq ? ' &middot; ' + esc(l.freq) : '') + '</dd>';
-    });
-    (s.fields || []).forEach(function (f) {
-      var v = data[f[0]]; if (Array.isArray(v)) v = v.join(', ');
-      if (v) h += '<dt>' + esc(f[1]) + '</dt><dd>' + (f[2] === 'money' ? '&#8377; ' : '') + esc(v) + '</dd>';
+    if (s.review || !s.fields.length) return;
+    h += '<h3>' + s.tag + ' &middot; ' + esc(s.title.toUpperCase()) + ' <button class="x" onclick="go(' + si + ')">Edit</button></h3><dl>';
+    s.fields.forEach(function (f) {
+      if (f.type === 'flows') {
+        flows.forEach(function (fl, i) {
+          h += '<dt>Flow ' + (i + 1) + '</dt><dd>' + fl.stops.map(function (x) { return esc(stopName(x)); }).join(' &rarr; ') +
+            (fl.mt ? ' &middot; ' + esc(fl.mt) + ' MT/month' : '') + (fl.freq ? ' &middot; ' + esc(fl.freq) : '') + '</dd>';
+        });
+        return;
+      }
+      var v = data[f.id]; if (Array.isArray(v)) v = v.join(', ');
+      if (v) h += '<dt>' + esc(f.label) + '</dt><dd>' + (f.type === 'money' ? '&#8377; ' : '') + esc(v) + '</dd>';
     });
     h += '</dl>';
   });
@@ -352,21 +321,20 @@ function reviewHtml() {
 }
 
 function submit() {
-  for (var i = 0; i < STEPS.length - 1; i++) { if (!validData(i)) { go(i); valid(i); return; } }
+  for (var i = 0; i < STEPS.length - 1; i++) { if (!stepOk(i)) { go(i); valid(i); return; } }
   var nb = document.getElementById('nextBtn');
   nb.disabled = true; nb.textContent = 'Submitting...';
   var payload = JSON.parse(JSON.stringify(data));
-  payload.lanes = lanes;
+  payload.flows = flows;
   google.script.run
     .withSuccessHandler(function (r) {
-      document.getElementById('pages').classList.add('hidden');
-      document.getElementById('stepper').classList.add('hidden');
-      document.getElementById('bar').classList.add('hidden');
+      ['pages', 'stepper', 'bar'].forEach(function (id) { document.getElementById(id).classList.add('hidden'); });
       document.getElementById('donePage').classList.remove('hidden');
+      document.getElementById('toast').style.display = 'none';
       document.getElementById('doneText').innerHTML = 'Visit ID <b>' + esc(r.id) + '</b> saved to the sheet.<br>' +
         (r.status.indexOf('SENT') === 0 ? 'Costing Head and Regional Manager have been emailed.' : 'Mail: ' + esc(r.status));
-      document.getElementById('toast').style.display = 'none';
-      try { localStorage.removeItem('sugamVisitDraft'); } catch (e) {}
+      nb.disabled = false;
+      try { localStorage.removeItem(DRAFT_KEY); } catch (e) {}
       window.scrollTo(0, 0);
     })
     .withFailureHandler(function (err) {
@@ -375,27 +343,20 @@ function submit() {
     })
     .submitVisit(payload);
 }
-function validData(step) {
-  var s = STEPS[step];
-  var fieldsOk = (s.fields || []).every(function (f) { var v = data[f[0]]; return !f[3] || (v && (!Array.isArray(v) || v.length) && String(v).trim()); });
-  return fieldsOk && (!s.lanes || (lanes.length && lanes.every(function (l) { return l.origin && l.dests.length; })));
-}
 function newVisit() {
-  var keep = { repName: data.repName, repEmail: data.repEmail };
-  data = keep; lanes = []; cur = 0; maxSeen = 0;
-  document.getElementById('pages').classList.remove('hidden');
-  document.getElementById('stepper').classList.remove('hidden');
-  document.getElementById('bar').classList.remove('hidden');
+  data = { repName: data.repName, repEmail: data.repEmail, visitDate: new Date().toISOString().slice(0, 10) };
+  flows = []; cur = 0; maxSeen = 0;
+  ['pages', 'stepper', 'bar'].forEach(function (id) { document.getElementById(id).classList.remove('hidden'); });
   document.getElementById('donePage').classList.add('hidden');
   save(); render();
 }
 
-// ---- draft (kept on this phone if the network drops) ------------------
-function save() { try { localStorage.setItem('sugamVisitDraft', JSON.stringify({ data: data, lanes: lanes })); } catch (e) {} }
+// ---- draft kept on this phone -----------------------------------------
+function save() { try { localStorage.setItem(DRAFT_KEY, JSON.stringify({ data: data, flows: flows })); } catch (e) {} }
 function toast(t) { var el = document.getElementById('toast'); el.textContent = t; el.style.display = 'block'; clearTimeout(toast.t); toast.t = setTimeout(function () { el.style.display = 'none'; }, 3500); }
 
 (function init() {
-  try { var d = JSON.parse(localStorage.getItem('sugamVisitDraft') || 'null'); if (d) { data = d.data || {}; lanes = d.lanes || []; } } catch (e) {}
+  try { var d = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null'); if (d) { data = d.data || {}; flows = d.flows || []; } } catch (e) {}
   if (!data.visitDate) data.visitDate = new Date().toISOString().slice(0, 10);
   render();
 })();
