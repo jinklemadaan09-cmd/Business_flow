@@ -182,7 +182,7 @@ EDITABLE_TYPES.forEach(function (t) { TYPE_NAME[t[0]] = t[1]; });
 var pin = '', D = null, fields = [], zones = [], settings = {}, tab = 'q', openId = null, dirty = false;
 
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
-function toast(t) { var el = document.getElementById('toast'); el.textContent = t; el.style.display = 'block'; clearTimeout(toast.t); toast.t = setTimeout(function () { el.style.display = 'none'; }, 4000); }
+function toast(t) { var el = document.getElementById('toast'); el.textContent = t; el.style.display = 'block'; clearTimeout(toast.t); toast.t = setTimeout(function () { el.style.display = 'none'; }, /wrong|error|not|denied|permission/i.test(t) ? 12000 : 4000); }
 function run(fn, args, ok) {
   var r = google.script.run.withSuccessHandler(ok).withFailureHandler(function (e) {
     toast(e && e.message ? e.message : String(e));
@@ -374,7 +374,7 @@ function masterHtml() {
     '<a class="btn sec" style="text-decoration:none" href="' + esc(D.sheetUrl) + '" target="_blank">Open response sheet</a></div></section>';
 }
 function refreshMaster() { run('adminRefreshMasters', [pin], function (d) { load(d); toast('Master reloaded'); }); }
-function saveMaster() { run('adminSaveMail', [pin, zones, settings], function (d) { load(d); toast('Saved. Master reloaded'); }); }
+function saveMaster() { run('adminSaveMail', [pin, zones, settings, true], function (d) { load(d); toast('Saved. Master reloaded'); }); }
 
 // ---- save -------------------------------------------------------------
 function saveCurrent() {
@@ -389,7 +389,7 @@ function saveCurrent() {
       run('adminLoad', [pin], function (d) { load(d); toast('Saved. Form and sheet columns updated'); });
     });
   } else {
-    run('adminSaveMail', [pin, zones, settings], function (d) { load(d); toast('Saved'); });
+    run('adminSaveMail', [pin, zones, settings], function (d) { load(d); toast(d.warning || 'Saved. RM emails and settings are in the sheet'); });
   }
 }
 window.addEventListener('beforeunload', function (e) { if (dirty) { e.preventDefault(); e.returnValue = ''; } });

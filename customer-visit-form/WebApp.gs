@@ -23,7 +23,7 @@
  *   Mail_Log, Zone_Emails, Settings
  */
 
-var APP_VERSION = 'v3.2 (21 Oct 2026)';   // shown on the form and admin page, to check the deployed version
+var APP_VERSION = 'v3.3 (21 Oct 2026)';   // shown on the form and admin page, to check the deployed version
 var CONFIG_SHEET = 'Form_Config';
 var CONFIG_HEADERS = ['Field_ID', 'Step', 'Order', 'Label', 'Type', 'Required', 'Options', 'Help', 'Active', 'Locked'];
 var STEP_NAMES = ['Customer Visit', 'Monthly Business Potential', 'Material Understanding',
@@ -999,7 +999,8 @@ function runDigest(e) {
 
 /** Hours from DIGEST_TIMES, e.g. "14:00, 17:00" > [14, 17]. */
 function digestHours_(txt) {
-  var out = [];
+  var out = [], d = String(txt || '').match(/\b(\d{2}):\d{2}:\d{2} GMT/);
+  if (d) return [Number(d[1])];
   String(txt || '').split(/[,;]/).forEach(function (p) {
     var m = p.trim().match(/^(\d{1,2})(?::\d{2})?\s*(am|pm)?$/i); if (!m) return;
     var h = Number(m[1]); if (m[2]) h = (h % 12) + (/pm/i.test(m[2]) ? 12 : 0);
@@ -1059,8 +1060,11 @@ function adminLoad(pin, fresh) {
   Object.keys(masters.origins).sort().forEach(function (z) {
     if (have.indexOf(z.toUpperCase()) < 0) ze.appendRow([z, '', '', '']);
   });
-  var hasRefresh = ScriptApp.getProjectTriggers().some(function (tr) { return tr.getHandlerFunction() === 'runMasterRefresh'; });
-  if (!hasRefresh) installDigestTriggers_(ss);   // first admin visit after this update schedules the digest + hourly refresh
+  var triggers = [];
+  try {
+    triggers = ScriptApp.getProjectTriggers();
+    if (!triggers.some(function (tr) { return tr.getHandlerFunction() === 'runMasterRefresh'; })) { installDigestTriggers_(ss); triggers = ScriptApp.getProjectTriggers(); }
+  } catch (err) { triggers = []; }   // first admin visit after this update schedules the digest + hourly refresh
   var s = settingsWithDefaults_(ss);
   var c = masterCounts_(masters);
   c.source = masters.source; c.error = masters.error || ''; c.readAt = masters.readAt || '';
@@ -1072,7 +1076,7 @@ function adminLoad(pin, fresh) {
     masters: c,
     sheetUrl: ss.getUrl(),
     trackerUrl: trackerUrl_(ss),
-    digestHours: ScriptApp.getProjectTriggers().filter(function (tr) { return tr.getHandlerFunction() === 'runDigest'; }).length ? digestHours_(s.DIGEST_TIMES) : [],
+    digestHours: triggers.filter(function (tr) { return tr.getHandlerFunction() === 'runDigest'; }).length ? digestHours_(s.DIGEST_TIMES) : [],
     timeZone: Session.getScriptTimeZone()
   };
 }
@@ -1122,27 +1126,45 @@ var ADMIN_SETTINGS = ['COSTING_HEAD_EMAIL', 'ALWAYS_CC', 'GR_MASTER_SHEET', 'GR_
   'DIGEST_ON', 'INSTANT_MAIL', 'DIGEST_TIMES', 'TAT_RM_DAYS', 'TAT_HO_DAYS', 'TAT_FR_DAYS'];
 
 /** Saves zone emails, approval and digest settings, GR master link; re-creates the digest triggers. */
-function adminSaveMail(pin, zones, settings) {
+function adminSaveMail(pin, zones, settings, fresh) {
   var ss = responseSheet_();
   checkPin_(ss, pin);
+  zones = Array.isArray(zones) ? zones : [];
+  settings = settings || {};
+  // Check everything first, so nothing is half saved
+  var EMAILS = /^\s*[^@\s,;]+@[^@\s,;]+\.[^@\s,;]+\s*$/;
+  var listOk = function (v) { return !String(v || '').trim() || String(v).split(/[,;]/).every(function (e) { return EMAILS.test(e); }); };
+  zones.forEach(function (z) {
+    if (!listOk(z.email)) throw new Error('RM email for ' + z.zone + ' looks wrong: ' + z.email);
+    if (!listOk(z.cc)) throw new Error('Extra CC for ' + z.zone + ' looks wrong: ' + z.cc);
+  });
+  if (!listOk(settings.COSTING_HEAD_EMAIL)) throw new Error('Head Costing email looks wrong: ' + settings.COSTING_HEAD_EMAIL);
+  if (!listOk(settings.ALWAYS_CC)) throw new Error('CC email looks wrong: ' + settings.ALWAYS_CC);
+  if (String(settings.DIGEST_ON).toUpperCase() === 'YES' && !digestHours_(settings.DIGEST_TIMES).length)
+    throw new Error('Digest times look wrong. Example: 14:00, 17:00');
+
   var ze = ss.getSheetByName('Zone_Emails');
   var rows = zones.filter(function (z) { return String(z.zone).trim(); })
-    .map(function (z) { return [String(z.zone).trim(), z.name || '', String(z.email || '').trim(), String(z.cc || '').trim()]; });
+    .map(function (z) { return [String(z.zone).trim(), String(z.name || '').trim(), String(z.email || '').trim(), String(z.cc || '').trim()]; });
   ze.getRange(2, 1, Math.max(ze.getLastRow() - 1, 1), 4).clearContent();
-  if (rows.length) ze.getRange(2, 1, rows.length, 4).setValues(rows);
+  if (rows.length) ze.getRange(2, 1, rows.length, 4).setNumberFormat('@').setValues(rows);
 
   var st = ss.getSheetByName('Settings');
   var data = st.getDataRange().getValues();
   Object.keys(settings).forEach(function (k) {
     if (ADMIN_SETTINGS.indexOf(k) < 0) return;
-    if (k === 'DIGEST_TIMES' && !digestHours_(settings[k]).length) throw new Error('Digest times look wrong. Example: 14:00, 17:00');
+    var v = String(settings[k] == null ? '' : settings[k]).trim();
     for (var i = 1; i < data.length; i++) {
-      if (String(data[i][0]).trim() === k) { st.getRange(i + 1, 2).setValue(settings[k]); return; }
+      if (String(data[i][0]).trim() === k) { st.getRange(i + 1, 2).setNumberFormat('@').setValue(v); return; }
     }
-    st.appendRow([k, settings[k], '']);
+    st.appendRow([k, v, '']);
   });
-  installDigestTriggers_(ss);
-  return adminLoad(pin, true);
+  SpreadsheetApp.flush();
+  var warning = '';
+  try { installDigestTriggers_(ss); } catch (err) { warning = 'Saved, but the digest schedule could not be set: ' + err.message; }
+  var out = adminLoad(pin, !!fresh);
+  out.warning = warning;
+  return out;
 }
 
 /** "Send now" in Admin: sends the digest mails right away. */
