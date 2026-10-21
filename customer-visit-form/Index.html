@@ -116,7 +116,12 @@
   .opt small { color: var(--muted); font-size: 12px; }
   .opt.zone span { font-weight: 700; color: var(--navy); }
   .opt:hover { background: var(--soft); }
-  .opt small { white-space: nowrap; }
+  .opt small { white-space: nowrap; display: flex; align-items: center; gap: 6px; }
+  .opt.on { background: #f3fbf6; }
+  .opt.on small { flex: 0 0 auto; }
+  .rowprice { width: 116px; flex: 0 0 116px; }
+  .opt .rowprice input { width: 100%; height: 34px; accent-color: auto; padding: 6px 8px 6px 26px; font-size: 14px; border-color: #9fd3b4; background: #fff; }
+  .rowprice span { left: 10px; font-size: 13px; }
   .picker .bar2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 8px; }
   @media (max-width: 560px) { .picker .bar2 { grid-template-columns: 1fr; } }
   .addstop { border: 0; background: none; color: var(--navy-2); font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; padding: 6px 0; }
@@ -272,6 +277,7 @@ function setOrigin(i, key, v) {
 function setFlow(i, key, v) { flows[i][key] = v; save(); }
 function placeName(s) { return s.dp ? s.place + ' > ' + s.dp : (s.place || ('ALL OF ' + s.zone)); }
 function sameD(a, b) { return a.zone === b.zone && (a.place || '') === (b.place || '') && (a.dp || '') === (b.dp || ''); }
+function destIdx(i, it) { for (var k = 0; k < flows[i].dests.length; k++) if (sameD(flows[i].dests[k], it)) return k; return -1; }
 function hasDest(i, it) { return flows[i].dests.some(function (d) { return sameD(d, it); }); }
 /** Already included through a whole zone or a whole destination that is ticked. */
 function coveredBy(i, it) {
@@ -344,21 +350,31 @@ function renderList(i) {
       : it.dp ? (p.zone ? 'delivery point' : esc(it.zone))
       : (n && p.zone && !p.q ? '<button type="button" class="more" onclick="toggleOpen(' + i + ',' + k + ')">' + n + ' delivery pt ' + (p.open && p.open[it.place] ? '&#9652;' : '&#9662;') + '</button>'
         : (p.zone ? (n ? n + ' delivery pt' : '') : esc(it.zone)));
-    return '<div class="opt' + (it.place ? '' : ' zone') + (it.sub ? ' sub' : '') + '"><label><input type="checkbox"' + (on || cov ? ' checked' : '') + (cov ? ' disabled' : '') +
+    if (on) {   // ticked: price box right in front of it
+      var dk = destIdx(i, it);
+      side = '<div class="pre rowprice"><span>&#8377;</span><input type="number" inputmode="decimal" min="0" step="any" placeholder="Price" data-pk="' + i + '-' + dk +
+        '" value="' + esc(flows[i].dests[dk].price || '') + '" oninput="setPrice(' + i + ',' + dk + ',this.value)"></div>' + (n && p.zone && !p.q && !it.dp ? side : '');
+    }
+    return '<div class="opt' + (on ? ' on' : '') + (it.place ? '' : ' zone') + (it.sub ? ' sub' : '') + '"><label><input type="checkbox"' + (on || cov ? ' checked' : '') + (cov ? ' disabled' : '') +
       ' onchange="toggleIdx(' + i + ',' + k + ')"><span>' + label + '</span></label><small>' + side + '</small></div>';
   }).join('') : '<div class="opt"><span class="hint" style="margin:0">No match</span></div>';
 }
 function renderChips(i) {
   var el = document.getElementById('chips' + i); if (!el) return;
   var ds = flows[i].dests;
-  el.innerHTML = ds.length ? '<div class="cnt">' + ds.length + ' destination' + (ds.length > 1 ? 's' : '') + ' selected &middot; suggested price is optional <button class="clear" onclick="clearDests(' + i + ')">Clear all</button></div>' +
+  el.innerHTML = ds.length ? '<div class="cnt">' + ds.length + ' destination' + (ds.length > 1 ? 's' : '') + ' selected &middot; suggested price (optional) per lane <button class="clear" onclick="clearDests(' + i + ')">Clear all</button></div>' +
     '<div class="sel">' + ds.map(function (d, k) {
-      return '<div class="sel-r"><div class="sel-t"><b>' + esc(placeName(d)) + '</b><small>' + esc(d.zone) + '</small></div>' +
-        '<div class="pre sel-i"><span>&#8377;</span><input type="number" inputmode="decimal" min="0" step="any" placeholder="Price" value="' + esc(d.price || '') + '" oninput="setPrice(' + i + ',' + k + ',this.value)"></div>' +
+      return '<div class="sel-r"><div class="sel-t"><b>' + esc(originLabel(i)) + ' &rarr; ' + esc(placeName(d)) + '</b><small>' + esc(flows[i].origin.zone || '') + ' &rarr; ' + esc(d.zone) + '</small></div>' +
+        '<div class="pre sel-i"><span>&#8377;</span><input type="number" inputmode="decimal" min="0" step="any" placeholder="Price" data-pk="' + i + '-' + k + '" value="' + esc(d.price || '') + '" oninput="setPrice(' + i + ',' + k + ',this.value)"></div>' +
         '<button class="sel-x" title="Remove" onclick="removeChip(' + i + ',' + k + ')">&times;</button></div>';
     }).join('') + '</div>' : '';
 }
-function setPrice(i, k, v) { flows[i].dests[k].price = v; save(); }
+function originLabel(i) { var o = flows[i].origin; return o.place || (o.zone ? 'ALL OF ' + o.zone : 'Origin ' + (i + 1)); }
+/** Same price shows in the picker row and in the lane list; update the other box without re-rendering. */
+function setPrice(i, k, v) {
+  flows[i].dests[k].price = v; save();
+  document.querySelectorAll('[data-pk="' + i + '-' + k + '"]').forEach(function (x) { if (x !== document.activeElement) x.value = v; });
+}
 function renderFlows() {
   var el = document.getElementById('flows'); if (!el) return;
   el.innerHTML = flows.map(function (fl, i) {

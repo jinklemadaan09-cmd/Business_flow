@@ -69,10 +69,10 @@ Apps Script project (Business_Flow) me ye files honi chahiye. Naam exactly aise 
 Code badalne ke baad hamesha: **Deploy > Manage deployments > pencil > Version: New version > Deploy** (link wahi rehta hai).
 
 ## Kya hota hai
-1. Field rep form bharta hai (zones / origin / destination / delivery point GR PNL data master se, unique). Har chune hue destination ke saamne optional suggested price (`Visit_Lanes` > "Suggested Price (Field Rep)").
+1. Field rep form bharta hai (zones / origin / destination / delivery point GR PNL data master se, unique). Destination tick karte hi usi line me ₹ price box aata hai (optional suggested price), neeche bhi har origin → destination ki list me wahi price dikhta hai (`Customer_Lanes` > "Suggested Price (Field Rep)").
 2. **Costing Head** aur zone ke **Regional Manager** ko alag-alag mail jata hai: upar "Approve / Reject & enter rate"
    button, neeche lanes aur poori visit details.
-3. Button se approval page khulta hai: Approve / Reject, har lane (origin > destination / delivery point) ka approved rate (optional, "Apply to all" bhi), remark (optional). Lane rate `Visit_Lanes` ke "Costing Head Rate" / "RM Rate" columns me save hota hai.
+3. Button se approval page khulta hai: Approve / Reject, har lane (origin > destination / delivery point) ka approved rate (optional, "Apply to all" bhi), remark (optional). Lane rate `Customer_Lanes` ke "Costing Head Rate" / "RM Rate" columns me save hota hai.
 4. Sheet me save hota hai:
    - `Approvals` - har approver ki ek row (status, rate, remark, time)
    - `Visit_Summary` - columns S se AB: Visit ID, Costing Head status/rate/remark/time, RM status/rate/remark/time, Overall Status
@@ -87,5 +87,5 @@ Reload master now. Agar padh nahi paya to Admin me error dikhega aur purani lane
 ## Sheet tabs
 - `Form_Config` - saare sawaal (admin panel isi ko badalta hai)
 - `Web_Responses` - ek visit = ek row, har sawaal ka column
-- `Visit_Lanes` - har origin > destination (> delivery point) ki alag row
+- `Customer_Lanes` - customer-wise har origin > destination (> delivery point) ki alag row: Customer, Visit ID, rep, origin, destination, delivery point, suggested price, MT, CH rate, RM rate, Overall Status. Filter laga hua hai, Customer pe filter karo to us customer ka poora split ek saath. (Purana `Visit_Lanes` tab ho to rehne do, purane visits wahin se padhe jaate hain.)
 - `Visit_Summary`, `Approvals`, `Mail_Log`, `Zone_Emails`, `Settings`

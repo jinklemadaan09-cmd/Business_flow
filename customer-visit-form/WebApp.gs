@@ -12,7 +12,7 @@
  * Tabs it uses in the response sheet:
  *   Form_Config    every question (admin edits it from the admin page)
  *   Web_Responses  one row per visit; one column per question, kept in sync with Form_Config
- *   Visit_Lanes    one row per origin > destination (one origin can have many destinations)
+ *   Customer_Lanes one row per customer x origin > destination / delivery point, customer first, with a filter
  *   Visit_Summary  one row per visit, with Costing Head / RM approval, rate and overall status
  *   Approvals      one row per approver per visit (token, status, rate, remark, time)
  *   Mail_Log, Zone_Emails, Settings
@@ -377,24 +377,17 @@ function submitVisit(p) {
     fields.forEach(function (f) { if (cols.colOf[f.id]) row[cols.colOf[f.id] - 1] = a[f.id]; });
     cols.sheet.appendRow(row);
 
-    // Visit_Lanes: one row per origin > destination
-    var FH = ['Submitted At', 'Visit ID', 'Customer', 'Customer Zone', 'Origin #', 'Origin Zone', 'Origin',
-      'Destination Zone', 'Destination', 'Delivery Point', 'Origin MT / month', 'Frequency', 'Note'];
-    var vf = laneSheet_(ss, FH);
-    var lanes = [];
+    // Customer_Lanes: one row per customer x origin > destination / delivery point
+    var cl = customerLanesSheet_(ss), lanes = [], n = 0;
     flows.forEach(function (fl, i) {
       fl.dests.forEach(function (d) {
-        lanes.push([now, id, a.customer || '', a.zone || '', i + 1, fl.origin.zone, originName_(fl.origin),
-          d.zone, d.place || ('ALL OF ' + d.zone), d.dp || '', fl.mt || '', fl.freq || '', fl.note || '']);
+        n++;
+        lanes.push([a.customer || '', a.zone || '', id, a.visitDate || '', now, a.repName || '', n + ' of ' + flows.reduce(function (t, x) { return t + x.dests.length; }, 0),
+          i + 1, fl.origin.zone, originName_(fl.origin), d.zone, d.place || ('ALL OF ' + d.zone), d.dp || '',
+          originName_(fl.origin) + ' > ' + destName_(d), priceOf_(d), fl.mt || '', fl.freq || '', fl.note || '', '', '', 'PENDING']);
       });
     });
-    if (lanes.length) {
-      var first = vf.getLastRow() + 1;
-      vf.getRange(first, 1, lanes.length, FH.length).setValues(lanes);
-      var sc = laneColumn_(vf, 'Suggested Price (Field Rep)', '#127a43'), prices = [];
-      flows.forEach(function (fl) { fl.dests.forEach(function (d) { prices.push([priceOf_(d)]); }); });
-      vf.getRange(first, sc, prices.length, 1).setValues(prices);
-    }
+    if (lanes.length) cl.getRange(cl.getLastRow() + 1, 1, lanes.length, CL_HEADERS.length).setValues(lanes);
 
     // Approvals + mail
     var rows = fields.map(function (f) { return [f.label, a[f.id]]; });
@@ -419,20 +412,41 @@ function submitVisit(p) {
   }
 }
 
-/** Visit_Lanes, or Visit_Lanes_v2 / _v3 when an older tab has different columns. */
-function laneSheet_(ss, headers) {
-  var names = ['Visit_Lanes', 'Visit_Lanes_v2', 'Visit_Lanes_v3'];
-  for (var i = 0; i < names.length; i++) {
-    var sh = ss.getSheetByName(names[i]);
-    if (!sh) {
-      sh = ss.insertSheet(names[i]);
-      sh.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold').setBackground('#2a3273').setFontColor('#ffffff');
-      sh.setFrozenRows(1);
-      return sh;
-    }
-    if (sh.getRange(1, 1, 1, headers.length).getValues()[0].join('|') === headers.join('|')) return sh;
-  }
-  throw new Error('Rename the old Visit_Lanes tabs, their columns do not match');
+/**
+ * Customer_Lanes: one clean row per customer x lane, customer first, with a filter,
+ * so all of one customer's origin > destination splits can be read in one go.
+ */
+var CL_TAB = 'Customer_Lanes';
+var CL_HEADERS = ['Customer', 'Customer Zone', 'Visit ID', 'Visit Date', 'Submitted At', 'Field Rep', 'Lane',
+  'Origin #', 'Origin Zone', 'Origin', 'Destination Zone', 'Destination', 'Delivery Point', 'Lane (From > To)',
+  'Suggested Price (Field Rep)', 'Origin MT / month', 'Frequency', 'Note', 'Costing Head Rate', 'RM Rate', 'Overall Status'];
+var LANE_TABS = [CL_TAB, 'Visit_Lanes', 'Visit_Lanes_v2', 'Visit_Lanes_v3'];   // older tabs are still read for old visits
+
+function customerLanesSheet_(ss) {
+  var sh = ss.getSheetByName(CL_TAB);
+  if (sh) return sh;
+  sh = ss.insertSheet(CL_TAB);
+  sh.getRange(1, 1, 1, CL_HEADERS.length).setValues([CL_HEADERS]).setFontWeight('bold').setBackground('#2a3273').setFontColor('#ffffff');
+  sh.getRange(1, 15).setBackground('#127a43');
+  sh.getRange(1, 19, 1, 2).setBackground('#e9622b');
+  sh.setFrozenRows(1);
+  sh.setFrozenColumns(1);
+  sh.getRange(1, 1, sh.getMaxRows(), CL_HEADERS.length).createFilter();
+  return sh;
+}
+
+/** Header index helper for any lanes tab. */
+function laneCols_(sh) {
+  var h = sh.getRange(1, 1, 1, Math.max(sh.getLastColumn(), 1)).getValues()[0];
+  return function (name) { return h.indexOf(name); };
+}
+
+/** Sets Overall Status on every Customer_Lanes row of a visit. */
+function setLaneStatus_(ss, id, status) {
+  var sh = ss.getSheetByName(CL_TAB); if (!sh || sh.getLastRow() < 2) return;
+  var ix = laneCols_(sh), vc = ix('Visit ID'), sc = ix('Overall Status'); if (vc < 0 || sc < 0) return;
+  var v = sh.getRange(2, vc + 1, sh.getLastRow() - 1, 1).getValues();
+  v.forEach(function (r, k) { if (String(r[0]) === id) sh.getRange(k + 2, sc + 1).setValue(status); });
 }
 
 /** Visit_Summary with the approval columns from column 19 on. */
@@ -556,13 +570,14 @@ function approvalView_(token) {
   var id = String(f.r[0]);
   var s = summaryRow_(ss, id), sv = s ? s.sheet.getRange(s.row, 1, 1, 28).getValues()[0] : [];
   var lanes = [], role = String(f.r[4]);
-  ['Visit_Lanes', 'Visit_Lanes_v2', 'Visit_Lanes_v3'].forEach(function (n) {
+  LANE_TABS.forEach(function (n) {
     var sh = ss.getSheetByName(n); if (!sh) return;
     var v = sh.getDataRange().getValues(), h = v[0];
     var ix = function (name) { return h.indexOf(name); };
-    var sug = ix('Suggested Price (Field Rep)'), mine = ix(LANE_RATE_HEADERS[role]), other = ix(LANE_RATE_HEADERS[role === ROLES.CH ? ROLES.RM : ROLES.CH]);
+    var vid = ix('Visit ID'), sug = ix('Suggested Price (Field Rep)'), mine = ix(LANE_RATE_HEADERS[role]), other = ix(LANE_RATE_HEADERS[role === ROLES.CH ? ROLES.RM : ROLES.CH]);
+    if (vid < 0) return;
     v.forEach(function (r, i) {
-      if (i === 0 || String(r[1]) !== id) return;
+      if (i === 0 || String(r[vid]) !== id) return;
       lanes.push({ tab: n, row: i + 1, oz: r[ix('Origin Zone')], o: r[ix('Origin')], dz: r[ix('Destination Zone')], d: r[ix('Destination')],
         dp: ix('Delivery Point') >= 0 ? r[ix('Delivery Point')] : '', mt: r[ix('Origin MT / month')], fq: r[ix('Frequency')],
         rate: mine >= 0 ? r[mine] : '', otherRate: other >= 0 ? r[other] : '', suggested: sug >= 0 ? r[sug] : '' });
@@ -598,18 +613,18 @@ function approveSave(token, decision, rates, remark) {
     if (!f) throw new Error('This approval link is not valid.');
     var now = new Date(), id = String(f.r[0]), role = String(f.r[4]);
 
-    // per-lane rate into Visit_Lanes (only rows of this visit)
+    // per-lane rate into the lanes tab (only rows of this visit)
     var summary = [];
     rates.forEach(function (x) {
-      if (['Visit_Lanes', 'Visit_Lanes_v2', 'Visit_Lanes_v3'].indexOf(x.tab) < 0) return;
+      if (LANE_TABS.indexOf(x.tab) < 0) return;
       var sh = ss.getSheetByName(x.tab); if (!sh) return;
-      var row = Number(x.row);
-      if (!(row >= 2) || String(sh.getRange(row, 2).getValue()) !== id) return;
+      var ix = laneCols_(sh), row = Number(x.row);
+      if (!(row >= 2) || ix('Visit ID') < 0 || String(sh.getRange(row, ix('Visit ID') + 1).getValue()) !== id) return;
       var col = laneColumn_(sh, LANE_RATE_HEADERS[role], '#e9622b');
       sh.getRange(row, col).setValue(x.rate ? Number(x.rate) : '');
       if (x.rate) {
-        var lr = sh.getRange(row, 1, 1, 10).getValues()[0];
-        summary.push(lr[6] + ' > ' + lr[8] + (lr[9] ? ' > ' + lr[9] : '') + ': ' + x.rate);
+        var lr = sh.getRange(row, 1, 1, sh.getLastColumn()).getValues()[0], dp = lr[ix('Delivery Point')];
+        summary.push(lr[ix('Origin')] + ' > ' + lr[ix('Destination')] + (dp ? ' > ' + dp : '') + ': ' + x.rate);
       }
     });
     var rateText = summary.join('; ');
@@ -625,6 +640,7 @@ function approveSave(token, decision, rates, remark) {
       s.sheet.getRange(s.row, off, 1, 4).setValues([[decision, rateText, String(remark || '').trim(), now]]);
       var oldOverall = s.sheet.getRange(s.row, 28).getValue();
       s.sheet.getRange(s.row, 28).setValue(overall);
+      setLaneStatus_(ss, id, overall);
       if (overall !== 'PENDING' && overall !== oldOverall) notifyRep_(ss, s, id, overall, all);
     }
     return approvalView_(token);
