@@ -219,20 +219,55 @@ function setDirty(v) {
 }
 
 function render() {
-  document.getElementById('tabs').innerHTML = [['q', 'Questions'], ['m', 'Approvals & mails'], ['d', 'Master data']].map(function (t) {
+  document.getElementById('tabs').innerHTML = [['q', 'Questions'], ['m', 'Approvals & mails'], ['e', 'Entries'], ['d', 'Master data']].map(function (t) {
     return '<button class="tab' + (tab === t[0] ? ' on' : '') + '" onclick="setTab(\'' + t[0] + '\')">' + t[1] + '</button>';
   }).join('');
   var v = document.getElementById('view');
   if (tab === 'q') v.innerHTML = questionsHtml();
   else if (tab === 'm') v.innerHTML = mailHtml();
+  else if (tab === 'e') { v.innerHTML = entriesHtml(); if (!entries) loadEntries(); }
   else v.innerHTML = masterHtml();
-  document.getElementById('bar').classList.toggle('hidden', tab === 'd');
+  document.getElementById('bar').classList.toggle('hidden', tab === 'd' || tab === 'e');
 }
 function setTab(t) {
   if (dirty && !confirm('You have unsaved changes on this tab. Leave without saving?')) return;
   if (dirty) load(D);
   tab = t; render();
 }
+
+// ---- entries ----------------------------------------------------------
+var entries = null, picked = {}, eq = '';
+function loadEntries() { run('adminVisits', [pin], function (list) { entries = list; picked = {}; render(); }); }
+function entriesHtml() {
+  if (!entries) return '<section class="card"><p class="hint">Loading entries...</p></section>';
+  var q = eq.toLowerCase(), list = entries.filter(function (e) { return !q || JSON.stringify(e).toLowerCase().indexOf(q) >= 0; });
+  var n = Object.keys(picked).length;
+  return '<section class="card"><div class="tag">ENTRIES</div><h2>All visits (' + entries.length + ')</h2>' +
+    '<p class="hint">Delete removes the visit from Web_Responses, Customer_Lanes and Visit_Tracker. Resend mails the person the visit is waiting for. Deleting cannot be undone.</p>' +
+    '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px"><input id="eq" placeholder="Search visit ID, rep, customer, zone, stage" value="' + esc(eq) + '" oninput="eq=this.value;render();var x=document.getElementById(\'eq\');x.focus();x.setSelectionRange(x.value.length,x.value.length)" style="flex:1;min-width:200px">' +
+    '<button class="btn sec" onclick="loadEntries()">Refresh</button>' +
+    '<button class="btn sec" ' + (n ? '' : 'disabled ') + 'onclick="delPicked()">Delete selected (' + n + ')</button>' +
+    '<button class="btn sec" style="color:var(--crimson)" onclick="delAll()">Delete ALL entries</button></div>' +
+    '<div style="overflow-x:auto"><table class="z"><thead><tr><th><input type="checkbox" onchange="pickAll(this.checked)"></th><th>Visit ID</th><th>Submitted</th><th>Field rep</th><th>Employee ID</th><th>Customer</th><th>Zone</th><th>Stage</th><th></th></tr></thead><tbody>' +
+    (list.length ? list.map(function (e) {
+      return '<tr><td><input type="checkbox"' + (picked[e.id] ? ' checked' : '') + ' onchange="pick(\'' + esc(e.id) + '\',this.checked)"></td><td>' + esc(e.id) + '</td><td>' + esc(e.at) + '</td><td>' + esc(e.rep) + '</td><td>' + esc(e.empId) +
+        '</td><td>' + esc(e.customer) + '</td><td>' + esc(e.zone) + '</td><td>' + esc(e.stage) + '</td><td style="white-space:nowrap">' +
+        '<button class="btn sec" style="padding:4px 10px" onclick="resend(\'' + esc(e.id) + '\')">Resend</button> ' +
+        '<button class="btn sec" style="padding:4px 10px" onclick="delOne(\'' + esc(e.id) + '\')">&times;</button></td></tr>';
+    }).join('') : '<tr><td colspan="9" class="hint">No entries.</td></tr>') + '</tbody></table></div></section>';
+}
+function pick(id, on) { if (on) picked[id] = 1; else delete picked[id]; render(); }
+function pickAll(on) { picked = {}; if (on) entries.forEach(function (e) { picked[e.id] = 1; }); render(); }
+function delOne(id) { if (confirm('Delete visit ' + id + '? This cannot be undone.')) run('adminDeleteVisits', [pin, [id]], function (l) { entries = l; picked = {}; render(); toast('Deleted ' + id); }); }
+function delPicked() {
+  var ids = Object.keys(picked);
+  if (ids.length && confirm('Delete ' + ids.length + ' visit(s)? This cannot be undone.')) run('adminDeleteVisits', [pin, ids], function (l) { entries = l; picked = {}; render(); toast('Deleted ' + ids.length); });
+}
+function delAll() {
+  if (prompt('This deletes EVERY entry from Web_Responses, Customer_Lanes and Visit_Tracker. Type DELETE to confirm.') !== 'DELETE') return toast('Not deleted');
+  run('adminDeleteVisits', [pin, 'ALL'], function (l) { entries = l; picked = {}; render(); toast('All entries deleted'); });
+}
+function resend(id) { run('adminResend', [pin, id], function (m) { toast(m); }); }
 
 // ---- questions --------------------------------------------------------
 function questionsHtml() {
@@ -278,7 +313,7 @@ function qHtml(f, i, n) {
       (choice ? '<div class="full"><label class="f">Options (one per line)</label><textarea style="min-height:120px" oninput="setOptions(\'' + f.id + '\',this.value)">' + esc(f.options.join('\n')) + '</textarea></div>' : '') +
       '<div class="full"><label class="f">Help text (optional)</label><input value="' + esc(f.help) + '" oninput="setQ(\'' + f.id + '\',\'help\',this.value,1)"></div>' +
       '<label class="tog full"><input type="checkbox"' + (f.required ? ' checked' : '') + ' onchange="setQ(\'' + f.id + '\',\'required\',this.checked)"> Required</label>' +
-      (f.locked ? '<div class="hint full" style="margin:0">Core question: used for the mail and the summary, so it cannot be deleted or change type. You can still rename it.</div>' : '') +
+      (f.locked ? '<div class="hint full" style="margin:0">Core question: the customer zone decides the RM and the lanes carry the prices, so it cannot be deleted or change type. You can still rename it.</div>' : '') +
       '</div>';
   }
   return h + '</div>';
@@ -321,7 +356,7 @@ function mailHtml() {
   return '<section class="card"><div class="tag">APPROVAL FLOW</div><h2>Who approves</h2>' +
     '<p class="hint">Level 1: the Regional Manager of the customer zone approves or rejects each lane and gives an RM rate. If the RM rejects every lane the visit stops there. ' +
     'Level 2: Head Costing gives the HO approved rate. The rates then go into Web_Responses and the field rep gets a mail to discuss them with the customer.</p>' +
-    '<div class="grid">' + sInput('COSTING_HEAD_EMAIL', 'Head Costing email (comma for more than one)', 1) +
+    '<div class="grid">' + sInput('ADMIN_PIN', 'Admin PIN (at least 4 characters)') + sInput('COSTING_HEAD_EMAIL', 'Head Costing email (comma for more than one)', 1) +
     sInput('ALWAYS_CC', 'CC on the Head Costing digest (optional)', 1) +
     sInput('TAT_RM_DAYS', 'Regional Manager TAT (days)') + sInput('TAT_HO_DAYS', 'Head Costing TAT (days)') +
     sInput('TAT_FR_DAYS', 'Field rep outcome TAT (days)') + '</div>' +
@@ -352,7 +387,8 @@ function mailHtml() {
     '<p class="hint">Send a test mail to one zone\'s RM, and see the last 25 lines of Mail_Log (newest first).</p>' +
     '<div style="display:flex;gap:10px;flex-wrap:wrap"><select id="testZone">' + zones.filter(function (z) { return !z.isNew; }).map(function (z) {
       return '<option>' + esc(z.zone) + '</option>'; }).join('') + '</select>' +
-    '<button class="btn sec" onclick="testZone()">Send test mail to RM</button><button class="btn sec" onclick="mailCheck()">Show mail log</button></div>' +
+    '<button class="btn sec" onclick="testZone()">Send test mail to RM</button><button class="btn sec" onclick="mailCheck()">Show mail log</button>' +
+    '<button class="btn sec" onclick="if(confirm(\'Clear the whole mail log?\'))run(\'adminClearMailLog\',[pin],function(){mailCheck();toast(\'Mail log cleared\')})">Clear mail log</button></div>' +
     '<div id="mailLog" style="margin-top:12px;overflow-x:auto"></div></section>';
 }
 function testZone() {
@@ -433,7 +469,11 @@ function saveCurrent() {
       run('adminLoad', [pin], function (d) { load(d); toast('Saved. Form and sheet columns updated'); });
     });
   } else {
-    run('adminSaveMail', [pin, changedZones(), settings, false, removedZones], function (d) { load(d); toast(d.warning || 'Saved. RM emails and settings are in the sheet'); });
+    var newPin = String(settings.ADMIN_PIN || '').trim();
+    run('adminSaveMail', [pin, changedZones(), settings, false, removedZones], function (d) {
+      if (newPin && newPin !== pin) { pin = newPin; try { sessionStorage.setItem('sugamAdminPin', pin); } catch (e) {} }
+      load(d); toast(d.warning || 'Saved. RM emails and settings are in the sheet');
+    });
   }
 }
 window.addEventListener('beforeunload', function (e) { if (dirty) { e.preventDefault(); e.returnValue = ''; } });

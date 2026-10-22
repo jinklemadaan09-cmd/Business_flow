@@ -23,7 +23,7 @@
  *   Mail_Log, Zone_Emails, Settings
  */
 
-var APP_VERSION = 'v3.7 (21 Oct 2026)';   // shown on the form and admin page, to check the deployed version
+var APP_VERSION = 'v3.8 (22 Oct 2026)';   // shown on the form and admin page, to check the deployed version
 var CONFIG_SHEET = 'Form_Config';
 var CONFIG_HEADERS = ['Field_ID', 'Step', 'Order', 'Label', 'Type', 'Required', 'Options', 'Help', 'Active', 'Locked'];
 var STEP_NAMES = ['Customer Visit', 'Monthly Business Potential', 'Material Understanding',
@@ -156,6 +156,9 @@ function responseSheet_() {
 
 /* ----------------------------------------------------------------- config */
 
+/** Only these questions are core (cannot be deleted or change type): the zone decides the RM, the lanes carry the prices. */
+var LOCKED_FIELDS = ['zone', 'flows'];
+
 function readConfig_(ss) {
   var sh = ss.getSheetByName(CONFIG_SHEET);
   if (!sh) {
@@ -185,7 +188,7 @@ function readConfig_(ss) {
       id: String(r[0]).trim(), step: Number(r[1]) || 1, order: Number(r[2]) || 0, label: String(r[3]),
       type: String(r[4]).trim() || 'text', required: yes_(r[5]),
       options: String(r[6] || '').split('\n').map(function (s) { return s.trim(); }).filter(String),
-      help: String(r[7] || ''), active: yes_(r[8]), locked: yes_(r[9])
+      help: String(r[7] || ''), active: yes_(r[8]), locked: LOCKED_FIELDS.indexOf(String(r[0]).trim()) >= 0
     };
   }).sort(function (a, b) { return a.step - b.step || a.order - b.order; });
 }
@@ -1127,7 +1130,7 @@ function adminSaveConfig(pin, fields) {
   return readConfig_(ss);
 }
 
-var ADMIN_SETTINGS = ['COSTING_HEAD_EMAIL', 'ALWAYS_CC', 'GR_MASTER_SHEET', 'GR_MASTER_TAB',
+var ADMIN_SETTINGS = ['ADMIN_PIN', 'COSTING_HEAD_EMAIL', 'ALWAYS_CC', 'GR_MASTER_SHEET', 'GR_MASTER_TAB',
   'DIGEST_ON', 'INSTANT_MAIL', 'DIGEST_TIMES', 'TAT_RM_DAYS', 'TAT_HO_DAYS', 'TAT_FR_DAYS'];
 
 /** Saves zone emails, approval and digest settings, GR master link; re-creates the digest triggers. */
@@ -1145,6 +1148,7 @@ function adminSaveMail(pin, zones, settings, fresh, removed) {
   });
   if (!listOk(settings.COSTING_HEAD_EMAIL)) throw new Error('Head Costing email looks wrong: ' + settings.COSTING_HEAD_EMAIL);
   if (!listOk(settings.ALWAYS_CC)) throw new Error('CC email looks wrong: ' + settings.ALWAYS_CC);
+  if ('ADMIN_PIN' in settings && String(settings.ADMIN_PIN).trim().length < 4) throw new Error('The admin PIN needs at least 4 characters.');
   if (String(settings.DIGEST_ON).toUpperCase() === 'YES' && !digestHours_(settings.DIGEST_TIMES).length)
     throw new Error('Digest times look wrong. Example: 14:00, 17:00');
 
@@ -1178,7 +1182,7 @@ function adminSaveMail(pin, zones, settings, fresh, removed) {
   SpreadsheetApp.flush();
   var warning = '';
   try { installDigestTriggers_(ss); } catch (err) { warning = 'Saved, but the digest schedule could not be set: ' + err.message; }
-  var out = adminLoad(pin, !!fresh);
+  var out = adminLoad(String(settingsWithDefaults_(ss).ADMIN_PIN).trim(), !!fresh);
   out.warning = warning;
   return out;
 }
@@ -1202,6 +1206,83 @@ function adminTestZone(pin, zone) {
       '</b> will come to this address for RM approval.</p>') }, 'Test RM mail (' + zone + ')');
   if (!ok) throw new Error('Mail to ' + rm.email + ' failed. See Mail_Log.');
   return 'Test mail sent to ' + rm.email + (rm.cc ? ' (cc ' + rm.cc + ')' : '');
+}
+
+/* ------------------------------------------------------------ entries */
+
+/** Admin "Entries": every visit in Web_Responses with its stage from Visit_Tracker. */
+function adminVisits(pin) {
+  var ss = responseSheet_();
+  checkPin_(ss, pin);
+  var track = {};
+  trackerRows_(ss).forEach(function (t) { track[String(t['Visit ID'])] = t; });
+  var cols = syncResponseColumns_(ss, readConfig_(ss)), sh = cols.sheet, out = [], seen = {};
+  var v = sh.getLastRow() > 1 ? sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getValues() : [];
+  var get = function (r, fid) { return cols.colOf[fid] ? String(r[cols.colOf[fid] - 1]) : ''; };
+  v.forEach(function (r) {
+    var id = String(r[1] || '').trim(); if (!id || seen[id]) return; seen[id] = 1;
+    var t = track[id] || {};
+    out.push({ id: id, at: r[0] instanceof Date ? fmtDate_(r[0], true) : String(r[0]), rep: get(r, 'repName'), empId: get(r, 'repId'),
+      customer: get(r, 'customer'), zone: get(r, 'zone'), stage: t['Stage'] || '(old entry)' });
+  });
+  Object.keys(track).forEach(function (id) {
+    if (seen[id]) return; var t = track[id];
+    out.push({ id: id, at: fmtDate_(t['Submitted At'], true), rep: t['Field Rep'], empId: t['Employee ID'], customer: t['Customer'], zone: t['Customer Zone'], stage: t['Stage'] });
+  });
+  return out.reverse();
+}
+
+/** Deletes the rows of the given Visit IDs (or every entry when ids === 'ALL') from all visit tabs. */
+function adminDeleteVisits(pin, ids) {
+  var ss = responseSheet_();
+  checkPin_(ss, pin);
+  var all = ids === 'ALL', want = {};
+  if (!all) { (ids || []).forEach(function (i) { want[String(i)] = 1; }); if (!Object.keys(want).length) throw new Error('Nothing selected.'); }
+  var lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  var n = 0;
+  try {
+    ['Web_Responses', TRACKER_TAB].concat(LANE_TABS).forEach(function (name) {
+      var sh = ss.getSheetByName(name); if (!sh || sh.getLastRow() < 2) return;
+      var head = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+      var c = head.indexOf('Visit ID'); if (c < 0 && name === 'Web_Responses') c = 1; if (c < 0) return;
+      if (all) { n += sh.getLastRow() - 1; sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).clearContent(); return; }
+      var v = sh.getRange(2, c + 1, sh.getLastRow() - 1, 1).getValues();
+      for (var i = v.length - 1; i >= 0; i--) {
+        if (!want[String(v[i][0]).trim()]) continue;
+        n++;
+        if (sh.getLastRow() === 2 && sh.getMaxRows() <= 2) sh.getRange(2, 1, 1, sh.getLastColumn()).clearContent();
+        else sh.deleteRow(i + 2);
+      }
+    });
+    mailLog_(ss).appendRow([new Date(), 'ADMIN', '', '', all ? 'Deleted ALL entries (' + n + ' rows)' : 'Deleted ' + Object.keys(want).join(', ') + ' (' + n + ' rows)']);
+  } finally {
+    lock.releaseLock();
+  }
+  return adminVisits(pin);
+}
+
+/** Sends the mail for the visit's current stage again (RM, Head Costing or field rep). */
+function adminResend(pin, id) {
+  var ss = responseSheet_();
+  checkPin_(ss, pin);
+  var t = trackerRows_(ss).filter(function (x) { return String(x['Visit ID']) === String(id); })[0];
+  if (!t) throw new Error('This entry has no tracker row (old entry).');
+  var st = t['Stage'];
+  if (st === STAGE.RM) mailApprover_(ss, t, 'RM');
+  else if (st === STAGE.HO) mailApprover_(ss, t, 'HO');
+  else if (st === STAGE.FR || st === STAGE.CUST) mailRep_(ss, t, 'RATES');
+  else throw new Error('Nothing to resend: the visit is ' + st + '.');
+  return 'Mail sent again for ' + id + ' (' + st + '). See the mail log.';
+}
+
+/** Empties Mail_Log (keeps the header). */
+function adminClearMailLog(pin) {
+  var ss = responseSheet_();
+  checkPin_(ss, pin);
+  var sh = mailLog_(ss);
+  if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).clearContent();
+  return adminMailCheck(pin);
 }
 
 /** Customer zones for the form = the zones listed in Zone_Emails (managed in Admin). */
