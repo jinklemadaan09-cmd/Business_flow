@@ -14,6 +14,7 @@ var SHEET_ID = '1kY8FIMft0TzA50v1B25arZzLTIs9_fGOn2WhXIg0BCo';
 var SETTINGS_TAB = 'FMS_Settings';
 var MAP_TAB = 'FMS_Column_Map';
 var LOG_TAB = 'FMS_Log';
+var HELD = 'held (mail off)';
 
 // key, default value, help text. New keys are added to FMS_Settings by Setup; existing values are kept.
 var DEFAULT_SETTINGS = [
@@ -24,7 +25,7 @@ var DEFAULT_SETTINGS = [
   ['REQUIRE_COLUMNS', '', 'Optional: more source columns that must be filled before the move (e.g. FS Email ID)'],
   ['MATCH_COLUMNS', 'SC NAME, Client Name (CNGR), Origin Branch, Destination', 'Target columns that identify the same client row (no duplicates; later changes update that row)'],
   ['UPDATE_EXISTING', 'Yes', 'Yes = when the SCOT row changes later, refresh the mapped cells in the FMS row'],
-  ['SEND_MAIL', 'Yes', 'Yes = mail when a row moves to the FMS'],
+  ['SEND_MAIL', 'No', 'Yes = mail the FS when a row moves to the FMS. No = hold (rows still move; menu "Send held mails" sends them later)'],
   ['MAIL_TO_COLUMN', 'FS Email ID', 'Source column with the FS mail ID (mail goes here)'],
   ['MAIL_CC', '', 'Always CC these mail IDs (comma separated)'],
   ['SC_EMAILS', '', 'Optional SC mail IDs to CC per SC: UNNATI=a@x.com, SONAL=b@x.com'],
@@ -58,6 +59,8 @@ function onOpen() {
     .addSeparator()
     .addItem('Open admin settings', 'openAdmin')
     .addItem('Give admin access to ADMIN_EMAILS', 'lockSettings')
+    .addItem('Mail ON / OFF', 'toggleMail')
+    .addItem('Send held mails', 'sendHeldMails')
     .addToUi();
 }
 
@@ -79,7 +82,8 @@ function setup() {
   PropertiesService.getDocumentProperties().setProperty('SETUP_DONE', new Date().toISOString());
 
   notify_('Cross Sell FMS is ready.\n\n' + summary_(res) +
-    (firstRun ? '\n\nFirst run: rows already aligned were moved without mail. New ones will send mail.' : '') +
+    (firstRun ? '\n\nFirst run: rows already aligned were moved without mail.' : '') +
+    '\nMail is ' + (/^y/i.test(getSettings_().SEND_MAIL) ? 'ON.' : 'OFF (on hold). Turn it on from the menu: Mail ON / OFF.') +
     '\n\nAdmin settings (only admins can open): ' + adm.getUrl());
 }
 
@@ -110,6 +114,31 @@ function lockSettings() {
   admins.forEach(function (m) { if (m !== owner) adm.addEditor(m); });
   notify_('Admin settings can be opened only by:\n' + admins.join('\n') +
     '\n\nTo add or remove an admin: change ADMIN_EMAILS in FMS_Settings, then run this again.');
+}
+
+// Admin only (others cannot open the admin spreadsheet, so this fails for them).
+function toggleMail() {
+  var on = !/^y/i.test(getSettings_().SEND_MAIL);
+  setSetting_('SEND_MAIL', on ? 'Yes' : 'No');
+  notify_('Mail is now ' + (on ? 'ON: new rows mail the FS.' : 'OFF (on hold): rows still move, no mail.') +
+    '\nRows held while mail was off are sent only with "Send held mails".');
+}
+
+// Sends the mails held while SEND_MAIL was No (and still not sent), whatever SEND_MAIL is now.
+function sendHeldMails() {
+  var adm = admin_();
+  var sh = adm.getSheetByName(LOG_TAB);
+  var n = 0;
+  if (sh.getLastRow() > 1) {
+    var col = sh.getRange(2, 6, sh.getLastRow() - 1, 1).getValues().map(function (r) {
+      if (r[0] === HELD) { n++; return ['']; }
+      return r;
+    });
+    sh.getRange(2, 6, col.length, 1).setValues(col);
+  }
+  if (!n) { notify_('No held mails.'); return; }
+  var res = sync_({ mail: true, forceMail: true });
+  notify_('Held rows: ' + n + '\n' + summary_(res));
 }
 
 // Installable trigger (runs as the person who ran Setup, so it can send mail).
@@ -206,7 +235,8 @@ function doSync_(opt) {
       entry.dirty = true;
       entry.row = first + i;
       entry.fs = get(cfg.TRIGGER_COLUMN);
-      if (opt.mail && /^y/i.test(cfg.SEND_MAIL) && !entry.mailed) {
+      var mailOn = opt.forceMail || /^y/i.test(cfg.SEND_MAIL);
+      if (opt.mail && mailOn && !entry.mailed) {
         try {
           if (sendMail_(cfg, map, vals, mailTo, get('SC NAME') || scFromTab_(src.getName()))) {
             entry.mailed = new Date();
@@ -217,6 +247,8 @@ function doSync_(opt) {
         }
       } else if (!opt.mail && !entry.mailed && entry.isNew) {
         entry.mailed = 'skipped (before setup)';
+      } else if (opt.mail && !mailOn && !entry.mailed) {
+        entry.mailed = HELD;
       }
     });
   });
