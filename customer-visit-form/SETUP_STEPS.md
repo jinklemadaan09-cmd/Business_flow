@@ -73,6 +73,10 @@ The field rep also gets an immediate mail when Head Costing approves (or a rejec
 - **Master data**: GR PNL data master link and tab; a copy of the zones and places is refreshed every hour in the background (hidden tab `Master_Cache`), so the form opens fast. Use Reload master now after a big change.
 
 ## 7. Sheet tabs
+- **`All_Data`** (the only visible tab): one row per customer lane with every form answer, the lane prices,
+  RM and Head Costing decisions and rates, stage, due date and customer outcome. Rebuilt after every submit,
+  approval, outcome and delete. Filter on Customer or Visit ID.
+- The working tabs below are hidden (right-click the tab bar > unhide to see them). Do not edit them by hand.
 - `Web_Responses`: one row per visit, one column per question, then Stage, RM Status, RM Remark, RM At,
   HO Status, HO Approved Rates, HO Remark, HO At, Outcome, Outcome Remark, Outcome At.
 - `Customer_Lanes`: one row per customer x origin > destination / delivery point: suggested price, RM decision and rate,

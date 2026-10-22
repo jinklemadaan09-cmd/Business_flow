@@ -23,7 +23,7 @@
  *   Mail_Log, Zone_Emails, Settings
  */
 
-var APP_VERSION = 'v3.8 (22 Oct 2026)';   // shown on the form and admin page, to check the deployed version
+var APP_VERSION = 'v3.9 (22 Oct 2026)';   // shown on the form and admin page, to check the deployed version
 var CONFIG_SHEET = 'Form_Config';
 var CONFIG_HEADERS = ['Field_ID', 'Step', 'Order', 'Label', 'Type', 'Required', 'Options', 'Help', 'Active', 'Locked'];
 var STEP_NAMES = ['Customer Visit', 'Monthly Business Potential', 'Material Understanding',
@@ -460,6 +460,7 @@ function submitVisit(p) {
     mailLog_(ss).appendRow([now, a.customer, a.zone, '', 'NEW VISIT ' + id + ' > ' + stage + (rm.email ? ' (RM ' + rm.email + ')' : ' (no RM email found for zone "' + (a.zone || '') + '" in Zone_Emails)')]);
     var instant = isInstant_(settings);
     if (instant) mailApprover_(ss, trackerRows_(ss).filter(function (x) { return String(x['Visit ID']) === id; })[0], rm.email ? 'RM' : 'HO');
+    refreshAllData_(ss);
     return { id: id, status: stage + '. ' + (rm.email ? 'The Regional Manager (' + rm.email + ')' : 'Head Costing (no RM email for ' + (a.zone || 'this zone') + ')') +
       (instant ? ' has been mailed now.' : ' gets it in the next digest mail.') };
   } finally {
@@ -772,6 +773,7 @@ function approveSave(token, lanes, remark) {
       setLanesStage_(ss, id, stage2);
       mailRep_(ss, t, stage2 === STAGE.HO_REJ ? 'HO_REJ' : 'RATES');
     }
+    refreshAllData_(ss);
     return approvalView_(token);
   } finally {
     lock.releaseLock();
@@ -796,6 +798,7 @@ function outcomeSave(token, outcome, remark) {
       'Due By': stage === STAGE.CUST ? addDays_(now, tat_(settings, 'FR')) : '' });
     writeResponseStatus_(ss, String(t['Visit ID']), { 'Stage': stage, 'Outcome': stage, 'Outcome Remark': remark, 'Outcome At': now });
     setLanesStage_(ss, String(t['Visit ID']), stage);
+    refreshAllData_(ss);
     return approvalView_(token);
   } finally {
     lock.releaseLock();
@@ -1067,6 +1070,7 @@ function adminLoad(pin, fresh) {
   checkPin_(ss, pin);
   var masters = getMasters_(ss, fresh);
   var ze = ss.getSheetByName('Zone_Emails');
+  if (!ss.getSheetByName(ALL_TAB)) refreshAllData_(ss);
   var triggers = [];
   try {
     triggers = ScriptApp.getProjectTriggers();
@@ -1124,6 +1128,7 @@ function adminSaveConfig(pin, fields) {
     sh.getRange(2, 1, Math.max(sh.getLastRow() - 1, 1), CONFIG_HEADERS.length).clearContent();
     sh.getRange(2, 1, rows.length, CONFIG_HEADERS.length).setValues(rows);
     syncResponseColumns_(ss, readConfig_(ss));
+    refreshAllData_(ss);
   } finally {
     lock.releaseLock();
   }
@@ -1208,6 +1213,72 @@ function adminTestZone(pin, zone) {
   return 'Test mail sent to ' + rm.email + (rm.cc ? ' (cc ' + rm.cc + ')' : '');
 }
 
+/* ---------------------------------------------------------- All_Data tab */
+
+/**
+ * All_Data: the one tab to read. One row per customer lane with every form answer,
+ * the lane prices, RM / Head Costing decisions and rates, stage and customer outcome.
+ * Rebuilt after every submit, approval, outcome and delete. The working tabs it is built
+ * from (Web_Responses, Customer_Lanes, Visit_Tracker, ...) are kept hidden.
+ */
+var ALL_TAB = 'All_Data';
+var ALL_LANE_COLS = ['Lane', 'Origin Zone', 'Origin', 'Destination Zone', 'Destination', 'Delivery Point', 'Lane (From > To)',
+  'Suggested Price (Field Rep)', 'Origin MT / month', 'Frequency', 'Note', 'RM Decision', 'RM Rate', 'HO Decision', 'HO Approved Rate', 'Final Rate', 'Lane Status'];
+var HIDDEN_TABS = ['Web_Responses', CL_TAB, TRACKER_TAB, 'Mail_Log', 'Form_Config', 'Settings', 'Zone_Emails', 'Master_Cache'];
+
+function rebuildAllData_(ss) {
+  var wr = ss.getSheetByName('Web_Responses');
+  var sh = ss.getSheetByName(ALL_TAB) || ss.insertSheet(ALL_TAB, 0);
+  var wv = wr && wr.getLastRow() > 0 ? wr.getRange(1, 1, wr.getLastRow(), Math.max(wr.getLastColumn(), 2)).getValues() : [['Submitted At', 'Visit ID']];
+  var notes = wr ? wr.getRange(1, 1, 1, wv[0].length).getNotes()[0] : [];
+  var flowsId = (readConfig_(ss).filter(function (f) { return f.type === 'flows'; })[0] || {}).id;
+  var qCols = [], sysCols = [], stageCol = -1;
+  wv[0].forEach(function (h, j) {
+    if (j < 2) return;
+    var n = String(notes[j] || '');
+    if (n === 'fid:' + flowsId || /\(removed\)$/.test(String(h))) return;
+    if (n === 'sys:Stage') { stageCol = j; return; }
+    (/^sys:/.test(n) ? sysCols : qCols).push(j);
+  });
+  // lanes by Visit ID
+  var lanes = {}, cl = ss.getSheetByName(CL_TAB);
+  if (cl && cl.getLastRow() > 1) {
+    var lv = cl.getDataRange().getValues(), lh = lv[0], vid = lh.indexOf('Visit ID');
+    lv.slice(1).forEach(function (r) { var id = String(r[vid]); (lanes[id] = lanes[id] || []).push(r); });
+    var lix = ALL_LANE_COLS.map(function (c) { return lh.indexOf(c); });
+  }
+  var due = {};
+  trackerRows_(ss).forEach(function (t) { due[String(t['Visit ID'])] = t['Due By']; });
+
+  var head = ['Submitted At', 'Visit ID', 'Stage', 'Due By'].concat(qCols.map(function (j) { return wv[0][j]; }), ALL_LANE_COLS, sysCols.map(function (j) { return wv[0][j]; }));
+  var rows = [];
+  wv.slice(1).forEach(function (r) {
+    var id = String(r[1] || ''); if (!id) return;
+    var base = [r[0], id, stageCol >= 0 ? r[stageCol] : '', due[id] || ''].concat(qCols.map(function (j) { return r[j]; }));
+    var tail = sysCols.map(function (j) { return r[j]; });
+    var ls = lanes[id] || [null];
+    ls.forEach(function (l) { rows.push(base.concat(ALL_LANE_COLS.map(function (c, k) { return l && lix[k] >= 0 ? l[lix[k]] : ''; }), tail)); });
+  });
+  sh.clear();
+  if (sh.getMaxColumns() < head.length) sh.insertColumnsAfter(sh.getMaxColumns(), head.length - sh.getMaxColumns());
+  sh.getRange(1, 1, 1, head.length).setValues([head]).setFontWeight('bold').setBackground('#2a3273').setFontColor('#ffffff').setWrap(true);
+  var laneStart = 5 + qCols.length;
+  sh.getRange(1, laneStart, 1, ALL_LANE_COLS.length).setBackground('#e9622b');
+  if (sysCols.length) sh.getRange(1, laneStart + ALL_LANE_COLS.length, 1, sysCols.length).setBackground('#c62f3b');
+  if (rows.length) sh.getRange(2, 1, rows.length, head.length).setValues(rows);
+  sh.setFrozenRows(1); sh.setFrozenColumns(2);
+  if (sh.getFilter()) sh.getFilter().remove();
+  sh.getRange(1, 1, Math.max(rows.length + 1, 2), head.length).createFilter();
+  // one visible tab
+  if (sh.isSheetHidden()) sh.showSheet();
+  HIDDEN_TABS.forEach(function (n) { var t = ss.getSheetByName(n); if (t && !t.isSheetHidden()) t.hideSheet(); });
+}
+
+/** Never lets the All_Data refresh break a submit or an approval. */
+function refreshAllData_(ss) {
+  try { rebuildAllData_(ss); } catch (err) { try { mailLog_(ss).appendRow([new Date(), 'All_Data refresh', '', '', 'FAILED: ' + err.message]); } catch (e) {} }
+}
+
 /* ------------------------------------------------------------ entries */
 
 /** Admin "Entries": every visit in Web_Responses with its stage from Visit_Tracker. */
@@ -1255,6 +1326,7 @@ function adminDeleteVisits(pin, ids) {
         else sh.deleteRow(i + 2);
       }
     });
+    refreshAllData_(ss);
     mailLog_(ss).appendRow([new Date(), 'ADMIN', '', '', all ? 'Deleted ALL entries (' + n + ' rows)' : 'Deleted ' + Object.keys(want).join(', ') + ' (' + n + ' rows)']);
   } finally {
     lock.releaseLock();
