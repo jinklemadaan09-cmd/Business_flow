@@ -1,19 +1,19 @@
-# Every push to main that changes new-sheet/ sends the code straight to the Apps Script
-# project bound to the new Google Sheet. No copy-paste in the Apps Script editor.
-# Run by hand: GitHub > Actions > "New sheet: deploy" > Run workflow
+# Every push to main that changes scot-cross-sell/ sends the code straight to the Apps Script
+# project bound to the SCOT MeCA Google Sheet. No copy-paste in the Apps Script editor.
+# Run by hand: GitHub > Actions > "SCOT cross sell: deploy" > Run workflow
 #   mode push = repo code > Apps Script (same as a push to main)
-#   mode pull = Apps Script > repo (saves code written in the editor into new-sheet/)
+#   mode pull = Apps Script > repo (saves code written in the editor into scot-cross-sell/)
 
-name: "New sheet: deploy"
+name: "SCOT cross sell: deploy"
 
 on:
   push:
     branches: [main]
     paths:
-      - "new-sheet/*.gs"
-      - "new-sheet/*.html"
+      - "scot-cross-sell/*.gs"
+      - "scot-cross-sell/*.html"
       - "tools/merge-apps-script.js"
-      - ".github/workflows/new-sheet-deploy.yml"
+      - ".github/workflows/scot-cross-sell-deploy.yml"
   workflow_dispatch:
     inputs:
       mode:
@@ -26,7 +26,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: new-sheet-deploy
+  group: scot-cross-sell-deploy
   cancel-in-progress: false
 
 env:
@@ -34,7 +34,7 @@ env:
   SCRIPT_ID: "1w219ypvYKC9Xf_eepV7RvxhqShin7Ko-cxBHnzgt9zFWOAbZQFBrUsVQ"
   # Only if this project is published as a web app: Deploy > Manage deployments > Deployment ID
   DEPLOYMENT_ID: ""
-  DIR: new-sheet
+  DIR: scot-cross-sell
   MODE: ${{ github.event.inputs.mode || 'push' }}
 
 jobs:
@@ -78,7 +78,7 @@ jobs:
       - name: Push - put the repo code into the live files (same names, nothing else removed)
         if: env.MODE == 'push'
         env:
-          REPORT: new-sheet/LIVE_PROJECT_FILES.txt
+          REPORT: scot-cross-sell/LIVE_PROJECT_FILES.txt
         run: node tools/merge-apps-script.js "$DIR" "$RUNNER_TEMP/live"
 
       - name: Push - send the code to Apps Script
@@ -100,4 +100,4 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add "$DIR"
           if git diff --cached --quiet; then exit 0; fi
-          git commit -m "New sheet: live Apps Script $MODE [skip ci]" && git push || true
+          git commit -m "SCOT cross sell: live Apps Script $MODE [skip ci]" && git push || true
