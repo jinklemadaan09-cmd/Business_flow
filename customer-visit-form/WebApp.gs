@@ -23,7 +23,7 @@
  *   Mail_Log, Zone_Emails, Settings
  */
 
-var APP_VERSION = 'v3.9 (22 Oct 2026)';   // shown on the form and admin page, to check the deployed version
+var APP_VERSION = 'v3.10 (22 Oct 2026)';   // shown on the form and admin page, to check the deployed version
 var CONFIG_SHEET = 'Form_Config';
 var CONFIG_HEADERS = ['Field_ID', 'Step', 'Order', 'Label', 'Type', 'Required', 'Options', 'Help', 'Active', 'Locked'];
 var STEP_NAMES = ['Customer Visit', 'Monthly Business Potential', 'Material Understanding',

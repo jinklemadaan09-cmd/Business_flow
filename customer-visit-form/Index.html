@@ -197,7 +197,7 @@ var STEPS = BOOT.steps.map(function (name, i) {
     fields: BOOT.fields.filter(function (f) { return f.step === i + 1; }) };
 }).concat([{ tag: 'REVIEW', title: 'Check & submit', short: 'Submit', review: true, fields: [] }]);
 
-var DRAFT_KEY = 'sugamVisitDraft4';
+var DRAFT_KEY = 'sugamVisitDraft5', PROFILE_KEY = 'sugamRepProfile', DRAFT_HOURS = 12;
 var data = {}, flows = [], cur = 0, maxSeen = 0;
 var FREQS = ['Daily', '2-3 times a week', 'Weekly', 'Fortnightly', 'Monthly'];
 
@@ -469,7 +469,9 @@ function submit() {
       document.getElementById('toast').style.display = 'none';
       document.getElementById('doneText').innerHTML = 'Visit ID <b>' + esc(r.id) + '</b> saved to the sheet.<br>' +
         esc(r.status) + '<br>You get a mail with the Head Costing approved rates once both levels approve.';
-      nb.disabled = false;
+      nb.disabled = false; nb.textContent = 'Submit visit';
+      saveProfile();
+      data = blankData(); flows = []; pick = {};
       try { localStorage.removeItem(DRAFT_KEY); } catch (e) {}
       window.scrollTo(0, 0);
     })
@@ -479,8 +481,23 @@ function submit() {
     })
     .submitVisit(payload);
 }
+/** A fresh form: only the rep's own name, Employee ID and email are kept (from the last submit on this phone). */
+function blankData() {
+  var p = {};
+  try { p = JSON.parse(localStorage.getItem(PROFILE_KEY) || '{}') || {}; } catch (e) {}
+  return { repName: p.repName || '', repId: p.repId || '', repEmail: p.repEmail || '', visitDate: new Date().toISOString().slice(0, 10) };
+}
+function saveProfile() {
+  try { localStorage.setItem(PROFILE_KEY, JSON.stringify({ repName: data.repName || '', repId: data.repId || '', repEmail: data.repEmail || '' })); } catch (e) {}
+}
+function clearForm() {
+  if (!confirm('Clear everything on this form and start a new visit?')) return;
+  try { localStorage.removeItem(DRAFT_KEY); } catch (e) {}
+  newVisit();
+  toast('Form cleared');
+}
 function newVisit() {
-  data = { repName: data.repName, repEmail: data.repEmail, visitDate: new Date().toISOString().slice(0, 10) };
+  data = blankData();
   flows = []; pick = {}; cur = 0; maxSeen = 0;
   ['pages', 'stepper', 'bar'].forEach(function (id) { document.getElementById(id).classList.remove('hidden'); });
   document.getElementById('donePage').classList.add('hidden');
@@ -488,13 +505,29 @@ function newVisit() {
 }
 
 // ---- draft kept on this phone -----------------------------------------
-function save() { try { localStorage.setItem(DRAFT_KEY, JSON.stringify({ data: data, flows: flows })); } catch (e) {} }
+function save() { try { localStorage.setItem(DRAFT_KEY, JSON.stringify({ data: data, flows: flows, at: Date.now() })); } catch (e) {} }
 function toast(t) { var el = document.getElementById('toast'); el.textContent = t; el.style.display = 'block'; clearTimeout(toast.t); toast.t = setTimeout(function () { el.style.display = 'none'; }, 3500); }
 
 (function init() {
-  try { var d = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null'); if (d) { data = d.data || {}; flows = d.flows || []; } } catch (e) {}
+  var restored = false;
+  try {
+    ['sugamVisitDraft4', 'sugamVisitDraft3'].forEach(function (k) { localStorage.removeItem(k); });   // drafts from older versions
+    var d = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null');
+    if (d && d.at && Date.now() - d.at < DRAFT_HOURS * 3600000 && (d.flows || []).length + Object.keys(d.data || {}).length > 4) {
+      data = d.data || {}; flows = d.flows || []; restored = true;
+    } else localStorage.removeItem(DRAFT_KEY);
+  } catch (e) {}
+  if (!restored) data = blankData();
   if (!data.visitDate) data.visitDate = new Date().toISOString().slice(0, 10);
   render();
+  var w = document.querySelector('.topbar .wrap');
+  if (w) {
+    var b = document.createElement('button');
+    b.className = 'btn sec'; b.textContent = 'Clear form'; b.onclick = clearForm;
+    b.style.cssText = 'margin-left:auto;padding:6px 12px;font-size:12px';
+    w.appendChild(b);
+  }
+  if (restored) toast('Your unfinished visit was restored. Tap "Clear form" to start fresh.');
 })();
 </script>
 </body>
