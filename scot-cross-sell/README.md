@@ -6,7 +6,9 @@ Bound to the **SCOT MeCA Sugam** Google Sheet (Script ID `1E_CP5PBG3_AnREyMKPOpt
 When an SC writes a name in **"Visit Align to FS (if Yes pls mention name)"** on any `SCOT - <SC>` tab,
 that client row is appended to **field team & SC FMS for cross sell** (only the mapped columns:
 SC name, client, contact, mobile, product, origin, destination, email, avg business, FSR name, FSR email)
-and a mail goes to the FS mail ID in **FS Email ID** (plus any CC).
+and, when mail is ON, a mail goes to the FS mail ID in **FS Email ID** (plus any CC).
+Mail starts **OFF (on hold)**: rows still move and are logged as held. Admin menu **Mail ON / OFF** switches it;
+**Send held mails** sends the ones held while it was off.
 
 - No duplicates: the same SC + client + origin + destination is one FMS row. If the SCOT row changes later
   (for example the FS mail ID is added), the mapped cells of that FMS row are refreshed. The SC's own
