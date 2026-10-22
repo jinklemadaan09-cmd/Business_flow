@@ -5,8 +5,11 @@
  * "field team & SC FMS for cross sell" tab (only the mapped columns) and a mail goes to the FS.
  * Everything is set from two tabs the admin owns: FMS_Settings and FMS_Column_Map.
  * Menu: Cross Sell FMS > Setup (run once), Sync now, Lock settings to admins.
+ * No menu? Open Extensions > Apps Script, pick `setup` in the function list and press Run.
  */
 
+// The SCOT MeCA sheet. Used when the script is not opened from the sheet itself (run from the editor).
+var SHEET_ID = '1kY8FIMft0TzA50v1B25arZzLTIs9_fGOn2WhXIg0BCo';
 var SETTINGS_TAB = 'FMS_Settings';
 var MAP_TAB = 'FMS_Column_Map';
 var LOG_TAB = 'FMS_Log';
@@ -57,7 +60,7 @@ function onOpen() {
 }
 
 function setup() {
-  var ss = SpreadsheetApp.getActive();
+  var ss = ss_();
   ensureSettingsTab_(ss);
   ensureMapTab_(ss);
   ensureLogTab_(ss);
@@ -72,17 +75,17 @@ function setup() {
   var res = sync_({ mail: !firstRun });
   PropertiesService.getDocumentProperties().setProperty('SETUP_DONE', new Date().toISOString());
 
-  SpreadsheetApp.getUi().alert('Cross Sell FMS is ready.\n\n' + summary_(res) +
+  notify_('Cross Sell FMS is ready.\n\n' + summary_(res) +
     (firstRun ? '\n\nFirst run: rows already aligned were moved without mail. New ones will send mail.' : ''));
 }
 
 function syncNow() {
   var res = sync_({ mail: true });
-  SpreadsheetApp.getActive().toast(summary_(res), 'Cross Sell FMS', 8);
+  try { ss_().toast(summary_(res), 'Cross Sell FMS', 8); } catch (e) { console.log(summary_(res)); }
 }
 
 function lockSettings() {
-  var ss = SpreadsheetApp.getActive();
+  var ss = ss_();
   var admins = splitList_(getSettings_().ADMIN_EMAILS);
   var me = Session.getEffectiveUser().getEmail();
   if (me && admins.indexOf(me) < 0) admins.push(me);
@@ -95,7 +98,7 @@ function lockSettings() {
     p.addEditors(admins);
     if (p.canDomainEdit()) p.setDomainEdit(false);
   });
-  SpreadsheetApp.getUi().alert('FMS_ tabs can now be edited only by:\n' + admins.join('\n') +
+  notify_('FMS_ tabs can now be edited only by:\n' + admins.join('\n') +
     '\n\nTo add an admin: add the mail ID in ADMIN_EMAILS, then run this again.');
 }
 
@@ -112,7 +115,7 @@ function timedSync() {
 }
 
 function installTriggers_() {
-  var ss = SpreadsheetApp.getActive();
+  var ss = ss_();
   ScriptApp.getProjectTriggers().forEach(function (t) {
     if (['onEditSync', 'timedSync'].indexOf(t.getHandlerFunction()) >= 0) ScriptApp.deleteTrigger(t);
   });
@@ -134,7 +137,7 @@ function sync_(opt) {
 }
 
 function doSync_(opt) {
-  var ss = SpreadsheetApp.getActive();
+  var ss = ss_();
   var cfg = getSettings_();
   var map = getMap_();
   var res = { added: 0, updated: 0, mailed: 0, errors: [] };
@@ -291,7 +294,7 @@ function sendMail_(cfg, map, vals, mailTo, sc) {
     return '<tr><td style="padding:4px 10px;border:1px solid #ddd;background:#f6f6f6"><b>' + esc_(m.target) +
       '</b></td><td style="padding:4px 10px;border:1px solid #ddd">' + esc_(vals[norm_(m.target)] || '') + '</td></tr>';
   }).join('');
-  var link = SpreadsheetApp.getActive().getUrl();
+  var link = ss_().getUrl();
   var html = '<p>' + esc_(fill(cfg.MAIL_INTRO)) + '</p>' +
     '<table style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:13px">' + rows + '</table>' +
     '<p><a href="' + link + '">Open the Cross Sell FMS sheet</a></p>';
@@ -351,7 +354,7 @@ function ensureLogTab_(ss) {
 function getSettings_() {
   var cfg = {};
   DEFAULT_SETTINGS.forEach(function (d) { cfg[d[0]] = d[1]; });
-  var sh = SpreadsheetApp.getActive().getSheetByName(SETTINGS_TAB);
+  var sh = ss_().getSheetByName(SETTINGS_TAB);
   if (sh && sh.getLastRow() > 1) {
     sh.getRange(2, 1, sh.getLastRow() - 1, 2).getDisplayValues().forEach(function (r) {
       if (r[0]) cfg[String(r[0]).trim()] = String(r[1]).trim();
@@ -361,7 +364,7 @@ function getSettings_() {
 }
 
 function setSetting_(key, value) {
-  var sh = SpreadsheetApp.getActive().getSheetByName(SETTINGS_TAB);
+  var sh = ss_().getSheetByName(SETTINGS_TAB);
   var keys = sh.getRange(2, 1, Math.max(sh.getLastRow() - 1, 1), 1).getValues();
   for (var i = 0; i < keys.length; i++) {
     if (keys[i][0] === key) { sh.getRange(i + 2, 2).setValue(value); return; }
@@ -369,7 +372,7 @@ function setSetting_(key, value) {
 }
 
 function getMap_() {
-  var sh = SpreadsheetApp.getActive().getSheetByName(MAP_TAB);
+  var sh = ss_().getSheetByName(MAP_TAB);
   var rows = sh && sh.getLastRow() > 1 ? sh.getRange(2, 1, sh.getLastRow() - 1, 2).getDisplayValues() : DEFAULT_MAP;
   return rows.filter(function (r) { return String(r[0]).trim() && String(r[1]).trim(); })
     .map(function (r) { return { target: String(r[0]).trim(), source: String(r[1]).trim() }; });
@@ -400,6 +403,15 @@ function writeLog_(ss, log) {
 }
 
 /* ---------- helpers ---------- */
+
+function ss_() {
+  return SpreadsheetApp.getActive() || SpreadsheetApp.openById(SHEET_ID);
+}
+
+// Popup when run from the sheet menu; the execution log when run from the editor.
+function notify_(msg) {
+  try { SpreadsheetApp.getUi().alert(msg); } catch (e) { console.log(msg); }
+}
 
 // Source header row = first row (in the first 15) that has the trigger column.
 function findHeader_(sh, triggerHeader) {
