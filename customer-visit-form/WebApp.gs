@@ -1,7 +1,7 @@
 /**
  * SUGAM GROUP - Customer Visit web app (custom HTML form, admin panel, two-level approval)
  *
- * Lives in the SAME Apps Script project as Code.gs (setup() must have been run there once).
+ * Lives in the SAME Apps Script project as Code.gs (shared helpers).
  * Files in the project: Code.gs, WebApp.gs, Index.html, Admin.html, Approve.html, Tracker.html
  *
  * Deploy > New deployment > Web app > Execute as: Me > Who has access: Anyone.
@@ -23,7 +23,7 @@
  *   Mail_Log, Zone_Emails, Settings
  */
 
-var APP_VERSION = 'v3.10 (22 Oct 2026)';   // shown on the form and admin page, to check the deployed version
+var APP_VERSION = 'v3.11 (22 Oct 2026)';   // shown on the form and admin page, to check the deployed version
 var CONFIG_SHEET = 'Form_Config';
 var CONFIG_HEADERS = ['Field_ID', 'Step', 'Order', 'Label', 'Type', 'Required', 'Options', 'Help', 'Active', 'Locked'];
 var STEP_NAMES = ['Customer Visit', 'Monthly Business Potential', 'Material Understanding',
@@ -1365,14 +1365,24 @@ function customerZones_(ss) {
 
 /** Tabs from earlier versions (old Google Form and old approval flow). The web form does not write to them. */
 var OLD_TABS = ['Visit_Lanes', 'Visit_Lanes_v2', 'Visit_Lanes_v3', 'Visit_Flows', 'Approvals', 'Visit_Summary', 'Masters'];
-function oldTabs_(ss) { return OLD_TABS.filter(function (n) { return ss.getSheetByName(n); }); }
+function oldTabs_(ss) {
+  return ss.getSheets().map(function (sh) { return sh.getName(); })
+    .filter(function (n) { return OLD_TABS.indexOf(n) >= 0 || /^Form Responses \d+$/.test(n); });
+}
 
 /** "Remove old tabs" in Admin. */
 function adminRemoveOldTabs(pin) {
   var ss = responseSheet_();
   checkPin_(ss, pin);
   var gone = oldTabs_(ss);
-  gone.forEach(function (n) { ss.deleteSheet(ss.getSheetByName(n)); });
+  if (!ss.getSheetByName(ALL_TAB)) rebuildAllData_(ss);   // keeps one visible tab
+  // The old Google Form: stop it and unlink it, so its response tab can be deleted
+  var url = ss.getFormUrl();
+  if (url) { var form = FormApp.openByUrl(url); form.setAcceptingResponses(false); form.removeDestination(); SpreadsheetApp.flush(); }
+  gone.forEach(function (n) { var sh = ss.getSheetByName(n); if (sh) ss.deleteSheet(sh); });
+  ScriptApp.getProjectTriggers().forEach(function (tr) {
+    if (['onVisitSubmit', 'onFormSubmit'].indexOf(tr.getHandlerFunction()) >= 0) ScriptApp.deleteTrigger(tr);
+  });
   var out = adminLoad(pin, false);
   out.removed = gone;
   return out;
