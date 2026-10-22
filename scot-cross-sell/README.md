@@ -1,6 +1,6 @@
 # SCOT > Cross Sell FMS (Apps Script)
 
-Bound to the **SCOT MeCA Sugam** Google Sheet (Script ID `1w219ypvYKC9Xf_eepV7RvxhqShin7Ko-cxBHnzgt9zFWOAbZQFBrUsVQ`).
+Bound to the **SCOT MeCA Sugam** Google Sheet (Script ID `1E_CP5PBG3_AnREyMKPOptXkZ2dR-51Ds_DSkOPDz0w6o-jMx-FlQZkC1`).
 
 ## What it does
 When an SC writes a name in **"Visit Align to FS (if Yes pls mention name)"** on any `SCOT - <SC>` tab,

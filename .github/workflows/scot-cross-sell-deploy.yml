@@ -31,7 +31,7 @@ concurrency:
 
 env:
   # Sheet > Extensions > Apps Script > Project Settings > IDs > Script ID
-  SCRIPT_ID: "1w219ypvYKC9Xf_eepV7RvxhqShin7Ko-cxBHnzgt9zFWOAbZQFBrUsVQ"
+  SCRIPT_ID: "1E_CP5PBG3_AnREyMKPOptXkZ2dR-51Ds_DSkOPDz0w6o-jMx-FlQZkC1"
   # Only if this project is published as a web app: Deploy > Manage deployments > Deployment ID
   DEPLOYMENT_ID: ""
   DIR: scot-cross-sell
