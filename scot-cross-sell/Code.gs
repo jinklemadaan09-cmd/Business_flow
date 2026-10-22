@@ -3,8 +3,9 @@
  *
  * When an SC fills "Visit Align to FS (name)" on any SCOT tab, that client row is appended to the
  * "field team & SC FMS for cross sell" tab (only the mapped columns) and a mail goes to the FS.
- * Everything is set from two tabs the admin owns: FMS_Settings and FMS_Column_Map.
- * Menu: Cross Sell FMS > Setup (run once), Sync now, Lock settings to admins.
+ * Everything is set from FMS_Settings and FMS_Column_Map in a separate admin-only spreadsheet
+ * ("Cross Sell FMS - Admin"), so people using the SCOT sheet never see them.
+ * Menu: Cross Sell FMS > Setup (run once), Sync now, Open admin settings, Give admin access.
  * No menu? Open Extensions > Apps Script, pick `setup` in the function list and press Run.
  */
 
@@ -55,15 +56,17 @@ function onOpen() {
     .addItem('Sync now', 'syncNow')
     .addItem('Setup (run once / after settings change)', 'setup')
     .addSeparator()
-    .addItem('Lock settings to admins', 'lockSettings')
+    .addItem('Open admin settings', 'openAdmin')
+    .addItem('Give admin access to ADMIN_EMAILS', 'lockSettings')
     .addToUi();
 }
 
 function setup() {
-  var ss = ss_();
-  ensureSettingsTab_(ss);
-  ensureMapTab_(ss);
-  ensureLogTab_(ss);
+  var adm = admin_(true);
+  ensureSettingsTab_(adm);
+  ensureMapTab_(adm);
+  ensureLogTab_(adm);
+  moveOldAdminTabs_(adm);
 
   var me = Session.getEffectiveUser().getEmail();
   var admins = getSettings_().ADMIN_EMAILS;
@@ -76,7 +79,8 @@ function setup() {
   PropertiesService.getDocumentProperties().setProperty('SETUP_DONE', new Date().toISOString());
 
   notify_('Cross Sell FMS is ready.\n\n' + summary_(res) +
-    (firstRun ? '\n\nFirst run: rows already aligned were moved without mail. New ones will send mail.' : ''));
+    (firstRun ? '\n\nFirst run: rows already aligned were moved without mail. New ones will send mail.' : '') +
+    '\n\nAdmin settings (only admins can open): ' + adm.getUrl());
 }
 
 function syncNow() {
@@ -84,22 +88,28 @@ function syncNow() {
   try { ss_().toast(summary_(res), 'Cross Sell FMS', 8); } catch (e) { console.log(summary_(res)); }
 }
 
+function openAdmin() {
+  var url = admin_().getUrl();
+  var html = HtmlService.createHtmlOutput('<p style="font-family:Arial">Admin settings (only admins can open it):</p>' +
+    '<p><a href="' + url + '" target="_blank" style="font-family:Arial">Open Cross Sell FMS - Admin</a></p>').setWidth(360).setHeight(120);
+  try { SpreadsheetApp.getUi().showModalDialog(html, 'Cross Sell FMS'); } catch (e) { console.log(url); }
+}
+
+// The settings live in a separate spreadsheet, so people using the SCOT sheet never see them.
+// Only ADMIN_EMAILS are editors of it; everyone else is removed.
 function lockSettings() {
-  var ss = ss_();
-  var admins = splitList_(getSettings_().ADMIN_EMAILS);
+  var adm = admin_();
+  var admins = splitList_(getSettings_().ADMIN_EMAILS).filter(isEmail_).map(function (m) { return m.toLowerCase(); });
   var me = Session.getEffectiveUser().getEmail();
-  if (me && admins.indexOf(me) < 0) admins.push(me);
-  [SETTINGS_TAB, MAP_TAB, LOG_TAB].forEach(function (name) {
-    var sh = ss.getSheetByName(name);
-    if (!sh) return;
-    sh.getProtections(SpreadsheetApp.ProtectionType.SHEET).forEach(function (p) { p.remove(); });
-    var p = sh.protect().setDescription('Cross Sell FMS - admins only');
-    p.removeEditors(p.getEditors());
-    p.addEditors(admins);
-    if (p.canDomainEdit()) p.setDomainEdit(false);
+  if (me && admins.indexOf(me.toLowerCase()) < 0) admins.push(me.toLowerCase());
+  var owner = adm.getOwner() ? adm.getOwner().getEmail().toLowerCase() : '';
+  adm.getEditors().concat(adm.getViewers()).forEach(function (u) {
+    var m = u.getEmail().toLowerCase();
+    if (m && m !== owner && admins.indexOf(m) < 0) { adm.removeEditor(m); try { adm.removeViewer(m); } catch (e) {} }
   });
-  notify_('FMS_ tabs can now be edited only by:\n' + admins.join('\n') +
-    '\n\nTo add an admin: add the mail ID in ADMIN_EMAILS, then run this again.');
+  admins.forEach(function (m) { if (m !== owner) adm.addEditor(m); });
+  notify_('Admin settings can be opened only by:\n' + admins.join('\n') +
+    '\n\nTo add or remove an admin: change ADMIN_EMAILS in FMS_Settings, then run this again.');
 }
 
 // Installable trigger (runs as the person who ran Setup, so it can send mail).
@@ -149,7 +159,7 @@ function doSync_(opt) {
   var matchCols = splitList_(cfg.MATCH_COLUMNS).map(norm_).filter(function (h) { return tgt.col[h] != null; });
   var ignore = splitList_(cfg.IGNORE_VALUES).map(norm_);
   var required = [cfg.TRIGGER_COLUMN].concat(splitList_(cfg.REQUIRE_COLUMNS));
-  var log = readLog_(ss);
+  var log = readLog_(admin_());
 
   var sources = opt.sheet ? [opt.sheet] : ss.getSheets().filter(function (s) {
     return matchesAny_(s.getName(), splitList_(cfg.SOURCE_TABS));
@@ -211,7 +221,7 @@ function doSync_(opt) {
     });
   });
 
-  writeLog_(ss, log);
+  writeLog_(admin_(), log);
   return res;
 }
 
@@ -354,7 +364,8 @@ function ensureLogTab_(ss) {
 function getSettings_() {
   var cfg = {};
   DEFAULT_SETTINGS.forEach(function (d) { cfg[d[0]] = d[1]; });
-  var sh = ss_().getSheetByName(SETTINGS_TAB);
+  var adm = admin_();
+  var sh = adm && adm.getSheetByName(SETTINGS_TAB);
   if (sh && sh.getLastRow() > 1) {
     sh.getRange(2, 1, sh.getLastRow() - 1, 2).getDisplayValues().forEach(function (r) {
       if (r[0]) cfg[String(r[0]).trim()] = String(r[1]).trim();
@@ -364,7 +375,7 @@ function getSettings_() {
 }
 
 function setSetting_(key, value) {
-  var sh = ss_().getSheetByName(SETTINGS_TAB);
+  var sh = admin_().getSheetByName(SETTINGS_TAB);
   var keys = sh.getRange(2, 1, Math.max(sh.getLastRow() - 1, 1), 1).getValues();
   for (var i = 0; i < keys.length; i++) {
     if (keys[i][0] === key) { sh.getRange(i + 2, 2).setValue(value); return; }
@@ -372,7 +383,8 @@ function setSetting_(key, value) {
 }
 
 function getMap_() {
-  var sh = ss_().getSheetByName(MAP_TAB);
+  var adm = admin_();
+  var sh = adm && adm.getSheetByName(MAP_TAB);
   var rows = sh && sh.getLastRow() > 1 ? sh.getRange(2, 1, sh.getLastRow() - 1, 2).getDisplayValues() : DEFAULT_MAP;
   return rows.filter(function (r) { return String(r[0]).trim() && String(r[1]).trim(); })
     .map(function (r) { return { target: String(r[0]).trim(), source: String(r[1]).trim() }; });
@@ -403,6 +415,39 @@ function writeLog_(ss, log) {
 }
 
 /* ---------- helpers ---------- */
+
+// Admin spreadsheet (settings, column map, log). Created by Setup in the Drive of the person who runs it.
+var adminCache_ = null;
+function admin_(create) {
+  if (adminCache_) return adminCache_;
+  var props = PropertiesService.getDocumentProperties();
+  var id = props.getProperty('ADMIN_SHEET_ID');
+  if (id) {
+    try { return (adminCache_ = SpreadsheetApp.openById(id)); } catch (e) { if (!create) throw e; }
+  }
+  if (!create) return null;
+  adminCache_ = SpreadsheetApp.create('Cross Sell FMS - Admin (' + ss_().getName() + ')');
+  props.setProperty('ADMIN_SHEET_ID', adminCache_.getId());
+  return adminCache_;
+}
+
+// Earlier versions kept the FMS_ tabs inside the SCOT sheet: copy them over once and delete them there.
+function moveOldAdminTabs_(adm) {
+  var ss = ss_();
+  [SETTINGS_TAB, MAP_TAB, LOG_TAB].forEach(function (name) {
+    var old = ss.getSheetByName(name);
+    if (!old) return;
+    var to = adm.getSheetByName(name);
+    if (old.getLastRow() > 0) {
+      var v = old.getRange(1, 1, old.getLastRow(), old.getLastColumn()).getValues();
+      to.clear();
+      to.getRange(1, 1, v.length, v[0].length).setValues(v);
+    }
+    ss.deleteSheet(old);
+  });
+  var blank = adm.getSheetByName('Sheet1');
+  if (blank && adm.getSheets().length > 1) adm.deleteSheet(blank);
+}
 
 function ss_() {
   return SpreadsheetApp.getActive() || SpreadsheetApp.openById(SHEET_ID);

@@ -15,7 +15,10 @@ and a mail goes to the FS mail ID in **FS Email ID** (plus any CC).
 - Runs on every edit, plus a background sync every 15 minutes for pasted or formula values.
 - A new `SCOT - <name>` tab is picked up automatically.
 
-## Admin (everything is changeable from the sheet, no code)
+## Admin (everything is changeable without code, and hidden from everyone else)
+Setup creates a separate spreadsheet **"Cross Sell FMS - Admin"** in the Drive of the person who runs it.
+Only the mail IDs in `ADMIN_EMAILS` can open it, so SCs and other users of the SCOT sheet never see these tabs.
+
 | Tab | What |
 |---|---|
 | `FMS_Settings` | Source tabs, target tab, trigger column, values that do not count as a name, extra required columns, duplicate check columns, mail on/off, CC, SC mail IDs, mail subject and first line, sync interval, admin mail IDs |
@@ -23,13 +26,13 @@ and a mail goes to the FS mail ID in **FS Email ID** (plus any CC).
 | `FMS_Log` | One line per moved row: SCOT tab and row, FS name, when moved, when mailed |
 
 Menu **Cross Sell FMS**: **Setup** (run once, and again after changing the sync interval), **Sync now**,
-**Lock settings to admins** (only `ADMIN_EMAILS` can edit the FMS_ tabs).
+**Open admin settings**, **Give admin access to ADMIN_EMAILS** (shares the admin spreadsheet with exactly those people).
 
 ## First time
 1. Merge to `main`: GitHub pushes `Code.gs` into the sheet's Apps Script.
 2. Reload the sheet, then **Cross Sell FMS > Setup** and allow the permissions once.
    Rows already aligned are moved without mail; only new ones send mail.
-3. **Cross Sell FMS > Lock settings to admins**.
+3. To add another admin: put the mail ID in `ADMIN_EMAILS`, then **Cross Sell FMS > Give admin access to ADMIN_EMAILS**.
 
 ## Deploy
 Every push to `main` that changes this folder sends the code to Apps Script
