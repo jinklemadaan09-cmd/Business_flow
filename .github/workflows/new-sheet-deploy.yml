@@ -1,0 +1,103 @@
+# Every push to main that changes new-sheet/ sends the code straight to the Apps Script
+# project bound to the new Google Sheet. No copy-paste in the Apps Script editor.
+# Run by hand: GitHub > Actions > "New sheet: deploy" > Run workflow
+#   mode push = repo code > Apps Script (same as a push to main)
+#   mode pull = Apps Script > repo (saves code written in the editor into new-sheet/)
+
+name: "New sheet: deploy"
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "new-sheet/*.gs"
+      - "new-sheet/*.html"
+      - "tools/merge-apps-script.js"
+      - ".github/workflows/new-sheet-deploy.yml"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "push = repo to Apps Script, pull = Apps Script to repo"
+        type: choice
+        options: [push, pull]
+        default: push
+
+permissions:
+  contents: write
+
+concurrency:
+  group: new-sheet-deploy
+  cancel-in-progress: false
+
+env:
+  # Sheet > Extensions > Apps Script > Project Settings > IDs > Script ID
+  SCRIPT_ID: "1w219ypvYKC9Xf_eepV7RvxhqShin7Ko-cxBHnzgt9zFWOAbZQFBrUsVQ"
+  # Only if this project is published as a web app: Deploy > Manage deployments > Deployment ID
+  DEPLOYMENT_ID: ""
+  DIR: new-sheet
+  MODE: ${{ github.event.inputs.mode || 'push' }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install clasp
+        run: npm install -g @google/clasp@3
+
+      - name: Load Google login (secret)
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          if [ -z "$CLASPRC_JSON" ]; then echo "::error::Secret CLASPRC_JSON is missing (Settings > Secrets and variables > Actions)"; exit 1; fi
+          printf '%s' "$CLASPRC_JSON" > ~/.clasprc.json
+          node -e "JSON.parse(require('fs').readFileSync(process.env.HOME+'/.clasprc.json','utf8'))" \
+            || { echo "::error::CLASPRC_JSON is not valid JSON. Paste the CONTENT of .clasprc.json (it starts with {)."; exit 1; }
+
+      - name: Copy the live project
+        run: |
+          mkdir -p "$RUNNER_TEMP/live" && cd "$RUNNER_TEMP/live"
+          clasp clone "$SCRIPT_ID" \
+            || { echo "::error::Could not open the Apps Script project. The Google account in CLASPRC_JSON needs Editor access to the sheet."; exit 1; }
+          echo "Live files:"; ls -1
+
+      - name: Pull - save the live code into the repo
+        if: env.MODE == 'pull'
+        run: |
+          for f in "$RUNNER_TEMP"/live/*.js "$RUNNER_TEMP"/live/*.gs "$RUNNER_TEMP"/live/*.html; do
+            [ -f "$f" ] || continue
+            b=$(basename "$f"); case "$b" in *.js) b="${b%.js}.gs";; esac
+            cp "$f" "$DIR/$b"; echo "$b"
+          done
+
+      - name: Push - put the repo code into the live files (same names, nothing else removed)
+        if: env.MODE == 'push'
+        env:
+          REPORT: new-sheet/LIVE_PROJECT_FILES.txt
+        run: node tools/merge-apps-script.js "$DIR" "$RUNNER_TEMP/live"
+
+      - name: Push - send the code to Apps Script
+        if: env.MODE == 'push'
+        working-directory: ${{ runner.temp }}/live
+        run: |
+          clasp push --force
+          if [ -n "$DEPLOYMENT_ID" ]; then
+            NOTE="GitHub $(echo $GITHUB_SHA | cut -c1-7)"
+            VER=$(clasp create-version "$NOTE" 2>&1 | grep -o '[0-9]\+' | tail -1)
+            echo "::notice::Web app now on Apps Script version $VER ($NOTE)"
+            clasp update-deployment "$DEPLOYMENT_ID" --versionNumber "$VER" --description "$NOTE" \
+              || clasp deploy --deploymentId "$DEPLOYMENT_ID" --versionNumber "$VER" --description "$NOTE"
+          fi
+
+      - name: Save changes in the repo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$DIR"
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "New sheet: live Apps Script $MODE [skip ci]" && git push || true
