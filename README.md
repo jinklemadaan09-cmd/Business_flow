@@ -4,6 +4,7 @@
 |---|---|
 | `customer-visit-form/` | Customer onboarding web app on Google Apps Script: field rep form (journey steps 01-05, one origin to many destinations with a suggested price per lane), two-level approval (Regional Manager, then Head Costing) per lane, HO approved rates back to the field rep for the customer outcome, Head Costing tracker with stage filters, digest mails at 2:00 pm and 5:00 pm, admin panel. Places come from the GR PNL data master. See `SETUP_STEPS.md`. |
 | `scot-cross-sell/` | SCOT MeCA sheet: rows aligned to a field FS move to the Cross Sell FMS tab and the FS gets a mail; admin settings in the sheet. Deployed from GitHub on every push to main. |
+| `gr-pnl-engine/` | GR PNL Engine add-on: every finished half-year of the master is archived in Drive (sheet + JSON, verified), rebuilt with an old vs new mail when old data changes, the `DASHBOARD_MASTER` mirror keeps 6 months, and a mail at 70% of the 10M cell limit. See its README. |
 | `sugam-journey/` | Customer journey flowchart (visit to collection, 12 steps). |
 | `lanes/` | Lane master: origin branches, destinations, lane targets. |
 | `main.py` | Email classifier experiment (agree / disagree / review). |
