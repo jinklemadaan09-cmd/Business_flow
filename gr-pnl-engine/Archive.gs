@@ -28,19 +28,19 @@ var GRA_CHUNK_ROWS = 4000;
 var GRA_STATE_KEY = 'GRA_BUILD_STATE';
 
 var GRA_DEFAULTS = [
-  ['ARCHIVE_ON', 'YES', 'YES = build archives and trim the mirror. NO = check and report only (dry run), nothing changes.'],
-  ['KEEP_MONTHS', '6', 'Months kept in the mirror tab, including this month. Older rows are removed only after their archive is verified.'],
+  ['ARCHIVE_ON', 'YES', 'YES = archives are built and the mirror tab is trimmed. NO = check and report only (dry run), nothing is changed.'],
+  ['KEEP_MONTHS', '6', 'How many months to keep in the mirror tab (including the current month). Older rows are removed only after their archive is verified.'],
   ['MIRROR_TAB', '', 'Mirror tab name. Blank = the engine one (MIRROR_SHEET_NAME, DASHBOARD_MASTER).'],
-  ['MIRROR_SHEET', '', 'Mirror spreadsheet link or ID. Blank = the engine one (Config.gs MIRROR_FILE_ID).'],
-  ['DATE_COLUMN', 'GR DT', 'Date column (decides the half-year of each row)'],
+  ['MIRROR_SHEET', '', 'Mirror spreadsheet link / ID. Blank = the engine one (Config.gs MIRROR_FILE_ID).'],
+  ['DATE_COLUMN', 'GR DT', 'Date column (the half-year is taken from it)'],
   ['KEY_COLUMN', 'GR NO', 'Unique key of each row'],
-  ['SUM_COLUMNS', 'TOTAL FREIGHT, TOTAL EXPENSE, CWEIGHT, AWEIGHT, BASIC FREIGHT', 'Columns whose totals (old vs new) are shown in the change mail'],
-  ['ARCHIVE_FOLDER_ID', '', 'Drive folder ID for archives. Blank = a GR_ARCHIVE folder is created next to this spreadsheet.'],
-  ['KEEP_OLD_DAYS', '90', 'Days an old archive version is kept in GR_ARCHIVE/old'],
-  ['WARN_PCT', '70', 'Send a warning mail when cell usage reaches this %'],
-  ['URGENT_PCT', '85', 'Send an URGENT mail when cell usage reaches this %'],
+  ['SUM_COLUMNS', 'TOTAL FREIGHT, TOTAL EXPENSE, CWEIGHT, AWEIGHT, BASIC FREIGHT', 'The change mail shows the old vs new total of these columns'],
+  ['ARCHIVE_FOLDER_ID', '', 'Drive folder ID for the archive. Blank = a GR_ARCHIVE folder is created next to this spreadsheet.'],
+  ['KEEP_OLD_DAYS', '90', 'How many days an old archive version stays in GR_ARCHIVE/old'],
+  ['WARN_PCT', '70', 'Send a warning mail when the sheet is this % full (cells)'],
+  ['URGENT_PCT', '85', 'Send an URGENT mail when the sheet is this % full (cells)'],
   ['ALERT_EMAILS', '', 'Who gets the mails (comma separated). Blank = script owner.'],
-  ['RUN_HOUR', '2', 'Hour of the nightly run (0-23). Run Setup again after changing it.'],
+  ['RUN_HOUR', '2', 'Hour of the daily run (0-23). After changing it, run GRA_setup again.'],
   ['ARCHIVE_MAX_CELLS', '9000000', 'Max cells in one archive sheet; above this a Part 2 is created']
 ];
 
@@ -124,7 +124,7 @@ function GRA_run_(dry) {
       if (!dry) GRA_purgeOld_(s);
     } else {
       GRA_scheduleContinue_();
-      notes.push('Time limit reached, continues automatically in 1 minute');
+      notes.push('Time limit reached, continues by itself in 1 min');
     }
     GRA_log_(ss, dry ? 'DRY RUN' : 'RUN', notes.filter(String).join(' | '), Math.round((Date.now() - t0) / 1000) + ' s');
   } catch (err) {
@@ -156,9 +156,9 @@ function GRA_checkSize_(ss, s) {
   if (worst.pct >= warn) {
     var lvl = worst.pct >= urgent ? 'URGENT' : 'Warning';
     GRA_mail_(s, 'GR sheet ' + lvl + ': ' + worst.pct.toFixed(1) + '% full',
-      '<p><b>' + GRA_esc_(worst.name) + '</b> uses ' + GRA_fmt_(worst.cells) + ' cells, <b>' +
-      worst.pct.toFixed(1) + '%</b> of the Google Sheets limit of 10,000,000. Largest tab: ' + GRA_esc_(worst.biggest) + '.</p>' +
-      '<p>The archive moves old half-years out automatically. If this mail keeps coming every day, lower KEEP_MONTHS in ARCHIVE_SETTINGS or check the engine mirror hook.</p>' +
+      '<p><b>' + GRA_esc_(worst.name) + '</b> has ' + GRA_fmt_(worst.cells) + ' cells, <b>' +
+      worst.pct.toFixed(1) + '%</b> of the Google limit of 10,000,000. Largest tab: ' + GRA_esc_(worst.biggest) + '.</p>' +
+      '<p>The archive removes old half-years by itself. If this mail comes every day, lower KEEP_MONTHS in ARCHIVE_SETTINGS or check the engine mirror hook.</p>' +
       '<p><a href="' + worst.url + '">Open the sheet</a></p>');
   }
   return parts.join('; ');
@@ -335,11 +335,11 @@ function GRA_buildHalf_(ss, s, master, h, fp, oldFp, t0) {
     var want = h.rows.slice(q * st.perPart, (q + 1) * st.perPart);
     var vs = SpreadsheetApp.openById(st.fileIds[q]).getSheets()[0];
     var got = vs.getLastRow() - 1;
-    if (got !== want.length) return GRA_failBuild_(ss, s, h, st, 'Part ' + (q + 1) + ': ' + got + ' rows, chahiye ' + want.length);
+    if (got !== want.length) return GRA_failBuild_(ss, s, h, st, 'Part ' + (q + 1) + ': ' + got + ' rows, expected ' + want.length);
     var kv = vs.getRange(2, ki + 1, got, 1).getValues(), dv = vs.getRange(2, di + 1, got, 1).getValues();
     for (var r = 0; r < got; r++) {
       if (GRA_norm_(kv[r][0]) !== GRA_norm_(want[r][ki]) || GRA_iso_(dv[r][0]) !== GRA_iso_(want[r][di])) {
-        return GRA_failBuild_(ss, s, h, st, 'Part ' + (q + 1) + ' row ' + (r + 2) + ' did not match');
+        return GRA_failBuild_(ss, s, h, st, 'Part ' + (q + 1) + ' row ' + (r + 2) + ' does not match');
       }
     }
   }
@@ -381,8 +381,8 @@ function GRA_buildHalf_(ss, s, master, h, fp, oldFp, t0) {
 function GRA_failBuild_(ss, s, h, st, why) {
   st.fileIds.forEach(function (id) { try { DriveApp.getFileById(id).setTrashed(true); } catch (e) {} });
   PropertiesService.getScriptProperties().deleteProperty(GRA_STATE_KEY);
-  GRA_mail_(s, 'GR Archive: ' + h.label + ' verification failed', '<p>The archive copy did not pass the check: ' + GRA_esc_(why) +
-    '.</p><p>Nothing was deleted and the mirror tab is unchanged. It will try again tomorrow night.</p>');
+  GRA_mail_(s, 'GR Archive: ' + h.label + ' verify fail', '<p>The archive copy failed the check: ' + GRA_esc_(why) +
+    '.</p><p>Nothing was deleted and the mirror tab is unchanged. It will retry next night.</p>');
   throw new Error('Verify failed for ' + h.key + ': ' + why);
 }
 
@@ -429,11 +429,11 @@ function GRA_reportChange_(ss, s, h, d, oldFp, fp, urls) {
   if (!oldFp) {
     lines.push('First archive created: ' + GRA_fmt_(fp.rows) + ' rows.');
   } else {
-    if (d.files.length) why.push('files re-read: ' + d.files.slice(0, 8).join(', ') + (d.files.length > 8 ? ' +' + (d.files.length - 8) : ''));
+    if (d.files.length) why.push('files read again: ' + d.files.slice(0, 8).join(', ') + (d.files.length > 8 ? ' +' + (d.files.length - 8) : ''));
     if (d.configChanged) why.push('engine config (SOURCE / COLUMN / JOIN_CONFIG) changed');
     if (d.newCols.length) why.push('new columns: ' + d.newCols.join(', '));
     lines.push('Rows ' + GRA_fmt_(oldFp.rows) + ' → ' + GRA_fmt_(fp.rows) + ' (' + GRA_signed_(fp.rows - oldFp.rows) + ')' +
-               ' · GRs added ' + GRA_fmt_(d.added) + ' · GRs removed ' + GRA_fmt_(d.removed) + ' · GRs changed ' + GRA_fmt_(d.changed));
+               ' · new GRs ' + GRA_fmt_(d.added) + ' · removed GRs ' + GRA_fmt_(d.removed) + ' · changed GRs ' + GRA_fmt_(d.changed));
     if (d.goneCols.length) lines.push('Removed columns: ' + d.goneCols.join(', '));
     if (d.cols.length) lines.push('Most changed columns: ' + d.cols.join(', '));
     Object.keys(fp.sums).forEach(function (c) {
@@ -442,15 +442,15 @@ function GRA_reportChange_(ss, s, h, d, oldFp, fp, urls) {
       if (Math.abs(a - b) > 0.005) lines.push(c + ': ' + GRA_fmt_(a) + ' → ' + GRA_fmt_(b) + ' (' + GRA_signed_(b - a) + ')');
     });
   }
-  var title = h.label + (oldFp ? ' archive rebuilt' : ' archive created');
+  var title = h.label + (oldFp ? ' rebuilt' : ' archive created');
   var sh = ss.getSheetByName(GRA_TAB.changes);
   sh.appendRow([new Date(), h.key, title, why.join('; '), lines.join('\n'), urls.join('\n')]);
   GRA_mail_(s, 'GR Archive: ' + title,
-    '<p><b>' + GRA_esc_(title) + '</b>' + (why.length ? '<br>Reason: ' + GRA_esc_(why.join('; ')) : '') + '</p><ul>' +
+    '<p><b>' + GRA_esc_(title) + '</b>' + (why.length ? '<br>Why: ' + GRA_esc_(why.join('; ')) : '') + '</p><ul>' +
     lines.map(function (l) { return '<li>' + GRA_esc_(l) + '</li>'; }).join('') + '</ul>' +
     '<p>' + urls.map(function (u, i) { return '<a href="' + u + '">Archive sheet' + (urls.length > 1 ? ' part ' + (i + 1) : '') + '</a>'; }).join(' · ') +
-    (oldFp ? ' · the previous version stays in GR_ARCHIVE/old for ' + (s.KEEP_OLD_DAYS || 90) + ' days' : '') + '</p>' +
-    '<p>The dashboard is not affected: it reads the full engine data.</p>');
+    (oldFp ? ' · the old version stays in GR_ARCHIVE/old for ' + (s.KEEP_OLD_DAYS || 90) + ' days' : '') + '</p>' +
+    '<p>No effect on the dashboard: it reads the full engine data.</p>');
 }
 
 /** Files the engine re-read after a time (from PROCESS_LOG). */
@@ -481,7 +481,7 @@ function GRA_configHash_() {
 
 function GRA_trimMirror_(ss, s, dry) {
   var sh = GRA_mirrorSheet_(ss, s);
-  if (!sh || sh.getLastRow() < 2) return 'Mirror tab empty or not found';
+  if (!sh || sh.getLastRow() < 2) return 'Mirror tab empty / not found';
   var head = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(String);
   var di = GRA_col_(head, s.DATE_COLUMN), ki = GRA_col_(head, s.KEY_COLUMN);
   if (di < 0 || ki < 0) return 'Mirror: ' + s.DATE_COLUMN + ' / ' + s.KEY_COLUMN + ' not found, trim skipped';
@@ -496,12 +496,12 @@ function GRA_trimMirror_(ss, s, dry) {
     if (keySets[hk] && keySets[hk][GRA_norm_(keys[r][0])]) drop.push(r + 2); else notArchived++;
   }
   var refill = dry ? false : GRA_noteRefill_(cutoff, drop.length);
-  var msg = 'Mirror: ' + GRA_fmt_(drop.length) + ' rows older than ' + cutoff + (dry ? ' would be removed' : ' removed') +
-            (notArchived ? ', ' + GRA_fmt_(notArchived) + ' older rows kept because they are not in an archive yet' : '');
+  var msg = 'Mirror: ' + GRA_fmt_(drop.length) + ' rows older than ' + cutoff + (dry ? ' will be removed' : ' removed') +
+            (notArchived ? ', ' + GRA_fmt_(notArchived) + ' older rows kept because they are not in an archive' : '');
   if (refill) {
-    msg += ' | ENGINE IS REFILLING THE MIRROR: add the GRA_mirrorFilter hook in the engine';
-    GRA_mail_(s, 'GR Archive: engine is refilling the mirror',
-      '<p>Old rows removed from the mirror tab were written back by an engine refresh. Add <code>rows = GRA_mirrorFilter(headers, rows)</code> in the engine code that writes the mirror.</p>');
+    msg += ' | ENGINE IS REFILLING THE MIRROR: add the GRA_mirrorFilter hook to the engine';
+    GRA_mail_(s, 'GR Archive: the mirror is being refilled',
+      '<p>Old rows that were removed from the mirror tab were written back by the engine refresh. Add <code>rows = GRA_mirrorFilter(headers, rows)</code> to the engine code that writes the mirror.</p>');
   }
   if (dry || !drop.length) return msg;
   // delete contiguous runs from the bottom up
@@ -630,12 +630,13 @@ function GRA_ensureTabs_(ss) {
   };
   var st = make(GRA_TAB.settings, ['Setting', 'Value', 'Meaning'], [170, 220, 560]);
   var have = st.getLastRow() > 1 ? st.getRange(2, 1, st.getLastRow() - 1, 1).getValues().map(function (r) { return String(r[0]); }) : [];
-  GRA_DEFAULTS.forEach(function (d) {
-    var i = have.indexOf(d[0]);
-    if (i < 0) st.appendRow(d);
-    else if (String(st.getRange(i + 2, 3).getValue()) !== d[2]) st.getRange(i + 2, 3).setValue(d[2]);   // keep notes in English
-  });
-  if (String(st.getRange(1, 3).getValue()) !== 'Meaning') st.getRange(1, 3).setValue('Meaning');
+  GRA_DEFAULTS.forEach(function (d) { if (have.indexOf(d[0]) < 0) st.appendRow(d); });
+  // keep the header and the Meaning column in English (values the owner typed are not touched)
+  st.getRange(1, 3).setValue('Meaning');
+  if (st.getLastRow() > 1) {
+    var keys = st.getRange(2, 1, st.getLastRow() - 1, 1).getValues();
+    keys.forEach(function (r, i) { var d = GRA_DEFAULTS.filter(function (x) { return x[0] === String(r[0]); })[0]; if (d) st.getRange(i + 2, 3).setValue(d[2]); });
+  }
   make(GRA_TAB.log, ['When', 'Type', 'What happened', 'Time taken'], [150, 80, 760, 90]);
   make(GRA_TAB.changes, ['When', 'Half-year', 'What', 'Why', 'Old vs new', 'Archive link'], [150, 110, 240, 320, 520, 300]);
   make(GRA_TAB.files, ['Half-year', 'Label', 'Part', 'File ID', 'Link', 'Rows', 'Built at', 'Status'], [110, 230, 90, 120, 300, 80, 150, 160]);
