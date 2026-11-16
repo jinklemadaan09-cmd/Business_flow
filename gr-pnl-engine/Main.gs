@@ -36,6 +36,7 @@ function onOpen() {
     .addItem('Auto-refresh ON (every ' + (Number(SETTINGS.AUTO_REFRESH_HOURS) || 3) + ' hours)', 'autoRefreshOn')
     .addItem('Auto-refresh OFF (manual only)', 'autoRefreshOff')
     .addSubMenu(GRA_menu_(SpreadsheetApp.getUi()))
+    .addSubMenu(CA_menu_(SpreadsheetApp.getUi()))
     .addToUi();
 }
 
