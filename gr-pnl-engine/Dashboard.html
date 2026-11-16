@@ -2423,7 +2423,7 @@ const METRIC_DEFS = [
   ['Avg Monthly Sales','SUM(Total Freight) ÷ Active Months','Average sales per month, counting only the months in which the row had sales.','Total Freight','Active Months','₹'],
   ['No. of Consignments per Month','GR Count ÷ Active Months','Average consignments (GRs) per month, over the same active months as Avg Monthly Sales.','GR Count','Active Months','GRs'],
   ['Rate Type','RATETYPE column: TARIFF / CONTRACTUAL / UNSCHEDULED','A GR with a blank rate type is UNSCHEDULED — its own group, not counted as Tariff.','—','—','tag'],
-  ['Cross Sell','Active party + a destination zone / destination branch / load type (FTL ↔ PTL) / destination country not used in the previous N months','The party gave business in the previous N months (so it is not NBD), but this GR goes to a destination zone, destination branch, load type or destination country (DESTINATION COUNTRY column, used as it is; a blank value is not checked) that the party did not use in those N months. The destination is judged at the Check within level: Pan India / Zone → new destination zone, Circle → new destination circle, Branch → new destination branch (FTL ↔ LTL and country at every level). Every GR is NBD or RBD; Cross Sell is the part of RBD where the party started something new, so it is checked only after the NBD window ends. N = NBD gap setting.','—','—','tag'],
+  ['Cross Sell','RBD party + a destination zone / circle / branch, load type (FTL ↔ LTL) or destination country not used in the previous N months','The party gave business in the previous N months (so it is not NBD), but this GR goes to a destination zone, destination branch, load type or destination country (DESTINATION COUNTRY column, used as it is; a blank value is not checked) that the party did not use in those N months. The destination is judged at the Check within level: Pan India / Zone → new destination zone, Circle → new destination circle, Branch → new destination branch (FTL ↔ LTL and country at every level). Every GR is NBD or RBD; Cross Sell is the part of RBD where the party started something new, so it is checked only after the NBD window ends. N = NBD gap setting.','—','—','tag'],
   ['NBD / RBD','NBD if no GR in the previous N months (N = NBD gap setting, default 6)','New Business Development: the party (consignor / consignee / customer) gave no business in the previous N months and gives business again (or for the first time). It then stays NBD for M months counted from that first month (M = NBD Rules → NBD stays NBD for, default 6: first GR in Jan = NBD Jan–Jun, RBD from Jul). Checked within the selected Pan India / Zone / Circle / Branch. After the window the business is RBD (Repeat Business). The first month of loaded data is the base: every party with business in it is RBD, and a party first seen in a later month is NBD from that month. Every GR is NBD or RBD (Total = NBD + RBD).','—','—','tag'],
 ];
 function renderMetricDefinitions(){
@@ -10221,7 +10221,7 @@ function refreshSlicerHead(dim, q, total){
   const on = auto[dim]!==false;
   mode.classList.toggle('on', on);
   mode.style.display = 'none';           // auto-select is always on; no explanation box
-  mode.innerHTML = `<span class="sx-tg"><i></i></span><div><b>Naam mein "${esc(q)}" wale sab</b><small>${on?'Aage aane wale naye naam bhi apne aap judenge':'Off — sirf jo tick karoge wahi'}</small></div>`;
+  mode.innerHTML = `<span class="sx-tg"><i></i></span><div><b>All names containing "${esc(q)}"</b><small>${on?'New names added later are included automatically':'Off — only the names you tick'}</small></div>`;
   let sel=(App.filters[dim]||[]).length;
   if (!sel && ALL_TICKED_DIMS.includes(dim) && !rules()[dim]) sel=(App.dims[dim]||[]).length;
   cnt.innerHTML = q ? `<span><b>${sel}</b> of ${total} selected</span>` : (sel?`<span><b>${sel}</b> selected</span>`:'<span>Type to search, tick to select</span>');
@@ -10705,14 +10705,14 @@ function saveBlob(blob,name){ const a=document.createElement('a'); a.href=URL.cr
 
 function runExport(set,fmt){
   let data=null; try{ data=collect(set); }catch(e){ console.warn('xm collect',e); }
-  if (!data){ const ob=fmt==='excel'?set.xl:(set.pdf||set.xl); if(ob) ob.click(); else say('Is table mein abhi koi data nahi hai',2500); return; }   // full-data export (e.g. GR Drill, all pages)
+  if (!data){ const ob=fmt==='excel'?set.xl:(set.pdf||set.xl); if(ob) ob.click(); else say('This table has no data yet',2500); return; }   // full-data export (e.g. GR Drill, all pages)
   data.sheet=data.title;
   try{
-    say(fmt==='excel'?'Excel ban raha hai…':'PDF ban raha hai…',0);
+    say(fmt==='excel'?'Preparing Excel…':'Preparing PDF…',0);
     if (fmt==='excel') saveBlob(buildXlsx(data), fileName(data.title)+'.xlsx');
     else buildPdf(data).save(fileName(data.title)+'.pdf');
-    say('Download ho gaya ✓');
-  }catch(e){ console.error(e); say('Download nahi hua: '+e.message,4000); }
+    say('Downloaded ✓');
+  }catch(e){ console.error(e); say('Download failed: '+e.message,4000); }
 }
 window.__xmExport={collect,buildXlsx,buildPdf,numCell,enhance,openMenu,zip,saveBlob,fileName,say,metaLines};
 })();
@@ -18853,7 +18853,7 @@ function panelFor(pg){
   const id='nbd-'+pg; let p=$(id); if(p) return p;
   const sec=$('page-'+pg); if(!sec) return null;
   p=document.createElement('div'); p.className='panel report-panel nbd-panel'; p.id=id;
-  p.innerHTML=`<div class="panel-head"><div><h2>${pg==='mom'?'Cross Sell / NBD / RBD — Base vs Comparison Month':'Cross Sell / NBD / RBD — New vs Repeat Business'}</h2><div class="panel-sub" data-sub></div></div></div>${pg==='yield'?'<div data-note></div><div data-sum></div><div class="nbd-h3">By party</div><div class="nbd-ctl" data-ctl></div>':'<div class="nbd-ctl" data-ctl></div><div data-note></div><div data-sum></div>'}<div class="table-scroll" data-wrap id="${id}-wrap"></div><div data-xtra></div>`;
+  p.innerHTML=`<div class="panel-head"><div><h2>${pg==='mom'?'Cross Sell / NBD / RBD — Base vs Comparison Month':'Cross Sell / NBD / RBD — New vs Repeat Business'}</h2></div></div>${pg==='yield'?'<div data-sum></div><div class="nbd-h3">By party</div><div class="nbd-ctl" data-ctl></div>':'<div class="nbd-ctl" data-ctl></div><div data-sum></div>'}<div class="table-scroll" data-wrap id="${id}-wrap"></div><div data-xtra></div>`;
   sec.appendChild(p);
   p.addEventListener('change',e=>{ const s=e.target.closest('select[data-nbd]'); if(!s) return; ST[pg][s.dataset.nbd]=s.value; ST[pg].exp=new Set(); render(pg); });
   p.addEventListener('click',e=>{
@@ -18905,9 +18905,7 @@ function renderYield(){
   metOf(st);
   const all=getFilteredRows(); const months=[...new Set(all.map(r=>r.monthKey).filter(Boolean))].sort();
   const {TG,h,g}=tagRows(all,st,'yield'), W=win(), fld=FLD.yield, csf=CSF('yield');
-  p.querySelector('[data-sub]').innerHTML=`<b>NBD</b> = no business in the previous ${g} months, stays NBD for ${W} months · <b>RBD</b> = repeat · <b>Cross Sell</b> = RBD using a ${whysOf(h).map(w=>esc(w[1].replace(/^New /,''))).join(' / ')} not used in the previous ${g} months · checked within <b>${esc(scopeLbl(st))}</b> · ${months.length?esc(mLab(months[0])+(months.length>1?' – '+mLab(months[months.length-1]):'')):'no data'}`;
   p.querySelector('[data-ctl]').innerHTML=ctlHtml('yield',st);
-  p.querySelector('[data-note]').innerHTML=njNote(h,g,months);
   const wrap=p.querySelector('[data-wrap]'), sumEl=p.querySelector('[data-sum]'), xEl=p.querySelector('[data-xtra]');
   xEl.innerHTML='';
   if(!all.length){ sumEl.innerHTML=''; wrap.innerHTML='<div class="empty-state"><h2>No records for selected filters.</h2></div>'; return; }
@@ -19009,9 +19007,7 @@ function renderMom(){
   const cap=(typeof momCompareCap==='function')?momCompareCap(B,C):31;
   const all=filterRowsCached(f0).filter(r=>(r.monthKey===B||r.monthKey===C)&&(!r.grdt||r.grdt.getDate()<=cap));
   const {TG,h,g}=tagRows(all,st,'mom'), fld=FLD.mom, csf=CSF('mom'), W=win();
-  p.querySelector('[data-sub]').innerHTML=`Base month <b>${esc(mLab(B))}</b> vs comparison month <b>${esc(mLab(C))}</b>${cap<31?' · both months till day '+cap:''} · NBD = no business in the previous ${g} months, stays NBD for ${W} months · Cross Sell = part of RBD · checked within <b>${esc(scopeLbl(st))}</b>`;
   p.querySelector('[data-ctl]').innerHTML=ctlHtml('mom',st);
-  p.querySelector('[data-note]').innerHTML=njNote(h,g,[B,C]);
   const sumEl=p.querySelector('[data-sum]'); if(sumEl) sumEl.innerHTML='';
   if(!all.length){ wrap.innerHTML='<div class="empty-state"><h2>No records for selected filters.</h2></div>'; return; }
   const hasNJ=[...TG.values()].some(x=>x.b==='nj');
