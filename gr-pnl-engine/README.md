@@ -13,8 +13,8 @@ The dashboard is not affected: it reads the engine JSON, which still holds every
 3. **Corrections**: if an archived half-year's data changes (a month file replaced, a new join,
    a new column), that half-year is rebuilt. The old and new versions are compared and the result
    goes to the `ARCHIVE_CHANGES` tab and by mail, for example:
-   `FY26-27 H1 dobara bana. Wajah: files dobara padhi gayi: Aug-26.xlsx; naye columns: LHC_AMT.
-   Rows 80,120 → 80,145 (+25) · badle GR 312 · TOTAL FREIGHT 41,20,00,000 → 41,26,00,000`.
+   `FY26-27 H1 archive rebuilt. Reason: files re-read: Aug-26.xlsx; new columns: LHC_AMT.
+   Rows 80,120 → 80,145 (+25) · GRs changed 312 · TOTAL FREIGHT 41,20,00,000 → 41,26,00,000`.
    The previous version stays in `GR_ARCHIVE/old` for 90 days (`KEEP_OLD_DAYS`).
 4. **Mirror trim**: rows older than `KEEP_MONTHS` (6) leave the mirror tab, and only rows whose
    GR NO is in a verified archive. Rows not found in an archive stay.
@@ -33,7 +33,7 @@ Long runs stop at 4.5 minutes and continue on their own a minute later.
 `writeMasterSheets_` now passes the rows through `GRA_mirrorFilter(headers, rows)` before writing
 `DASHBOARD_MASTER`, so the engine never writes archived months back into the mirror.
 Until the first archive exists the filter keeps every row, so nothing changes on merge alone.
-The engine menu gets a sub-menu **Archive (6 mahine)**: Dry run, Archive abhi chalao, Setup.
+The engine menu gets a sub-menu **Archive (6 months)**: Dry run, Run archive now, Setup. All sheet text, logs and mails are in English.
 
 ## Deploy
 The whole engine code is in this folder (pulled from the live Apps Script). Every push to `main` that
@@ -42,7 +42,7 @@ saved back with Actions > GR engine: sync > mode pull.
 
 ## First time
 1. Merge the PR: GitHub puts `Archive.gs` and the `Main.gs` change into the engine.
-2. Reload the engine sheet > **GR PNL Engine > Archive (6 mahine) > Dry run**: `ARCHIVE_LOG` shows what
+2. Reload the engine sheet > **GR PNL Engine > Archive (6 months) > Dry run**: `ARCHIVE_LOG` shows what
    would happen, nothing changes.
-3. **Archive (6 mahine) > Setup** once (allow permissions), then **Archive abhi chalao** (or wait for 2 AM).
+3. **Archive (6 months) > Setup** once (allow permissions), then **Run archive now** (or wait for 2 AM).
    Long runs continue on their own; the mail says when a half-year archive is ready.

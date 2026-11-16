@@ -10221,7 +10221,7 @@ function refreshSlicerHead(dim, q, total){
   const on = auto[dim]!==false;
   mode.classList.toggle('on', on);
   mode.style.display = 'none';           // auto-select is always on; no explanation box
-  mode.innerHTML = `<span class="sx-tg"><i></i></span><div><b>Naam mein "${esc(q)}" wale sab</b><small>${on?'Aage aane wale naye naam bhi apne aap judenge':'Off — sirf jo tick karoge wahi'}</small></div>`;
+  mode.innerHTML = `<span class="sx-tg"><i></i></span><div><b>All names containing "${esc(q)}"</b><small>${on?'New matching names are added automatically':'Off — only the names you tick'}</small></div>`;
   let sel=(App.filters[dim]||[]).length;
   if (!sel && ALL_TICKED_DIMS.includes(dim) && !rules()[dim]) sel=(App.dims[dim]||[]).length;
   cnt.innerHTML = q ? `<span><b>${sel}</b> of ${total} selected</span>` : (sel?`<span><b>${sel}</b> selected</span>`:'<span>Type to search, tick to select</span>');
@@ -10705,14 +10705,14 @@ function saveBlob(blob,name){ const a=document.createElement('a'); a.href=URL.cr
 
 function runExport(set,fmt){
   let data=null; try{ data=collect(set); }catch(e){ console.warn('xm collect',e); }
-  if (!data){ const ob=fmt==='excel'?set.xl:(set.pdf||set.xl); if(ob) ob.click(); else say('Is table mein abhi koi data nahi hai',2500); return; }   // full-data export (e.g. GR Drill, all pages)
+  if (!data){ const ob=fmt==='excel'?set.xl:(set.pdf||set.xl); if(ob) ob.click(); else say('No data in this table yet',2500); return; }   // full-data export (e.g. GR Drill, all pages)
   data.sheet=data.title;
   try{
-    say(fmt==='excel'?'Excel ban raha hai…':'PDF ban raha hai…',0);
+    say(fmt==='excel'?'Preparing Excel…':'Preparing PDF…',0);
     if (fmt==='excel') saveBlob(buildXlsx(data), fileName(data.title)+'.xlsx');
     else buildPdf(data).save(fileName(data.title)+'.pdf');
-    say('Download ho gaya ✓');
-  }catch(e){ console.error(e); say('Download nahi hua: '+e.message,4000); }
+    say('Downloaded ✓');
+  }catch(e){ console.error(e); say('Download failed: '+e.message,4000); }
 }
 window.__xmExport={collect,buildXlsx,buildPdf,numCell,enhance,openMenu,zip,saveBlob,fileName,say,metaLines};
 })();
