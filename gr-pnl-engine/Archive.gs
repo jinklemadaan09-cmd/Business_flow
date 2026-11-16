@@ -28,20 +28,20 @@ var GRA_CHUNK_ROWS = 4000;
 var GRA_STATE_KEY = 'GRA_BUILD_STATE';
 
 var GRA_DEFAULTS = [
-  ['ARCHIVE_ON', 'YES', 'YES = archives bante hain aur mirror trim hota hai. NO = sirf check + report (dry run), kuch nahi badalta.'],
-  ['KEEP_MONTHS', '6', 'Mirror tab me kitne mahine rakhne hain (is mahine samet). Purani rows tabhi hatengi jab unka archive verify ho chuka ho.'],
-  ['MIRROR_TAB', '', 'Mirror tab ka naam. Khali = engine wala (MIRROR_SHEET_NAME, DASHBOARD_MASTER).'],
-  ['MIRROR_SHEET', '', 'Mirror spreadsheet ka link / ID. Khali = engine wala (Config.gs MIRROR_FILE_ID).'],
-  ['DATE_COLUMN', 'GR DT', 'Date column (half-year isi se banta hai)'],
-  ['KEY_COLUMN', 'GR NO', 'Har row ki unique key'],
-  ['SUM_COLUMNS', 'TOTAL FREIGHT, TOTAL EXPENSE, CWEIGHT, AWEIGHT, BASIC FREIGHT', 'Change mail me in columns ka total old vs new dikhega'],
-  ['ARCHIVE_FOLDER_ID', '', 'Archive ka Drive folder ID. Khali = is spreadsheet ke folder me GR_ARCHIVE apne aap banega.'],
-  ['KEEP_OLD_DAYS', '90', 'Purana archive version kitne din GR_ARCHIVE/old me rahe'],
-  ['WARN_PCT', '70', 'Cells itne % bharne pe mail'],
-  ['URGENT_PCT', '85', 'Cells itne % bharne pe URGENT mail'],
-  ['ALERT_EMAILS', '', 'Mail kisko jaaye (comma se alag). Khali = script owner.'],
-  ['RUN_HOUR', '2', 'Roz kitne baje chale (0-23). Badalne ke baad GRA_setup dobara chalao.'],
-  ['ARCHIVE_MAX_CELLS', '9000000', 'Ek archive sheet me max cells; isse zyada ho to Part 2 banega']
+  ['ARCHIVE_ON', 'YES', 'YES = archives are built and the mirror tab is trimmed. NO = check and report only (dry run), nothing is changed.'],
+  ['KEEP_MONTHS', '6', 'How many months to keep in the mirror tab (including the current month). Older rows are removed only after their archive is verified.'],
+  ['MIRROR_TAB', '', 'Mirror tab name. Blank = the engine one (MIRROR_SHEET_NAME, DASHBOARD_MASTER).'],
+  ['MIRROR_SHEET', '', 'Mirror spreadsheet link / ID. Blank = the engine one (Config.gs MIRROR_FILE_ID).'],
+  ['DATE_COLUMN', 'GR DT', 'Date column (the half-year is taken from it)'],
+  ['KEY_COLUMN', 'GR NO', 'Unique key of each row'],
+  ['SUM_COLUMNS', 'TOTAL FREIGHT, TOTAL EXPENSE, CWEIGHT, AWEIGHT, BASIC FREIGHT', 'The change mail shows the old vs new total of these columns'],
+  ['ARCHIVE_FOLDER_ID', '', 'Drive folder ID for the archive. Blank = a GR_ARCHIVE folder is created next to this spreadsheet.'],
+  ['KEEP_OLD_DAYS', '90', 'How many days an old archive version stays in GR_ARCHIVE/old'],
+  ['WARN_PCT', '70', 'Send a warning mail when the sheet is this % full (cells)'],
+  ['URGENT_PCT', '85', 'Send an URGENT mail when the sheet is this % full (cells)'],
+  ['ALERT_EMAILS', '', 'Who gets the mails (comma separated). Blank = script owner.'],
+  ['RUN_HOUR', '2', 'Hour of the daily run (0-23). After changing it, run GRA_setup again.'],
+  ['ARCHIVE_MAX_CELLS', '9000000', 'Max cells in one archive sheet; above this a Part 2 is created']
 ];
 
 /* ------------------------------------------------------------------ entry points */
@@ -81,10 +81,10 @@ function GRA_mirrorFilter(headers, rows) {
 
 /** Sub-menu added to the engine's GR PNL Engine menu (Main.gs onOpen). */
 function GRA_menu_(ui) {
-  return ui.createMenu('Archive (6 mahine)')
-    .addItem('Dry run (sirf check, kuch nahi badlega)', 'GRA_dryRun')
-    .addItem('Archive abhi chalao', 'GRA_runNow')
-    .addItem('Setup (roz raat ka trigger)', 'GRA_setup');
+  return ui.createMenu('Archive (6 months)')
+    .addItem('Dry run (check only, nothing changes)', 'GRA_dryRun')
+    .addItem('Run archive now', 'GRA_runNow')
+    .addItem('Setup (nightly trigger)', 'GRA_setup');
 }
 
 /* ------------------------------------------------------------------ main run */
@@ -111,7 +111,7 @@ function GRA_run_(dry) {
       var fp = GRA_fingerprint_(master.headers, h.rows, s);
       var old = GRA_storedFp_(h.key);
       if (old && old.hash === fp.hash) continue;
-      if (dry) { notes.push(h.label + ': ' + (old ? 'data badla, rebuild hoga' : 'archive banega') + ' (' + h.rows.length + ' rows)'); continue; }
+      if (dry) { notes.push(h.label + ': ' + (old ? 'data changed, will be rebuilt' : 'archive will be created') + ' (' + h.rows.length + ' rows)'); continue; }
       var res = GRA_buildHalf_(ss, s, master, h, fp, old, t0);
       if (res === 'timeout') { done = false; break; }
       notes.push(res);
@@ -124,12 +124,12 @@ function GRA_run_(dry) {
       if (!dry) GRA_purgeOld_(s);
     } else {
       GRA_scheduleContinue_();
-      notes.push('Time khatam, 1 min me apne aap aage chalega');
+      notes.push('Time limit reached, continues by itself in 1 min');
     }
     GRA_log_(ss, dry ? 'DRY RUN' : 'RUN', notes.filter(String).join(' | '), Math.round((Date.now() - t0) / 1000) + ' s');
   } catch (err) {
     GRA_log_(ss, 'ERROR', String(err && err.stack || err), '');
-    GRA_mail_(GRA_settings_(ss), 'GR Archive: ERROR', '<p>Archive run fail hua. Kuch delete nahi hua.</p><pre>' + GRA_esc_(String(err && err.stack || err)) + '</pre>');
+    GRA_mail_(GRA_settings_(ss), 'GR Archive: ERROR', '<p>The archive run failed. Nothing was deleted.</p><pre>' + GRA_esc_(String(err && err.stack || err)) + '</pre>');
   } finally {
     lock.releaseLock();
   }
@@ -149,17 +149,17 @@ function GRA_checkSize_(ss, s) {
       if (c > big) { big = c; biggest = sh.getName(); }
     });
     var pct = cells / GRA_CELL_LIMIT * 100;
-    parts.push(b.getName() + ': ' + GRA_fmt_(cells) + ' cells (' + pct.toFixed(1) + '%), sabse bada tab ' + biggest);
+    parts.push(b.getName() + ': ' + GRA_fmt_(cells) + ' cells (' + pct.toFixed(1) + '%), largest tab ' + biggest);
     if (!worst || pct > worst.pct) worst = { pct: pct, cells: cells, name: b.getName(), url: b.getUrl(), biggest: biggest };
   });
   var warn = Number(s.WARN_PCT) || 70, urgent = Number(s.URGENT_PCT) || 85;
   if (worst.pct >= warn) {
     var lvl = worst.pct >= urgent ? 'URGENT' : 'Warning';
-    GRA_mail_(s, 'GR sheet ' + lvl + ': ' + worst.pct.toFixed(1) + '% bhar gayi',
-      '<p><b>' + GRA_esc_(worst.name) + '</b> me ' + GRA_fmt_(worst.cells) + ' cells hain, Google ki limit 1,00,00,000 ka <b>' +
-      worst.pct.toFixed(1) + '%</b>. Sabse bada tab: ' + GRA_esc_(worst.biggest) + '.</p>' +
-      '<p>Archive apne aap purane half-year hata raha hai. Agar ye mail roz aa raha hai to ARCHIVE_SETTINGS me KEEP_MONTHS kam karo, ya engine ka mirror hook check karo.</p>' +
-      '<p><a href="' + worst.url + '">Sheet kholo</a></p>');
+    GRA_mail_(s, 'GR sheet ' + lvl + ': ' + worst.pct.toFixed(1) + '% full',
+      '<p><b>' + GRA_esc_(worst.name) + '</b> has ' + GRA_fmt_(worst.cells) + ' cells, <b>' +
+      worst.pct.toFixed(1) + '%</b> of the Google limit of 10,000,000. Largest tab: ' + GRA_esc_(worst.biggest) + '.</p>' +
+      '<p>The archive removes old half-years by itself. If this mail comes every day, lower KEEP_MONTHS in ARCHIVE_SETTINGS or check the engine mirror hook.</p>' +
+      '<p><a href="' + worst.url + '">Open the sheet</a></p>');
   }
   return parts.join('; ');
 }
@@ -335,11 +335,11 @@ function GRA_buildHalf_(ss, s, master, h, fp, oldFp, t0) {
     var want = h.rows.slice(q * st.perPart, (q + 1) * st.perPart);
     var vs = SpreadsheetApp.openById(st.fileIds[q]).getSheets()[0];
     var got = vs.getLastRow() - 1;
-    if (got !== want.length) return GRA_failBuild_(ss, s, h, st, 'Part ' + (q + 1) + ': ' + got + ' rows, chahiye ' + want.length);
+    if (got !== want.length) return GRA_failBuild_(ss, s, h, st, 'Part ' + (q + 1) + ': ' + got + ' rows, expected ' + want.length);
     var kv = vs.getRange(2, ki + 1, got, 1).getValues(), dv = vs.getRange(2, di + 1, got, 1).getValues();
     for (var r = 0; r < got; r++) {
       if (GRA_norm_(kv[r][0]) !== GRA_norm_(want[r][ki]) || GRA_iso_(dv[r][0]) !== GRA_iso_(want[r][di])) {
-        return GRA_failBuild_(ss, s, h, st, 'Part ' + (q + 1) + ' row ' + (r + 2) + ' match nahi hua');
+        return GRA_failBuild_(ss, s, h, st, 'Part ' + (q + 1) + ' row ' + (r + 2) + ' does not match');
       }
     }
   }
@@ -375,14 +375,14 @@ function GRA_buildHalf_(ss, s, master, h, fp, oldFp, t0) {
   props.deleteProperty(GRA_STATE_KEY);
 
   GRA_reportChange_(ss, s, h, diff, oldFp, fp, urls);
-  return h.label + ': archive ' + (oldFp ? 'dobara bana' : 'bana') + ' (' + h.rows.length + ' rows, verified)';
+  return h.label + ': archive ' + (oldFp ? 'rebuilt' : 'created') + ' (' + h.rows.length + ' rows, verified)';
 }
 
 function GRA_failBuild_(ss, s, h, st, why) {
   st.fileIds.forEach(function (id) { try { DriveApp.getFileById(id).setTrashed(true); } catch (e) {} });
   PropertiesService.getScriptProperties().deleteProperty(GRA_STATE_KEY);
-  GRA_mail_(s, 'GR Archive: ' + h.label + ' verify fail', '<p>Archive copy check me fail hua: ' + GRA_esc_(why) +
-    '.</p><p>Kuch delete nahi hua, mirror tab waisa hi hai. Agli raat dobara try hoga.</p>');
+  GRA_mail_(s, 'GR Archive: ' + h.label + ' verify fail', '<p>The archive copy failed the check: ' + GRA_esc_(why) +
+    '.</p><p>Nothing was deleted and the mirror tab is unchanged. It will retry next night.</p>');
   throw new Error('Verify failed for ' + h.key + ': ' + why);
 }
 
@@ -427,30 +427,30 @@ function GRA_diff_(prev, headers, rows, s, oldFp, fp) {
 function GRA_reportChange_(ss, s, h, d, oldFp, fp, urls) {
   var lines = [], why = [];
   if (!oldFp) {
-    lines.push('Pehli baar archive bana: ' + GRA_fmt_(fp.rows) + ' rows.');
+    lines.push('First archive created: ' + GRA_fmt_(fp.rows) + ' rows.');
   } else {
-    if (d.files.length) why.push('files dobara padhi gayi: ' + d.files.slice(0, 8).join(', ') + (d.files.length > 8 ? ' +' + (d.files.length - 8) : ''));
-    if (d.configChanged) why.push('engine config (SOURCE / COLUMN / JOIN_CONFIG) badla');
-    if (d.newCols.length) why.push('naye columns: ' + d.newCols.join(', '));
+    if (d.files.length) why.push('files read again: ' + d.files.slice(0, 8).join(', ') + (d.files.length > 8 ? ' +' + (d.files.length - 8) : ''));
+    if (d.configChanged) why.push('engine config (SOURCE / COLUMN / JOIN_CONFIG) changed');
+    if (d.newCols.length) why.push('new columns: ' + d.newCols.join(', '));
     lines.push('Rows ' + GRA_fmt_(oldFp.rows) + ' → ' + GRA_fmt_(fp.rows) + ' (' + GRA_signed_(fp.rows - oldFp.rows) + ')' +
-               ' · naye GR ' + GRA_fmt_(d.added) + ' · hate GR ' + GRA_fmt_(d.removed) + ' · badle GR ' + GRA_fmt_(d.changed));
-    if (d.goneCols.length) lines.push('Hate columns: ' + d.goneCols.join(', '));
-    if (d.cols.length) lines.push('Sabse zyada badle columns: ' + d.cols.join(', '));
+               ' · new GRs ' + GRA_fmt_(d.added) + ' · removed GRs ' + GRA_fmt_(d.removed) + ' · changed GRs ' + GRA_fmt_(d.changed));
+    if (d.goneCols.length) lines.push('Removed columns: ' + d.goneCols.join(', '));
+    if (d.cols.length) lines.push('Most changed columns: ' + d.cols.join(', '));
     Object.keys(fp.sums).forEach(function (c) {
       var a = oldFp.sums[c], b = fp.sums[c];
-      if (a === undefined) { lines.push(c + ': ' + GRA_fmt_(b) + ' (naya)'); return; }
+      if (a === undefined) { lines.push(c + ': ' + GRA_fmt_(b) + ' (new)'); return; }
       if (Math.abs(a - b) > 0.005) lines.push(c + ': ' + GRA_fmt_(a) + ' → ' + GRA_fmt_(b) + ' (' + GRA_signed_(b - a) + ')');
     });
   }
-  var title = h.label + (oldFp ? ' dobara bana' : ' archive bana');
+  var title = h.label + (oldFp ? ' rebuilt' : ' archive created');
   var sh = ss.getSheetByName(GRA_TAB.changes);
   sh.appendRow([new Date(), h.key, title, why.join('; '), lines.join('\n'), urls.join('\n')]);
   GRA_mail_(s, 'GR Archive: ' + title,
-    '<p><b>' + GRA_esc_(title) + '</b>' + (why.length ? '<br>Wajah: ' + GRA_esc_(why.join('; ')) : '') + '</p><ul>' +
+    '<p><b>' + GRA_esc_(title) + '</b>' + (why.length ? '<br>Why: ' + GRA_esc_(why.join('; ')) : '') + '</p><ul>' +
     lines.map(function (l) { return '<li>' + GRA_esc_(l) + '</li>'; }).join('') + '</ul>' +
     '<p>' + urls.map(function (u, i) { return '<a href="' + u + '">Archive sheet' + (urls.length > 1 ? ' part ' + (i + 1) : '') + '</a>'; }).join(' · ') +
-    (oldFp ? ' · purana version GR_ARCHIVE/old me ' + (s.KEEP_OLD_DAYS || 90) + ' din rahega' : '') + '</p>' +
-    '<p>Dashboard pe koi asar nahi: woh engine ka poora data padhta hai.</p>');
+    (oldFp ? ' · the old version stays in GR_ARCHIVE/old for ' + (s.KEEP_OLD_DAYS || 90) + ' days' : '') + '</p>' +
+    '<p>No effect on the dashboard: it reads the full engine data.</p>');
 }
 
 /** Files the engine re-read after a time (from PROCESS_LOG). */
@@ -481,10 +481,10 @@ function GRA_configHash_() {
 
 function GRA_trimMirror_(ss, s, dry) {
   var sh = GRA_mirrorSheet_(ss, s);
-  if (!sh || sh.getLastRow() < 2) return 'Mirror tab khali / nahi mila';
+  if (!sh || sh.getLastRow() < 2) return 'Mirror tab empty / not found';
   var head = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(String);
   var di = GRA_col_(head, s.DATE_COLUMN), ki = GRA_col_(head, s.KEY_COLUMN);
-  if (di < 0 || ki < 0) return 'Mirror me ' + s.DATE_COLUMN + ' / ' + s.KEY_COLUMN + ' nahi mila, trim skip';
+  if (di < 0 || ki < 0) return 'Mirror: ' + s.DATE_COLUMN + ' / ' + s.KEY_COLUMN + ' not found, trim skipped';
   var n = sh.getLastRow() - 1;
   var dates = sh.getRange(2, di + 1, n, 1).getValues(), keys = sh.getRange(2, ki + 1, n, 1).getValues();
   var cutoff = GRA_cutoffIso_(s), keySets = {}, drop = [], notArchived = 0;
@@ -496,12 +496,12 @@ function GRA_trimMirror_(ss, s, dry) {
     if (keySets[hk] && keySets[hk][GRA_norm_(keys[r][0])]) drop.push(r + 2); else notArchived++;
   }
   var refill = dry ? false : GRA_noteRefill_(cutoff, drop.length);
-  var msg = 'Mirror: ' + GRA_fmt_(drop.length) + ' rows ' + cutoff + ' se purani' + (dry ? ' hategi' : ' hati') +
-            (notArchived ? ', ' + GRA_fmt_(notArchived) + ' purani rows archive me nahi mili isliye rakhi' : '');
+  var msg = 'Mirror: ' + GRA_fmt_(drop.length) + ' rows older than ' + cutoff + (dry ? ' will be removed' : ' removed') +
+            (notArchived ? ', ' + GRA_fmt_(notArchived) + ' older rows kept because they are not in an archive' : '');
   if (refill) {
-    msg += ' | ENGINE MIRROR WAPAS BHAR RAHA HAI: engine me GRA_mirrorFilter hook lagana hai';
-    GRA_mail_(s, 'GR Archive: mirror wapas bhar raha hai',
-      '<p>Jo purani rows mirror tab se hata di thi, engine refresh ne wapas likh di. Engine ke mirror likhne wale code me <code>rows = GRA_mirrorFilter(headers, rows)</code> lagana hai.</p>');
+    msg += ' | ENGINE IS REFILLING THE MIRROR: add the GRA_mirrorFilter hook to the engine';
+    GRA_mail_(s, 'GR Archive: the mirror is being refilled',
+      '<p>Old rows that were removed from the mirror tab were written back by the engine refresh. Add <code>rows = GRA_mirrorFilter(headers, rows)</code> to the engine code that writes the mirror.</p>');
   }
   if (dry || !drop.length) return msg;
   // delete contiguous runs from the bottom up
@@ -628,9 +628,15 @@ function GRA_ensureTabs_(ss) {
     if (sh.getMaxRows() > 200) sh.deleteRows(201, sh.getMaxRows() - 200);
     return sh;
   };
-  var st = make(GRA_TAB.settings, ['Setting', 'Value', 'Matlab'], [170, 220, 560]);
+  var st = make(GRA_TAB.settings, ['Setting', 'Value', 'Meaning'], [170, 220, 560]);
   var have = st.getLastRow() > 1 ? st.getRange(2, 1, st.getLastRow() - 1, 1).getValues().map(function (r) { return String(r[0]); }) : [];
   GRA_DEFAULTS.forEach(function (d) { if (have.indexOf(d[0]) < 0) st.appendRow(d); });
+  // keep the header and the Meaning column in English (values the owner typed are not touched)
+  st.getRange(1, 3).setValue('Meaning');
+  if (st.getLastRow() > 1) {
+    var keys = st.getRange(2, 1, st.getLastRow() - 1, 1).getValues();
+    keys.forEach(function (r, i) { var d = GRA_DEFAULTS.filter(function (x) { return x[0] === String(r[0]); })[0]; if (d) st.getRange(i + 2, 3).setValue(d[2]); });
+  }
   make(GRA_TAB.log, ['When', 'Type', 'What happened', 'Time taken'], [150, 80, 760, 90]);
   make(GRA_TAB.changes, ['When', 'Half-year', 'What', 'Why', 'Old vs new', 'Archive link'], [150, 110, 240, 320, 520, 300]);
   make(GRA_TAB.files, ['Half-year', 'Label', 'Part', 'File ID', 'Link', 'Rows', 'Built at', 'Status'], [110, 230, 90, 120, 300, 80, 150, 160]);
