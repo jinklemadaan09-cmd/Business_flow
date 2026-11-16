@@ -11035,6 +11035,23 @@ function pwtAmPicker(lbl){
   };
   pop.onclick=e=>e.stopPropagation();
 }
+/* Every month of the selected period gets a column, also months in which the filtered rows have no business (shown as 0).
+   Period = the months ticked in the Month filter; with All Months, every month in the data (cut to Date From / To;
+   with Till Date on, Date From / To are days of every month, so all months stay) with gaps filled. */
+function pwtMonths(rows){
+  const f=App.filters||{}, isD=d=>d&&typeof d.getFullYear==='function'&&!isNaN(d.getFullYear());
+  const set=new Set(rows.map(r=>r.monthKey).filter(Boolean));
+  let sel=(f.globalMonths||[]).filter(Boolean); if(!sel.length&&f.globalMonth) sel=[f.globalMonth];
+  if(sel.length){ sel.forEach(k=>set.add(k)); return [...set].sort(); }
+  let all=(App.months||[]).map(m=>m&&m.key).filter(Boolean);
+  const td=window.__tillDateRange?window.__tillDateRange(f):null;
+  if(!td){ if(isD(f.dateFrom)){const x=monthKeyOf(f.dateFrom);all=all.filter(k=>k>=x);} if(isD(f.dateTo)){const y=monthKeyOf(f.dateTo);all=all.filter(k=>k<=y);} }
+  all.forEach(k=>set.add(k));
+  const ks=[...set].sort(); if(ks.length<2) return ks;
+  const out=[]; let [y,m]=ks[0].split('-').map(Number); const last=ks[ks.length-1];
+  for(let i=0;i<240;i++){const k=y+'-'+String(m).padStart(2,'0'); out.push(k); if(k>=last) break; if(++m>12){m=1;y++;}}
+  return out;
+}
 function renderPWT(){
   ywSelect();
   const wrap=$(PWT_ID); if(!wrap) return;
@@ -11042,7 +11059,7 @@ function renderPWT(){
   let chart=$('ywChart'); if(!chart){chart=document.createElement('div');chart.id='ywChart';chart.className='v7-chart';wrap.insertAdjacentElement('afterend',chart);}
   syncModeButtons();
   const rows=getFilteredRows();
-  const months=[...new Set(rows.map(r=>r.monthKey).filter(Boolean))].sort();
+  const months=pwtMonths(rows);
   ptBadge(months);
   if(!rows.length){wrap.innerHTML='<div class="empty-state"><h2>No records for selected filters.</h2></div>';chart.innerHTML='';return;}
   const mode=App.yieldDayWeek.mode, metric=YWM.find(m=>m.key===App.yieldDayWeek.metric)||YWM[1];
