@@ -35,6 +35,7 @@ function onOpen() {
       .addItem('Send NAME_GROUPS edits to the dashboard now', 'refreshNameGroupsCache'))
     .addItem('Auto-refresh ON (every ' + (Number(SETTINGS.AUTO_REFRESH_HOURS) || 3) + ' hours)', 'autoRefreshOn')
     .addItem('Auto-refresh OFF (manual only)', 'autoRefreshOff')
+    .addSubMenu(GRA_menu_(SpreadsheetApp.getUi()))
     .addToUi();
 }
 
@@ -468,7 +469,10 @@ function writeMasterSheets_(state, force, t0) {
     return false;
   }
 
-  var cells = (state.rowCount + 1) * Math.max(1, state.headers.length);
+  // Archive.gs: the sheet gets only the recent months (older half-years are in GR_ARCHIVE).
+  var sheetRows = readMasterRows_(state);
+  if (typeof GRA_mirrorFilter === 'function') sheetRows = GRA_mirrorFilter(state.headers, sheetRows);
+  var cells = (sheetRows.length + 1) * Math.max(1, state.headers.length);
   if (cells > SETTINGS.SHEET_MAX_CELLS) {
     Logger.log('DASHBOARD_MASTER sheet skipped: ' + cells + ' cells is over the Google Sheets limit. ' +
                'The dashboard is unaffected (it reads the JSON).');
@@ -482,7 +486,7 @@ function writeMasterSheets_(state, force, t0) {
       headers: state.headers,
       dateColumns: state.dateColumns,
       sheetView: state.sheetView || { divisors: {}, formats: {} },
-      rows: readMasterRows_(state)
+      rows: sheetRows
     };
     if (SETTINGS.WRITE_MIRROR_SHEET) {
       writeTableToSheet_(SpreadsheetApp.openById(MIRROR_FILE_ID), MIRROR_SHEET_NAME, data);

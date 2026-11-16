@@ -1,24 +1,28 @@
-# GR PNL Engine <-> GitHub.
-#   pull = Apps Script > repo: saves the live engine code into gr-pnl-engine/ (nothing changes in Apps Script)
-#   push = repo > Apps Script: sends gr-pnl-engine/ code (e.g. Archive.gs) into the live engine
+# GR PNL Engine <-> GitHub (same pattern as SCOT cross sell).
+#   Every push to main that changes gr-pnl-engine/ code sends it to the live engine Apps Script (mode push).
+#   Run by hand: GitHub > Actions > "GR engine: sync" > Run workflow
+#     push = repo code > Apps Script
+#     pull = Apps Script > repo (saves code written in the editor into gr-pnl-engine/)
 # The engine's Script ID is in gr-pnl-engine/SCRIPT_ID.txt
 #   (engine sheet > Extensions > Apps Script > Project Settings > IDs > Script ID).
-# Saving a new SCRIPT_ID.txt on any branch runs a pull. A push to the live engine only happens
-# by hand: GitHub > Actions > "GR engine: sync" > Run workflow > mode push.
 
 name: "GR engine: sync"
 
 on:
   push:
+    branches: [main]
     paths:
-      - "gr-pnl-engine/SCRIPT_ID.txt"
+      - "gr-pnl-engine/*.gs"
+      - "gr-pnl-engine/*.html"
+      - "tools/merge-apps-script.js"
+      - ".github/workflows/gr-engine-sync.yml"
   workflow_dispatch:
     inputs:
       mode:
-        description: "pull = Apps Script to repo, push = repo to Apps Script (live)"
+        description: "push = repo to Apps Script, pull = Apps Script to repo"
         type: choice
-        options: [pull, push]
-        default: pull
+        options: [push, pull]
+        default: push
 
 permissions:
   contents: write
@@ -29,7 +33,7 @@ concurrency:
 
 env:
   DIR: gr-pnl-engine
-  MODE: ${{ github.event.inputs.mode || 'pull' }}
+  MODE: ${{ github.event.inputs.mode || 'push' }}
 
 jobs:
   sync:

@@ -30,8 +30,8 @@ var GRA_STATE_KEY = 'GRA_BUILD_STATE';
 var GRA_DEFAULTS = [
   ['ARCHIVE_ON', 'YES', 'YES = archives bante hain aur mirror trim hota hai. NO = sirf check + report (dry run), kuch nahi badalta.'],
   ['KEEP_MONTHS', '6', 'Mirror tab me kitne mahine rakhne hain (is mahine samet). Purani rows tabhi hatengi jab unka archive verify ho chuka ho.'],
-  ['MIRROR_TAB', 'DASHBOARD_MASTER', 'Mirror tab ka naam'],
-  ['MIRROR_SHEET', '', 'Mirror alag spreadsheet me hai to uska link / ID. Khali = yahi spreadsheet.'],
+  ['MIRROR_TAB', '', 'Mirror tab ka naam. Khali = engine wala (MIRROR_SHEET_NAME, DASHBOARD_MASTER).'],
+  ['MIRROR_SHEET', '', 'Mirror spreadsheet ka link / ID. Khali = engine wala (Config.gs MIRROR_FILE_ID).'],
   ['DATE_COLUMN', 'GR DT', 'Date column (half-year isi se banta hai)'],
   ['KEY_COLUMN', 'GR NO', 'Har row ki unique key'],
   ['SUM_COLUMNS', 'TOTAL FREIGHT, TOTAL EXPENSE, CWEIGHT, AWEIGHT, BASIC FREIGHT', 'Change mail me in columns ka total old vs new dikhega'],
@@ -79,6 +79,14 @@ function GRA_mirrorFilter(headers, rows) {
   });
 }
 
+/** Sub-menu added to the engine's GR PNL Engine menu (Main.gs onOpen). */
+function GRA_menu_(ui) {
+  return ui.createMenu('Archive (6 mahine)')
+    .addItem('Dry run (sirf check, kuch nahi badlega)', 'GRA_dryRun')
+    .addItem('Archive abhi chalao', 'GRA_runNow')
+    .addItem('Setup (roz raat ka trigger)', 'GRA_setup');
+}
+
 /* ------------------------------------------------------------------ main run */
 
 function GRA_run_(dry) {
@@ -92,7 +100,7 @@ function GRA_run_(dry) {
     var notes = [];
 
     var size = GRA_checkSize_(ss, s);
-    notes.push(size.text);
+    notes.push(size);
 
     var master = GRA_readMaster_(ss, s);
     var halves = GRA_groupHalves_(master, s);
@@ -130,7 +138,7 @@ function GRA_run_(dry) {
 /* ------------------------------------------------------------------ size guard */
 
 function GRA_checkSize_(ss, s) {
-  var books = [ss], mid = GRA_idFrom_(s.MIRROR_SHEET);
+  var books = [ss], mid = GRA_mirrorId_(s);
   if (mid && mid !== ss.getId()) books.push(SpreadsheetApp.openById(mid));
   var worst = null, parts = [];
   books.forEach(function (b) {
@@ -160,6 +168,12 @@ function GRA_checkSize_(ss, s) {
 
 /** Engine master via liveApi (same project). Falls back to the mirror tab when liveApi is not there. */
 function GRA_readMaster_(ss, s) {
+  if (typeof loadState_ === 'function' && typeof readMasterRows_ === 'function') {
+    var state = loadState_();
+    if (!state.masterParts || !state.masterParts.length) throw new Error('Engine has no master yet (run Refresh once)');
+    return { headers: state.headers, rows: readMasterRows_(state), source: 'engine master build ' + state.buildId,
+             dateColumns: state.dateColumns || [], sheetView: state.sheetView || { divisors: {}, formats: {} } };
+  }
   if (typeof liveApi === 'function') {
     for (var attempt = 0; attempt < 2; attempt++) {
       var head = GRA_api_({});
@@ -287,18 +301,33 @@ function GRA_buildHalf_(ss, s, master, h, fp, oldFp, t0) {
     props.setProperty(GRA_STATE_KEY, JSON.stringify(st));
   }
 
+  var wrote = 0;   // at least one chunk per run, so a slow start can never stall the build
   while (st.next < h.rows.length) {
-    if (Date.now() - t0 > GRA_TIME_BUDGET_MS) return 'timeout';
+    if (wrote && Date.now() - t0 > GRA_TIME_BUDGET_MS) return 'timeout';
+    wrote++;
     var part = Math.floor(st.next / st.perPart), inPart = st.next - part * st.perPart;
     var take = Math.min(GRA_CHUNK_ROWS, st.perPart - inPart, h.rows.length - st.next);
+    var view = GRA_view_(master);
     var chunk = h.rows.slice(st.next, st.next + take).map(function (r) {
       var row = r.slice(0, cols); while (row.length < cols) row.push('');
-      return row.map(function (v) { return v === null || v === undefined ? '' : v; });
+      row = row.map(function (v) { return v === null || v === undefined ? '' : v; });
+      view.dateIdx.forEach(function (j) { if (row[j]) row[j] = GRA_toDate_(row[j]); });
+      view.divIdx.forEach(function (p) { if (typeof row[p[0]] === 'number') row[p[0]] = Math.round(row[p[0]] / p[1] * 1e6) / 1e6; });
+      return row;
     });
     SpreadsheetApp.openById(st.fileIds[part]).getSheets()[0].getRange(inPart + 2, 1, take, cols).setValues(chunk);
     st.next += take;
     props.setProperty(GRA_STATE_KEY, JSON.stringify(st));
   }
+
+  // same look as DASHBOARD_MASTER: dd-MM-yyyy dates + Display_Format
+  var vw = GRA_view_(master);
+  st.fileIds.forEach(function (id, i) {
+    var n = Math.min(st.perPart, h.rows.length - i * st.perPart), sh = SpreadsheetApp.openById(id).getSheets()[0];
+    if (!n) return;
+    vw.dateIdx.forEach(function (j) { sh.getRange(2, j + 1, n, 1).setNumberFormat('dd-MM-yyyy'); });
+    vw.formats.forEach(function (f) { try { sh.getRange(2, f[0] + 1, n, 1).setNumberFormat(f[1]); } catch (e) {} });
+  });
 
   // verify: row count + every key and date read back from the sheets
   var di = GRA_col_(master.headers, s.DATE_COLUMN), ki = GRA_col_(master.headers, s.KEY_COLUMN);
@@ -486,10 +515,11 @@ function GRA_trimMirror_(ss, s, dry) {
   return msg;
 }
 
+/** True when rows older than the cutoff show up again after they were already trimmed once (engine refill). */
 function GRA_noteRefill_(cutoff, count) {
-  var p = PropertiesService.getScriptProperties(), last = JSON.parse(p.getProperty('GRA_LAST_TRIM') || 'null');
-  p.setProperty('GRA_LAST_TRIM', JSON.stringify({ cutoff: cutoff, count: count, at: new Date().toISOString() }));
-  return !!(last && last.cutoff === cutoff && last.count > 0 && count > 0);
+  var p = PropertiesService.getScriptProperties(), done = p.getProperty('GRA_TRIMMED_CUTOFF');
+  if (count > 0 && done !== cutoff) { p.setProperty('GRA_TRIMMED_CUTOFF', cutoff); return false; }
+  return count > 0 && done === cutoff;
 }
 
 function GRA_cutoffIso_(s) {
@@ -625,10 +655,15 @@ function GRA_setSetting_(ss, key, value) {
   sh.appendRow([key, value, '']);
 }
 
+function GRA_mirrorId_(s) {
+  return GRA_idFrom_(s.MIRROR_SHEET) || (typeof MIRROR_FILE_ID !== 'undefined' ? MIRROR_FILE_ID : '');
+}
+
 function GRA_mirrorSheet_(ss, s) {
-  var id = GRA_idFrom_(s.MIRROR_SHEET);
+  var id = GRA_mirrorId_(s);
   var book = id && id !== ss.getId() ? SpreadsheetApp.openById(id) : ss;
-  return book.getSheetByName(String(s.MIRROR_TAB || 'DASHBOARD_MASTER').trim());
+  var tab = String(s.MIRROR_TAB || (typeof MIRROR_SHEET_NAME !== 'undefined' ? MIRROR_SHEET_NAME : 'DASHBOARD_MASTER')).trim();
+  return book.getSheetByName(tab);
 }
 
 function GRA_log_(ss, type, text, took) {
@@ -645,6 +680,23 @@ function GRA_mail_(s, subject, html) {
 }
 
 /* ------------------------------------------------------------------ small helpers */
+
+/** Same sheet view as the engine's DASHBOARD_MASTER (dates as dates, Ton / Lacs, number formats). */
+function GRA_view_(master) {
+  var h = master.headers, v = master.sheetView || { divisors: {}, formats: {} };
+  var useUnits = typeof SETTINGS === 'undefined' || SETTINGS.SHEET_VIEW_UNITS !== false;
+  return {
+    dateIdx: (master.dateColumns || []).map(function (c) { return h.indexOf(c); }).filter(function (i) { return i >= 0; }),
+    divIdx: useUnits ? Object.keys(v.divisors || {}).map(function (c) { return [h.indexOf(c), v.divisors[c]]; }).filter(function (p) { return p[0] >= 0; }) : [],
+    formats: Object.keys(v.formats || {}).map(function (c) { return [h.indexOf(c), String(v.formats[c])]; }).filter(function (p) { return p[0] >= 0; })
+  };
+}
+
+function GRA_toDate_(v) {
+  if (typeof isoToDate_ === 'function') return isoToDate_(v);
+  var iso = GRA_iso_(v);
+  return iso ? new Date(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)) - 1, Number(iso.slice(8, 10))) : v;
+}
 
 function GRA_col_(headers, name) {
   var n = function (x) { return String(x).toLowerCase().replace(/[^a-z0-9]/g, ''); };

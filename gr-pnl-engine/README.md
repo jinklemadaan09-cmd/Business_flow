@@ -29,18 +29,20 @@ Long runs stop at 4.5 minutes and continue on their own a minute later.
 | `ARCHIVE_CHANGES` | One line per archive built or rebuilt, with old vs new |
 | `ARCHIVE_FILES` | Every archive file: half-year, link, rows, CURRENT / OLD |
 
-## Engine hook (one line)
-If the engine rewrites the whole mirror on each refresh, the trimmed rows come back. In the engine
-code that writes `DASHBOARD_MASTER`, filter the rows first:
+## Engine change (Main.gs, already done)
+`writeMasterSheets_` now passes the rows through `GRA_mirrorFilter(headers, rows)` before writing
+`DASHBOARD_MASTER`, so the engine never writes archived months back into the mirror.
+Until the first archive exists the filter keeps every row, so nothing changes on merge alone.
+The engine menu gets a sub-menu **Archive (6 mahine)**: Dry run, Archive abhi chalao, Setup.
 
-```js
-rows = GRA_mirrorFilter(headers, rows);
-```
-The nightly run detects a refill and mails if this hook is missing.
+## Deploy
+The whole engine code is in this folder (pulled from the live Apps Script). Every push to `main` that
+changes it sends it to the engine (`GR engine: sync`). Code edited in the Apps Script editor can be
+saved back with Actions > GR engine: sync > mode pull.
 
 ## First time
-1. Put the engine Script ID in `gr-pnl-engine/SCRIPT_ID.txt` (engine sheet > Extensions > Apps Script >
-   Project Settings > IDs). GitHub then pulls the live engine code into this folder (`GR engine: sync`, mode pull).
-2. After review, run **Actions > GR engine: sync > mode push** to put `Archive.gs` into the engine.
-3. In the Apps Script editor run `GRA_dryRun` once: `ARCHIVE_LOG` shows what would happen, nothing changes.
-4. Run `GRA_setup` once (allow permissions). From then on it runs every night at 2 AM.
+1. Merge the PR: GitHub puts `Archive.gs` and the `Main.gs` change into the engine.
+2. Reload the engine sheet > **GR PNL Engine > Archive (6 mahine) > Dry run**: `ARCHIVE_LOG` shows what
+   would happen, nothing changes.
+3. **Archive (6 mahine) > Setup** once (allow permissions), then **Archive abhi chalao** (or wait for 2 AM).
+   Long runs continue on their own; the mail says when a half-year archive is ready.
