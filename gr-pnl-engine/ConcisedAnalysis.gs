@@ -27,10 +27,15 @@ var CA_ = {
   TARGETS_SHEET: 'Targets',
   TZ: 'Asia/Kolkata',
 
-  // Company revenue target used when the Targets tab has no TOTAL
-  // (Project Tracker, company priorities: Revenue 85 cr for Q3 = 28.3 cr a month).
+  // Starting monthly revenue targets (Rs Lacs), written into the Targets tab when a zone has no row yet.
+  // Source: PAN INDIA - Final Target 26-27.xlsx, tab "NOV`26 Target", column "Target Nov`26"
+  // (West 412 and Gujarat West 545 as in the row totals of that tab and its copy).
+  // Zone names match with or without a trailing " RO". Change the Targets tab, not this list.
+  SEED_TARGETS_LACS: {
+    'TOTAL': 2750, 'NORTH ZONE': 1072, 'SOUTH ZONE': 435, 'WEST ZONE': 412, 'GUJARAT WEST ZONE': 545,
+    'EAST ZONE': 163, 'NORTH EAST ZONE': 92, 'NEPAL ZONE': 31
+  },
   // A blank GP % target means: hold the zone's own GP % of the last 3 full months.
-  COMPANY_MONTHLY_REVENUE_LACS: 2830,
 
   ACHIEVED_PCT: 1.00,     // % achievement at or above this = Achieved
   CLOSE_PCT: 0.90,        // at or above this = Close, below = Missed
@@ -144,7 +149,8 @@ function CA_rec_(day, zone, branch, cust, rev, exp) {
 /** Targets tab → { zones: {ZONE: {rev: lacs/month or null, gp: fraction or null}}, total: {...} } */
 function CA_readTargets_(ss) {
   var sh = ss.getSheetByName(CA_.TARGETS_SHEET);
-  var t = { zones: {}, total: { rev: CA_.COMPANY_MONTHLY_REVENUE_LACS, gp: null } };
+  var t = { zones: {}, total: { rev: CA_seed_('TOTAL'), gp: null } };
+  Object.keys(CA_.SEED_TARGETS_LACS).forEach(function (k) { if (k !== 'TOTAL') t.zones[k] = { rev: CA_.SEED_TARGETS_LACS[k], gp: null }; });
   if (!sh || sh.getLastRow() < 2) return t;
   sh.getRange(2, 1, sh.getLastRow() - 1, 3).getValues().forEach(function (r) {
     var z = String(r[0] || '').replace(/\s+/g, ' ').trim().toUpperCase();
@@ -152,8 +158,8 @@ function CA_readTargets_(ss) {
     var rev = r[1] === '' || r[1] == null ? null : Number(r[1]);
     var gp = r[2] === '' || r[2] == null ? null : Number(r[2]);
     if (gp != null && gp > 1) gp = gp / 100;   // typed as 24.2 instead of 24.2%
-    if (z === 'TOTAL') { if (rev != null && isFinite(rev)) t.total.rev = rev; if (gp != null && isFinite(gp)) t.total.gp = gp; return; }
-    t.zones[z] = { rev: isFinite(rev) ? rev : null, gp: isFinite(gp) ? gp : null };
+    if (z === 'TOTAL') { t.total.rev = rev != null && isFinite(rev) ? rev : null; if (gp != null && isFinite(gp)) t.total.gp = gp; return; }
+    t.zones[CA_zk_(z)] = { rev: rev != null && isFinite(rev) ? rev : null, gp: gp != null && isFinite(gp) ? gp : null };
   });
   return t;
 }
@@ -193,8 +199,8 @@ function CA_build_(rows, targets, today) {
   /* ---- zone list: zones with revenue in the last 5 weeks or the month, biggest first ---- */
   var zoneRev = {};
   rows.forEach(function (r) { if (r.d >= P.pw4[0]) zoneRev[r.z] = (zoneRev[r.z] || 0) + r.rev; });
-  Object.keys(targets.zones).forEach(function (z) { if (!(z in zoneRev)) zoneRev[z] = 0; });
-  var zones = Object.keys(zoneRev).filter(function (z) { return zoneRev[z] > 0 || targets.zones[z]; })
+  var tz_ = function (z) { return targets.zones[CA_zk_(z)]; };
+  var zones = Object.keys(zoneRev).filter(function (z) { return zoneRev[z] > 0 || tz_(z); })
     .sort(function (a, b) { return zoneRev[b] - zoneRev[a]; });
 
   /* ---- monthly target per zone: typed value, else company target split by 3-month share ---- */
@@ -203,19 +209,19 @@ function CA_build_(rows, targets, today) {
   if (!base3.length) base3 = rows;
   base3.forEach(function (r) { share[r.z] = (share[r.z] || 0) + r.rev; shareTot += r.rev; gp3[r.z] = (gp3[r.z] || 0) + r.gp; gpTot += r.gp; });
   var gpHold = function (z) { return z == null ? (shareTot ? gpTot / shareTot : null) : (share[z] ? gp3[z] / share[z] : null); };
-  var typed = zones.filter(function (z) { return targets.zones[z] && targets.zones[z].rev != null; });
-  var typedSum = typed.reduce(function (s, z) { return s + targets.zones[z].rev; }, 0);
+  var typed = zones.filter(function (z) { return tz_(z) && tz_(z).rev != null; });
+  var typedSum = typed.reduce(function (s, z) { return s + tz_(z).rev; }, 0);
   var restShare = zones.filter(function (z) { return typed.indexOf(z) < 0; }).reduce(function (s, z) { return s + (share[z] || 0); }, 0);
-  var left = Math.max(0, targets.total.rev - typedSum);
+  var left = Math.max(0, (targets.total.rev || 0) - typedSum);
   var tgt = {};
   zones.forEach(function (z) {
-    var tz = targets.zones[z] || {};
+    var tz = tz_(z) || {};
     var auto = tz.rev == null, autoGp = tz.gp == null;
     tgt[z] = {
       month: auto ? (restShare ? left * (share[z] || 0) / restShare : 0) : tz.rev,
       gp: autoGp ? gpHold(z) : tz.gp,
-      basis: 'Revenue: ' + (auto ? 'TOTAL split by last 3 months share' : 'typed') +
-             ' | GP %: ' + (autoGp ? 'last 3 months level' : 'typed')
+      basis: 'Revenue: ' + (auto ? 'TOTAL split by last 3 months share' : 'Targets tab') +
+             ' | GP %: ' + (autoGp ? 'last 3 months level' : 'Targets tab')
     };
   });
   var monthSum = zones.reduce(function (s, z) { return s + tgt[z].month; }, 0);
@@ -360,15 +366,15 @@ function CA_writeTargets_(ss, m) {
   var have = {};
   if (!fresh && sh.getLastRow() > 1) {
     sh.getRange(2, 1, sh.getLastRow() - 1, 3).getValues().forEach(function (r, i) {
-      var z = String(r[0] || '').trim().toUpperCase(); if (z) have[z] = { row: i + 2, rev: r[1], gp: r[2] };
+      var z = String(r[0] || '').trim().toUpperCase(); if (z) have[z === 'TOTAL' ? z : CA_zk_(z)] = { row: i + 2, rev: r[1], gp: r[2] };
     });
   }
   var list = m.zones.concat(['TOTAL']);
   var nz = function (v) { return v == null ? '' : v; };
   var out = list.map(function (z) {
-    var h = have[z] || {};
+    var h = have[z === 'TOTAL' ? z : CA_zk_(z)] || { rev: nz(CA_seed_(z)) };
     if (z === 'TOTAL') {
-      return ['TOTAL', h.rev !== undefined && h.rev !== '' ? h.rev : CA_.COMPANY_MONTHLY_REVENUE_LACS,
+      return ['TOTAL', h.rev,
               h.gp === undefined ? '' : h.gp, m.targetTotal.month, nz(m.targetTotal.gp), 'Sum of zones'];
     }
     return [z, h.rev === undefined ? '' : h.rev, h.gp === undefined ? '' : h.gp, m.targets[z].month, nz(m.targets[z].gp), m.targets[z].basis];
@@ -503,6 +509,10 @@ function CA_render_(ss, m, stamp) {
 
 
 /* ================================ small helpers ================================ */
+
+/** Zone key: upper case, single spaces, no trailing " RO" (data says NORTH ZONE RO, the target file NORTH ZONE). */
+function CA_zk_(z) { return String(z == null ? '' : z).replace(/\s+/g, ' ').trim().toUpperCase().replace(/ RO$/, ''); }
+function CA_seed_(z) { var v = CA_.SEED_TARGETS_LACS[z === 'TOTAL' ? z : CA_zk_(z)]; return v == null ? null : v; }
 
 function CA_d_(iso) { var p = String(iso).split('-'); return new Date(Date.UTC(+p[0], +p[1] - 1, +p[2])); }
 function CA_iso_(d) { return d.getUTCFullYear() + '-' + ('0' + (d.getUTCMonth() + 1)).slice(-2) + '-' + ('0' + d.getUTCDate()).slice(-2); }

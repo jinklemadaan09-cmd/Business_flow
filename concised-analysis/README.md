@@ -58,6 +58,6 @@ Customers and branches under Rs 2 Lacs in the 4-week window are left out. All li
 1. The Google account that owns the GR PNL Engine needs **Editor** access to the Sales Tracker sheet.
 2. Merge the PR. The `GR engine: sync` action sends the code to the engine.
 3. Engine sheet > **GR PNL Engine > Concised Analysis > Turn on hourly update** (allow permissions).
-4. Fill the **Targets** tab in Sales Tracker (blue cells). TOTAL defaults to Rs 2,830 Lacs a month (85 cr for Q3).
+4. The **Targets** tab starts with the Nov'26 zone targets (Rs Lacs): North 1,072, Gujarat West 545, South 435, West 412, East 163, North East 92, Nepal 31, Total 2,750. Source: PAN INDIA - Final Target 26-27.xlsx, tab NOV`26 Target, column Target Nov`26. Change the blue cells for a new month.
 
 An hourly run is skipped when neither the engine data nor the date has changed. **Update now** rebuilds at once.
