@@ -19363,17 +19363,14 @@ function draw(keepOpen){
   if(q&&!/@/.test(q)) list=list.filter(n=>n.vals.some(v=>v.toUpperCase().includes(q))||[...n.raw].some(x=>x.includes(q)));
   const tot=n=>(n.h[prev]||0)+(n.h[cur]||0);
   list.sort(ST.sort==='drop'?(a,b)=>a.d-b.d:ST.sort==='rise'?(a,b)=>b.d-a.d:ST.sort==='name'?(a,b)=>a.vals.join(' ').localeCompare(b.vals.join(' ')):(a,b)=>tot(b)-tot(a));
-  /* how many rows each party has (shown as "split N") */
-  const per=new Map(); list.forEach(n=>per.set(n.vals[0],(per.get(n.vals[0])||0)+1));
   const mKeys=id=>hMonths(id).filter(i=>DM.has(i)).map(mk);
   const runTxt=id=>{ if(!lastD) return hSpan(id); const li=lastD.getFullYear()*12+lastD.getMonth(); if(halfOf(li)!==id||li>=hMonths(id)[5]&&li<curM) return hSpan(id); return MN[hMonths(id)[0]%12]+'–'+lastD.getDate()+' '+MN[lastD.getMonth()]; };
   const fOf=n=>{ const f={}; defs.forEach((d,i)=>f[d]=n.vals[i]); return f; };
   const cell=(n,id,f)=>has(id)?(n.h[id]?`<td class="hy-d${id===cols[0]?' hy-gs':''}" data-ph-f="${esc(JSON.stringify(f))}" data-ph-m="${esc(JSON.stringify(mKeys(id)))}" title="Click to open these GRs">${id===cur||id===prev?'<b>'+L(n.h[id])+'</b>':L(n.h[id])}</td>`:`<td class="${id===cols[0]?'hy-gs':''}">–</td>`):`<td class="hy-dim${id===cols[0]?' hy-gs':''}" title="No data loaded for this half-year">–</td>`;
   const tail=n=>{ const ch=n.pa>1e-9?(n.t==='sm'?0:n.d/n.pa*100):null;
     return `<td class="hy-gs">${nP?(n.pa?L(n.pa):'–'):'<span class="hy-dim">–</span>'}</td><td>${n.ca?L(n.ca):'–'}</td><td class="${ch==null?'':ch>0?'hy-up':ch<0?'hy-dn':''}">${ch==null?'—':(ch>0?'+':'')+ch.toFixed(1)+'%'}</td><td>${n.t?`<span class="hy-tg ${n.t}">${TXT[n.t]}</span>`:''}</td>`; };
-  const split=ST.lv.length>0;
-  const body=list.slice(0,ST.show).map(n=>{ const f=fOf(n), c=per.get(n.vals[0]);
-    return `<tr>${n.vals.map((v,i)=>`<td class="hier" title="${esc(v)}">${esc(v)}${i===0&&split&&c>1?` <span class="nbd-badge" title="This party has ${c} rows at the selected levels">split ${c}</span>`:''}</td>`).join('')}${cols.map(id=>cell(n,id,f)).join('')}${tail(n)}</tr>`; }).join('');
+  const body=list.slice(0,ST.show).map(n=>{ const f=fOf(n);
+    return `<tr>${n.vals.map((v,i)=>`<td class="hier" title="${esc(v)}">${esc(v)}</td>`).join('')}${cols.map(id=>cell(n,id,f)).join('')}${tail(n)}</tr>`; }).join('');
   const T={h:{},cc:0}; list.forEach(n=>{ [...want].forEach(id=>{ if(n.h[id]) T.h[id]=(T.h[id]||0)+n.h[id]; }); T.cc+=n.cc; }); calc(T);
   const u='<span class="unit-head">Lacs</span>';
   const hh=id=>`<th class="${id===cur?'hy-c':id===prev?'hy-p':''}${id===cols[0]?' hy-gs':''}">${hLab(id)}<br><span style="font-weight:600;text-transform:none">${id===cur?runTxt(id):hSpan(id)}</span>${u}</th>`;
