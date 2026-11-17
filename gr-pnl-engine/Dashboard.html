@@ -18079,6 +18079,10 @@ setTimeout(()=>{ const pg=document.querySelector('.tab.active')?.getAttribute('d
 .ng-card .table-scroll{margin-top:8px}
 .ng-note{font-size:12px;color:var(--muted);border-left:3px solid var(--border-strong);padding:4px 8px;margin-top:6px}
 .btn.ng-dng{color:var(--red);border-color:var(--red)}
+.ng-t td.br{white-space:nowrap;max-width:220px;overflow:hidden;text-overflow:ellipsis}
+.ng-more{color:var(--muted);font-size:11px;font-weight:600}
+.ng-t tr.ng-hit td{background:#fff7d6}
+.ng-t tr.ng-hit td.s{font-weight:700}
 </style>
 <script id="nameGroupsJs">
 (function(){
@@ -18086,12 +18090,12 @@ setTimeout(()=>{ const pg=document.querySelector('.tab.active')?.getAttribute('d
 if (window.__nameGroups) return; window.__nameGroups = 1;
 /* Name Groups: one company name for the many spellings of a Consignor, Consignee or Customer.
    Decisions live in the NAME_GROUPS sheet (NameGroups.gs). New spellings are found here from the
-   loaded rows, matched to similar groups, and wait in Pending until the approver decides. */
+   loaded rows, matched to similar groups, and wait in To decide until the approver decides. An unmerged name waits in a To decide card with the group it left. */
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const FIELDS=[['cngr','Consignor'],['cnge','Consignee'],['customer','Customer']];
 const TYPE_OF={cngr:'Consignor',cnge:'Consignee',customer:'Customer'};
 const STORE='grpnl_name_groups_v1', PAGE=25;
-const NG={ dec:new Map(), all:[], pan:{byName:new Map(),of:new Map()}, canEdit:false, server:false, loaded:false, err:'', view:'list', type:'Consignor', show:'all', sort:'f', seen:'all', q:'', page:0, picks:{}, names:{}, open:{}, pending:[], stats:null };
+const NG={ dec:new Map(), rev:new Map(), all:[], pan:{byName:new Map(),of:new Map()}, canEdit:false, server:false, loaded:false, err:'', view:'list', type:'Consignor', show:'all', sort:'f', seen:'all', q:'', page:0, picks:{}, names:{}, open:{}, pending:[], stats:null };
 window.NameGroups=NG;
 
 /* ---------------- name normalisation ---------------- */
@@ -18135,9 +18139,14 @@ const decKey=(type,sp)=>type+'|'+String(sp).replace(/\s+/g,' ').trim().toUpperCa
 
 /* ---------------- decisions ---------------- */
 function takeRows(rows){
-  NG.dec=new Map(); NG.all=[];
+  NG.dec=new Map(); NG.rev=new Map(); NG.all=[];
   (rows||[]).forEach(r=>{ if (!r||!r[0]||!r[1]) return; if (String(r[4]||'')==='Top 150 review') return;   // old automatic seed: not a decision, the user decides similar names
-    NG.all.push({type:r[0],spelling:r[1],group:r[2]||r[1],status:r[3],by:r[4]||'',on:r[5]||''}); if (r[3]==='REVOKED') return; NG.dec.set(decKey(r[0],r[1]),{type:r[0],spelling:r[1],group:r[2]||r[1],status:r[3],by:r[4]||'',on:r[5]||''}); });
+    NG.all.push({type:r[0],spelling:r[1],group:r[2]||r[1],status:r[3],by:r[4]||'',on:r[5]||''});
+    /* REVOKED = unmerged: the spelling is To decide again. Group = the group it left (hold: it is not clubbed by
+       the same Unique ID again on its own, it waits in a To decide card with that group). Group = the spelling itself
+       (older unmerges, and "Check: 2 IDs" fixes): it may join the group of its own Unique ID automatically. */
+    if (r[3]==='REVOKED'){ const g=String(r[2]||'').replace(/\s+/g,' ').trim(); NG.rev.set(decKey(r[0],r[1]),{group:g||r[1],hold:!!g&&decKey(r[0],g)!==decKey(r[0],r[1])}); return; }
+    NG.dec.set(decKey(r[0],r[1]),{type:r[0],spelling:r[1],group:r[2]||r[1],status:r[3],by:r[4]||'',on:r[5]||''}); });
 }
 function saveLocal(rows){ try{ localStorage.setItem(STORE,JSON.stringify(rows)); }catch(e){} }
 function loadLocal(){ try{ const v=JSON.parse(localStorage.getItem(STORE)||'null'); if (Array.isArray(v)) takeRows(v); }catch(e){} }
@@ -18179,7 +18188,7 @@ function computePan(rows){
   cnt.forEach((m,n)=>{ let b='',bv=0; m.forEach((v,k)=>{ if (v>bv){ bv=v; b=k; } }); byName.set(n,b); let l=members.get(b); if (!l){ l=[]; members.set(b,l); } l.push(n); });
   const of=new Map(), T='Consignor';
   members.forEach(list=>{
-    const auto=list.filter(n=>!NG.dec.has(decKey(T,n)));
+    const auto=list.filter(n=>{ const k=decKey(T,n); if (NG.dec.has(k)) return false; const rv=NG.rev.get(k); return !(rv&&rv.hold); });
     if (!auto.length) return;
     const appr=list.filter(n=>{ const d=NG.dec.get(decKey(T,n)); return d&&d.status==='APPROVED'; });
     if (auto.length+appr.length<2) return;
@@ -18242,11 +18251,14 @@ function buildStats(){
     (App.rows||[]).forEach(r=>{
       const n=r[f+'Raw']!==undefined?r[f+'Raw']:r[f];
       if (!n||n==='UNSPECIFIED') return;
-      let s=names.get(n); if (!s){ s={n:0,f:0,first:null}; names.set(n,s); }
-      s.n++; s.f+=Number(r.total)||0; if (r.grdt&&(!s.first||r.grdt<s.first)) s.first=r.grdt;
+      let s=names.get(n); if (!s){ s={n:0,f:0,first:null,br:new Map()}; names.set(n,s); }
+      const v=Number(r.total)||0; s.n++; s.f+=v; if (r.grdt&&(!s.first||r.grdt<s.first)) s.first=r.grdt;
+      const b=r.origin; if (b&&b!=='UNSPECIFIED') s.br.set(b,(s.br.get(b)||0)+v);
     });
+    /* one card per company: names that look alike (bucket), or the names unmerged from one group (U:<group>) */
     const buckets=new Map();
-    names.forEach((s,n)=>{ const k=bucketKey(n); let b=buckets.get(k); if (!b){ b=[]; buckets.set(k,b); } b.push(n); });
+    const put=(k,n)=>{ let b=buckets.get(k); if (!b){ b=new Set(); buckets.set(k,b); } b.add(n); };
+    names.forEach((s,n)=>{ const rv=NG.rev.get(decKey(type,n)); if (rv&&rv.hold&&!eff(type,n)) put('U:'+rv.group,n); else put(bucketKey(n),n); });
     const groups=new Map();   // approved group name → {spellings, n, f}
     names.forEach((s,n)=>{ const d=eff(type,n); if (d&&d.status==='APPROVED'){ let g=groups.get(d.group); if (!g){ g={name:d.group,sp:[],n:0,f:0,auto:0,manual:0}; groups.set(d.group,g); } g.sp.push(n); g.n+=s.n; g.f+=s.f; if (d.auto) g.auto++; else g.manual++; } });
     /* old merges that mix different PANs: they must be unmerged first */
@@ -18258,20 +18270,35 @@ function buildStats(){
       const rows=g.sp.slice().sort((a,b)=>names.get(b).f-names.get(a).f).map(n=>{ const p=NG.pan.byName.get(n)||''; const d=NG.dec.get(decKey(type,n)); return {sp:n,s:names.get(n),pan:p,d,odd:!!(p&&p!==main&&d&&!d.auto)}; });
       conf.push({type,group:g.name,rows,f:g.f,n:g.n,on:lastOn(Object.assign({type},g))});
     });
+    /* an unmerged card also lists what is left of its old group and the names with the same Unique ID */
+    const panList=new Map();
+    if (type==='Consignor') names.forEach((s,n)=>{ const p=NG.pan.byName.get(n); if (!p) return; let l=panList.get(p); if (!l){ l=[]; panList.set(p,l); } l.push(n); });
+    buckets.forEach((set,key)=>{
+      if (!key.startsWith('U:')) return;
+      const g=groups.get(key.slice(2)); if (g) g.sp.forEach(n=>set.add(n));
+      [...set].forEach(n=>{ const p=type==='Consignor'?NG.pan.byName.get(n):''; if (p) (panList.get(p)||[]).forEach(x=>{
+        if (set.has(x)) return;
+        const rv=NG.rev.get(decKey(type,x));
+        if (eff(type,x)) set.add(x);
+        else if (!(rv&&rv.hold)){ set.add(x); const o=buckets.get(bucketKey(x)); if (o) o.delete(x); }   // a name waiting for a decision sits in one card only
+      }); });
+    });
     const pend=[];   // one block per company: every spelling of the bucket together
-    buckets.forEach((list,key)=>{
+    buckets.forEach((set,key)=>{
+      const list=[...set];
       const und=list.filter(n=>!eff(type,n));
       if (!und.length) return;
+      const unm=key.startsWith('U:')||und.some(n=>NG.rev.has(decKey(type,n)));   // unmerged names always get a card, even alone
       const gnames=new Map();
       list.forEach(n=>{ const d=eff(type,n); if (d&&d.status==='APPROVED'){ const g=groups.get(d.group); gnames.set(d.group,g.f); } });
       const seps=list.filter(n=>{ const d=eff(type,n); return d&&d.status!=='APPROVED'; });
-      if (gnames.size+seps.length+und.length<2) return;
+      if (!unm&&gnames.size+seps.length+und.length<2) return;
       const byF=(a,b)=>names.get(b).f-names.get(a).f;
-      const title=gnames.size?[...gnames.entries()].sort((a,b)=>b[1]-a[1])[0][0]:(clean(und.slice().sort(byF)[0])||und[0]);
-      const rows=list.slice().sort(byF).map(n=>({sp:n,s:names.get(n),d:eff(type,n),pan:type==='Consignor'?(NG.pan.byName.get(n)||''):'',score:similarity(n,title)}));
+      const title=gnames.size?[...gnames.entries()].sort((a,b)=>b[1]-a[1])[0][0]:key.startsWith('U:')?key.slice(2):(clean(und.slice().sort(byF)[0])||und[0]);
+      const rows=list.slice().sort(byF).map(n=>({sp:n,s:names.get(n),d:eff(type,n),rv:NG.rev.has(decKey(type,n)),pan:type==='Consignor'?(NG.pan.byName.get(n)||''):'',score:similarity(n,title)}));
       let f=0,cnt=0,first=null;
       rows.forEach(r=>{ f+=r.s.f; cnt+=r.s.n; if (!r.d&&r.s.first&&(!first||r.s.first>first)) first=r.s.first; });
-      pend.push({type,key,title,others:[...gnames.keys()].filter(g=>g!==title),rows,und:und.length,f,n:cnt,first});
+      pend.push({type,key,title,others:[...gnames.keys()].filter(g=>g!==title),rows,und:und.length,f,n:cnt,first,unm});
     });
     out[type]={names,groups,pend,conf};
   });
@@ -18427,11 +18454,19 @@ function pager(total){
 function rowPick(blk,r){
   const id=decKey(blk.type,r.sp);
   if (NG.picks[id]!==undefined) return NG.picks[id];
+  if (r.rv) return '';   // unmerged by hand: no default, the approver chooses again
   return r.score>=0.7||clean(r.sp)===blk.title?'S':'X';
 }
 /* One list for the chosen name type: old merges to check, groups to decide, same-ID groups and approved groups.
    No search → every group (collapsed, click to open). Search → only the groups with that name, opened. */
-const TAGS={C:'<span class="ng-pill r">Check: 2 IDs</span>',P:'<span class="ng-pill w">To decide</span>',A:'<span class="ng-pill g">Same ID</span>',M:'<span class="ng-pill">Approved</span>'};
+const TAGS={C:'<span class="ng-pill r">Check: 2 IDs</span>',P:'<span class="ng-pill w">To decide</span>',A:'<span class="ng-pill g">Same ID</span>',M:'<span class="ng-pill">Approved</span>',N:'<span class="ng-pill">Not in a group</span>',X:'<span class="ng-pill r">Separate</span>'};
+/* Branch of a name: the 2 branches with the most freight, the rest as +N (all of them in the tooltip) */
+function brCell(st){
+  if (!st||!st.br||!st.br.size) return '<td class="br"><span style="color:var(--muted)">—</span></td>';
+  const l=[...st.br.entries()].sort((a,b)=>b[1]-a[1]);
+  const tip=l.map(([b,v])=>b+': '+L(v)).join('\n');
+  return `<td class="br" title="${esc(tip)}">${esc(l.slice(0,2).map(x=>x[0]).join(', '))}${l.length>2?` <span class="ng-more">+${l.length-2}</span>`:''}</td>`;
+}
 function renderList(st){
   const t=NG.type, S=st[t], ro=!NG.canEdit, pc=t==='Consignor';
   const inPend=new Set(), inConf=new Set(S.conf.map(c=>c.group));
@@ -18441,28 +18476,52 @@ function renderList(st){
   S.pend.forEach(p=>items.push({k:'P|'+p.key,kind:'P',name:p.title,f:p.f,n:p.n,first:p.first,obj:p,names:p.rows.map(r=>r.sp)}));
   S.groups.forEach(g=>{ if (inPend.has(g.name)||inConf.has(g.name)) return; items.push({k:'G|'+g.name,kind:g.manual?'M':'A',name:g.name,f:g.f,n:g.n,first:null,obj:Object.assign({type:t},g),names:g.sp}); });
   const cnt={C:0,P:0,A:0,M:0}; items.forEach(i=>cnt[i.kind]++);
+  const Q=NG.q.toUpperCase();
   let list=items.filter(i=>(NG.show==='all'||NG.show===i.kind)&&(!NG.q||textOk(i.name)||i.names.some(textOk)));
-  const ord={C:0,P:1,A:2,M:2};
+  /* search: a name that is in no card (kept separate, or never grouped) gets its own card, so it can be grouped */
+  if (NG.q&&NG.show==='all'){
+    const shown=new Set(); items.forEach(i=>i.names.forEach(n=>shown.add(n)));
+    const single=[...S.names.entries()].filter(([n])=>!shown.has(n)&&textOk(n)).sort((a,b)=>b[1].f-a[1].f).slice(0,30);
+    single.forEach(([n,s])=>{ const d=eff(t,n); list.push({k:'N|'+n,kind:d&&d.status==='SEPARATE'?'X':'N',name:n,f:s.f,n:s.n,first:s.first,obj:{type:t,sp:n,s,d},names:[n]}); });
+  }
+  const ord={C:0,P:1,A:2,M:2,N:3,X:3};
+  const hit=i=>!NG.q?0:i.names.some(n=>n.toUpperCase()===Q)||i.name.toUpperCase()===Q?0:i.names.some(textOk)?1:2;
   const by=NG.sort==='n'?(a,b)=>b.n-a.n:NG.sort==='d'?(a,b)=>(b.first||0)-(a.first||0)||b.f-a.f:(a,b)=>b.f-a.f;
-  list.sort((a,b)=>(ord[a.kind]-ord[b.kind])||by(a,b));
+  list.sort((a,b)=>(hit(a)-hit(b))||(ord[a.kind]-ord[b.kind])||by(a,b));
   const chip=(k,label,n)=>`<button type="button" class="ng-chip${NG.show===k?' on':''}" data-show="${k}">${label} <b>${N(n)}</b></button>`;
   NG._found=list;
   let h=`<div class="ng-chips">${NG.q?`<span>${N(list.length)} group${list.length===1?'':'s'} found for “${esc(NG.q)}”</span><button type="button" class="btn btn-sm btn-outline" data-dlf="1" title="Every GR of the groups found: GR No, date, final name, name on GR and all master columns">⬇ GRs found</button>`:''}${chip('all','All groups',items.length)}${pc?chip('A','Same ID (auto)',cnt.A):''}${chip('M','Approved',cnt.M)}${chip('P','To decide',cnt.P)}${cnt.C?chip('C','Check: 2 IDs',cnt.C):''}</div>`;
-  if (!list.length){ $('ngBody').innerHTML=h+'<div class="ng-empty">No group found.</div>'; NG._list=[]; NG._conf=[]; NG._groups=[]; return; }
-  const page=list.slice(NG.page*PAGE,(NG.page+1)*PAGE), autoOpen=!!NG.q&&list.length<=5;
-  NG._list=[]; NG._conf=[]; NG._groups=[];
+  if (!list.length){ $('ngBody').innerHTML=h+'<div class="ng-empty">No group found.</div>'; NG._list=[]; NG._conf=[]; NG._groups=[]; NG._single=[]; return; }
+  /* existing group names, offered when a name is added to a group or a group name is typed */
+  h+='<datalist id="ngGroupsDl">'+[...S.groups.values()].sort((a,b)=>b.f-a.f).slice(0,3000).map(g=>`<option value="${esc(g.name)}">`).join('')+'</datalist>';
+  const page=list.slice(NG.page*PAGE,(NG.page+1)*PAGE);
+  NG._list=[]; NG._conf=[]; NG._groups=[]; NG._single=[];
+  const hitTr=n=>NG.q&&textOk(n)?' ng-hit':'';
   h+='<div class="ng-list">';
-  page.forEach(it=>{
-    const open=autoOpen||!!NG.open[it.k], o=it.obj;
+  page.forEach((it,ix)=>{
+    /* search: the cards with the searched name open by themselves (first 10), and the name is highlighted */
+    const auto=!!NG.q&&(list.length<=5||(hit(it)<2&&NG.page*PAGE+ix<10));
+    const open=NG.open[it.k]!==undefined?NG.open[it.k]:auto, o=it.obj;
     const ids=pc&&(it.kind==='A'||it.kind==='M')?[...new Set(o.sp.map(n=>NG.pan.byName.get(n)).filter(Boolean))]:[];
     const idTag=ids.length===1?`<span class="ng-pill g">ID ${esc(ids[0])}</span>`:'';
-    const head=`<div class="ng-ih" data-k="${esc(it.k)}"><span class="ng-car">${open?'▾':'▸'}</span><b>${esc(it.name)}</b>${TAGS[it.kind]}${idTag}<span class="ng-m">${N(it.names.length)} names · ${N(it.n)} GRs · ${L(it.f)}</span></div>`;
+    const unTag=it.kind==='P'&&o.unm?'<span class="ng-pill w">Unmerged</span>':'';
+    const head=`<div class="ng-ih" data-k="${esc(it.k)}" data-open="${open?1:0}"><span class="ng-car">${open?'▾':'▸'}</span><b>${esc(it.name)}</b>${TAGS[it.kind]}${unTag}${idTag}<span class="ng-m">${N(it.names.length)} name${it.names.length===1?'':'s'} · ${N(it.n)} GRs · ${L(it.f)}</span></div>`;
+    if (it.kind==='N'||it.kind==='X'){
+      const si=NG._single.push(o)-1, pan=pc?(NG.pan.byName.get(o.sp)||''):'';
+      h+=`<div class="ng-card" data-n="${si}">${head}`;
+      if (open){
+        h+=`<div class="table-scroll"><table class="ng-t"><tr class="ng-th"><td>Name in data</td>${pc?'<td>Unique ID</td>':''}<td>Branch</td><td class="n">GRs</td><td class="n">Total Freight</td><td>Decided by</td></tr>`;
+        h+=`<tr class="ng-sp${hitTr(o.sp)}"><td class="s">${esc(o.sp)}</td>${pc?`<td>${pan?esc(pan):'—'}</td>`:''}${brCell(o.s)}<td class="n">${N(o.s.n)}</td><td class="n">${L(o.s.f)}</td><td>${esc(o.d?.by||'')}${o.d&&o.d.on?' · '+esc(o.d.on):''}</td></tr></table></div>`;
+        if (!ro) h+=`<div class="ng-acts" style="justify-content:flex-end;margin-top:8px"><input data-addg list="ngGroupsDl" placeholder="Type or pick a group to add this name to"><button class="btn btn-sm btn-primary" data-a="addg">Add to group</button>${it.kind==='X'?'<button class="btn btn-sm btn-outline" data-a="unsep" title="Not separate any more: the name goes back to To decide">Undo separate</button>':''}</div>`;
+      }
+      h+='</div>'; return;
+    }
     if (it.kind==='C'){
       const ci=NG._conf.push(o)-1;
       h+=`<div class="ng-card ng-conf" data-c="${ci}">${head}`;
       if (open){
-        h+=`<div class="table-scroll"><table class="ng-t"><tr class="ng-th"><td>Name in old group</td><td>Unique ID</td><td class="n">Total Freight</td><td class="n">GRs</td><td>Problem</td><td></td></tr>`;
-        o.rows.forEach(r=>{ h+=`<tr data-sp="${esc(r.sp)}"><td class="s">${esc(r.sp)}</td><td>${r.pan?esc(r.pan):'<span style="color:var(--muted)">—</span>'}</td><td class="n">${L(r.s.f)}</td><td class="n">${N(r.s.n)}</td><td>${r.odd?'<span class="ng-pill r">Different ID</span>':''}</td><td>${!ro&&r.d&&!r.d.auto?'<button class="btn btn-sm btn-outline ng-dng" data-a="cunm">Unmerge</button>':''}</td></tr>`; });
+        h+=`<div class="table-scroll"><table class="ng-t"><tr class="ng-th"><td>Name in old group</td><td>Unique ID</td><td>Branch</td><td class="n">Total Freight</td><td class="n">GRs</td><td>Problem</td><td></td></tr>`;
+        o.rows.forEach(r=>{ h+=`<tr class="${hitTr(r.sp)}" data-sp="${esc(r.sp)}"><td class="s">${esc(r.sp)}</td><td>${r.pan?esc(r.pan):'<span style="color:var(--muted)">—</span>'}</td>${brCell(r.s)}<td class="n">${L(r.s.f)}</td><td class="n">${N(r.s.n)}</td><td>${r.odd?'<span class="ng-pill r">Different ID</span>':''}</td><td>${!ro&&r.d&&!r.d.auto?'<button class="btn btn-sm btn-outline ng-dng" data-a="cunm">Unmerge</button>':''}</td></tr>`; });
         h+='</table></div><div class="ng-note">Merged earlier but the Unique IDs differ. Unmerge the wrong name: it then joins the group of its own Unique ID automatically.</div>';
         if (!ro) h+='<div class="ng-acts" style="justify-content:flex-end;margin-top:8px"><button class="btn btn-sm btn-outline ng-dng" data-a="crev">Unmerge whole group</button></div>';
       }
@@ -18473,15 +18532,16 @@ function renderList(st){
       h+=`<div class="ng-card ng-pend" data-b="${esc(p.type+'|'+p.key)}">${head}`;
       if (open){
         const opts=[['S','Same']].concat(p.others.map(g=>['G:'+g,g]),[['2','Group 2'],['3','Group 3'],['X','Separate']]);
-        h+=`<div class="ng-h"><label class="ng-gname">Group name <input data-gname value="${esc(NG.names[p.type+'|'+p.key]!=null?NG.names[p.type+'|'+p.key]:p.title)}"${ro?' disabled':''}></label></div>`;
-        h+=`<div class="table-scroll"><table class="ng-t"><tr class="ng-th"><td>Name in data</td>${pc?'<td>Unique ID</td>':''}<td class="n">Total Freight</td><td class="n">GRs</td><td>First seen</td><td>Decision</td></tr>`;
+        h+=`<div class="ng-h"><label class="ng-gname">Group name <input data-gname list="ngGroupsDl" value="${esc(NG.names[p.type+'|'+p.key]!=null?NG.names[p.type+'|'+p.key]:p.title)}"${ro?' disabled':''}></label></div>`;
+        h+=`<div class="table-scroll"><table class="ng-t"><tr class="ng-th"><td>Name in data</td>${pc?'<td>Unique ID</td>':''}<td>Branch</td><td class="n">Total Freight</td><td class="n">GRs</td><td>First seen</td><td>Decision</td></tr>`;
         p.rows.forEach(r=>{
           let dec;
-          if (r.d) dec=r.d.status==='APPROVED'?`<span class="ng-pill g">In ${esc(r.d.group)}${r.d.auto?' (same ID)':''}</span>`:'<span class="ng-pill r">Separate</span>';
-          else { const c=rowPick(p,r); dec=`<select data-sp="${esc(r.sp)}"${ro?' disabled':''}>${opts.map(x=>`<option value="${esc(x[0])}"${x[0]===c?' selected':''}>${esc(x[1])}</option>`).join('')}</select>`; }
-          h+=`<tr${r.d?' class="ng-sp"':''}><td class="s">${esc(r.sp)}</td>${pc?`<td>${r.pan?esc(r.pan):'<span style="color:var(--muted)">—</span>'}</td>`:''}<td class="n">${L(r.s.f)}</td><td class="n">${N(r.s.n)}</td><td>${D(r.s.first)}</td><td>${dec}</td></tr>`;
+          if (r.d) dec=r.d.status==='APPROVED'?`<span class="ng-pill g">In ${esc(r.d.group)}${r.d.auto?' (same ID)':''}</span>`:`<span class="ng-pill r">Separate</span>${ro?'':' <button class="btn btn-sm btn-outline" data-a="unsep" data-sp="'+esc(r.sp)+'" title="Not separate any more: decide again here">Undo</button>'}`;
+          else { const c=rowPick(p,r); dec=`<select data-sp="${esc(r.sp)}"${ro?' disabled':''}>${(r.rv?[['','Choose…']]:[]).concat(opts).map(x=>`<option value="${esc(x[0])}"${x[0]===c?' selected':''}>${esc(x[1])}</option>`).join('')}</select>${r.rv?' <span class="ng-pill w">Unmerged</span>':''}`; }
+          h+=`<tr class="${r.d?'ng-sp':''}${hitTr(r.sp)}"><td class="s">${esc(r.sp)}</td>${pc?`<td>${r.pan?esc(r.pan):'<span style="color:var(--muted)">—</span>'}</td>`:''}${brCell(r.s)}<td class="n">${L(r.s.f)}</td><td class="n">${N(r.s.n)}</td><td>${D(r.s.first)}</td><td>${dec}</td></tr>`;
         });
         h+='</table></div>';
+        if (p.unm) h+='<div class="ng-note">Unmerged names wait here. Pick Same to merge them again into the group name above (type or pick any existing group), or Separate.</div>';
         if (!ro) h+='<div class="ng-acts" style="justify-content:flex-end;margin-top:8px"><button class="btn btn-sm btn-outline" data-a="same">All same</button><button class="btn btn-sm btn-primary" data-a="ok">Approve</button></div>';
       }
       h+='</div>'; return;
@@ -18490,14 +18550,14 @@ function renderList(st){
     h+=`<div class="ng-card">${head}`;
     if (open){
       const sn=S.names;
-      h+=`<div class="table-scroll"><table class="ng-t"><tr class="ng-th"><td>Name in data</td>${pc?'<td>Unique ID</td>':''}<td class="n">GRs</td><td class="n">Total Freight</td><td>Decided by</td><td></td></tr>`;
+      h+=`<div class="table-scroll"><table class="ng-t"><tr class="ng-th"><td>Name in data</td>${pc?'<td>Unique ID</td>':''}<td>Branch</td><td class="n">GRs</td><td class="n">Total Freight</td><td>Decided by</td><td></td></tr>`;
       g.sp.slice().sort((a,b)=>sn.get(b).f-sn.get(a).f).forEach(n=>{
         const d=eff(g.type,n), pan=pc?(NG.pan.byName.get(n)||''):'';
-        const btn=ro?'':(d&&d.auto?'<button class="btn btn-sm btn-outline ng-dng" data-a="split" title="Not the same company: keep this name out of the group">Unmerge</button>':'<button class="btn btn-sm btn-outline ng-dng" data-a="unm" title="Undo the merge of this name: it goes back to To decide">Unmerge</button> <button class="btn btn-sm btn-outline" data-a="split">Make separate</button>');
-        h+=`<tr class="ng-sp" data-g="${esc(id)}" data-sp="${esc(n)}"><td class="s">${esc(n)}</td>${pc?`<td>${pan?esc(pan):'—'}</td>`:''}<td class="n">${N(sn.get(n).n)}</td><td class="n">${L(sn.get(n).f)}</td><td>${esc(d?.by||'')}${d&&d.on?' · '+esc(d.on):''}</td><td>${btn}</td></tr>`;
+        const btn=ro?'':'<button class="btn btn-sm btn-outline ng-dng" data-a="unm" title="Undo the merge of this name: it goes back to To decide">Unmerge</button> <button class="btn btn-sm btn-outline" data-a="split" title="Not the same company: keep this name as its own company">Make separate</button>';
+        h+=`<tr class="ng-sp${hitTr(n)}" data-g="${esc(id)}" data-sp="${esc(n)}"><td class="s">${esc(n)}</td>${pc?`<td>${pan?esc(pan):'—'}</td>`:''}${brCell(sn.get(n))}<td class="n">${N(sn.get(n).n)}</td><td class="n">${L(sn.get(n).f)}</td><td>${esc(d?.by||'')}${d&&d.on?' · '+esc(d.on):''}</td><td>${btn}</td></tr>`;
       });
       h+='</table></div>';
-      h+=`<table style="width:100%"><tr data-g="${esc(id)}"><td><div class="ng-acts" style="justify-content:flex-end;margin-top:8px"><button class="btn btn-sm btn-outline" data-a="dlg" title="Every GR of this group: GR No, date, final name, name on GR and all master columns">⬇ GRs of this group</button>${ro?'':'<button class="btn btn-sm btn-outline" data-a="rename">Rename group</button>'}${ro||!g.manual?'':'<button class="btn btn-sm btn-outline ng-dng" data-a="revoke">Unmerge whole group</button>'}</div></td></tr></table>`;
+      h+=`<table style="width:100%"><tr data-g="${esc(id)}"><td><div class="ng-acts" style="justify-content:flex-end;margin-top:8px"><button class="btn btn-sm btn-outline" data-a="dlg" title="Every GR of this group: GR No, date, final name, name on GR and all master columns">⬇ GRs of this group</button>${ro?'':'<button class="btn btn-sm btn-outline" data-a="rename">Rename group</button>'}${ro?'':'<button class="btn btn-sm btn-outline ng-dng" data-a="revoke">Unmerge whole group</button>'}</div></td></tr></table>`;
     }
     h+='</div>';
   });
@@ -18525,7 +18585,7 @@ page.addEventListener('change',e=>{
   const r=e.target.closest('.ng-card select[data-sp]'); if (r){ const p=(NG._list||[]).find(x=>x.type+'|'+x.key===r.closest('.ng-card').dataset.b); if (p) NG.picks[decKey(p.type,r.dataset.sp)]=r.value; return; }
   if (e.target.id==='ngSort'){ NG.sort=e.target.value; NG.page=0; render(); }
 });
-page.addEventListener('input',e=>{ if (e.target.id==='ngQ'){ NG.q=e.target.value.trim(); NG.page=0; clearTimeout(NG._qt); NG._qt=setTimeout(render,250); } });
+page.addEventListener('input',e=>{ if (e.target.id==='ngQ'){ NG.q=e.target.value.trim(); NG.page=0; NG.open={}; clearTimeout(NG._qt); NG._qt=setTimeout(render,250); } });
 page.addEventListener('click',e=>{
   if (e.target.closest('#ngDownload')){ try{ exportMapping(); }catch(err){ console.error('Name groups export',err); } return; }
   if (e.target.closest('#ngDownloadGr')){ try{ exportGrData({type:NG.type,names:null,label:'All_'+NG.type}); }catch(err){ console.error('Name groups GR export',err); } return; }
@@ -18533,7 +18593,7 @@ page.addEventListener('click',e=>{
   if (e.target.closest('[data-dlf]')){ const ns=new Set(); (NG._found||[]).forEach(i=>i.names.forEach(n=>ns.add(n))); exportGrData({type:NG.type,names:ns,label:NG.q}); return; }
   const chp=e.target.closest('[data-show]'); if (chp){ NG.show=chp.dataset.show; NG.page=0; render(); return; }
   if (e.target.closest('#ngHistBtn')){ NG.view=NG.view==='hist'?'list':'hist'; NG.page=0; render(); return; }
-  const ih=e.target.closest('.ng-ih'); if (ih&&!e.target.closest('button,select,input')){ NG.open[ih.dataset.k]=!NG.open[ih.dataset.k]; render(); return; }
+  const ih=e.target.closest('.ng-ih'); if (ih&&!e.target.closest('button,select,input')){ NG.open[ih.dataset.k]=ih.dataset.open!=='1'; render(); return; }
   const pg=e.target.closest('[data-pg]'); if (pg){ NG.page+=Number(pg.dataset.pg); render(); page.scrollIntoView({block:'start'}); return; }
   const b=e.target.closest('button[data-a]'); if (!b) return;
   const a=b.dataset.a;
@@ -18543,7 +18603,7 @@ page.addEventListener('click',e=>{
     const und=p.rows.filter(r=>!r.d), sub={};
     const gname=(card.querySelector('input[data-gname]').value||'').replace(/\s+/g,' ').trim()||p.title;
     und.forEach(r=>{ const c=rowPick(p,r); if ((c==='2'||c==='3')&&!sub[c]) sub[c]=clean(r.sp)||r.sp; });
-    const list=und.map(r=>{
+    const list=und.filter(r=>rowPick(p,r)!=='').map(r=>{
       const c=rowPick(p,r);
       if (c==='X') return [p.type,r.sp,r.sp,'SEPARATE'];
       if (c==='S') return [p.type,r.sp,gname,'APPROVED'];
@@ -18551,14 +18611,33 @@ page.addEventListener('click',e=>{
       return [p.type,r.sp,sub[c],'APPROVED'];
     });
     if (gname!==p.title) p.rows.forEach(r=>{ if (r.d&&r.d.status==='APPROVED'&&r.d.group===p.title) list.push([p.type,r.sp,gname,'APPROVED']); });
-    und.forEach(r=>delete NG.picks[decKey(p.type,r.sp)]); delete NG.names[p.type+'|'+p.key];
+    if (!list.length){ alert('Choose Same, a group or Separate for at least one name.'); return; }
+    und.filter(r=>rowPick(p,r)!=='').forEach(r=>delete NG.picks[decKey(p.type,r.sp)]); delete NG.names[p.type+'|'+p.key];
     decide(card,list);
     return;
   }
   if (a==='cunm'||a==='crev'){
     const card=b.closest('.ng-card'), c=(NG._conf||[])[Number(card.dataset.c)]; if (!c) return;
-    if (a==='cunm'){ const sp=b.closest('tr').dataset.sp; if (!confirm('Unmerge "'+sp+'" from '+c.group+'?\nIt goes back to Pending; if it has a PAN it joins its own PAN group automatically.')) return; decide(card,[[c.type,sp,sp,'REVOKED']]); }
+    if (a==='cunm'){ const sp=b.closest('tr').dataset.sp; if (!confirm('Unmerge "'+sp+'" from '+c.group+'?\nIt goes back to To decide; if it has a Unique ID it joins the group of that ID automatically.')) return; decide(card,[[c.type,sp,sp,'REVOKED']]); }
     else { if (!confirm('Unmerge the whole group '+c.group+' ('+c.rows.length+' names)?')) return; decide(card,c.rows.filter(r=>r.d&&!r.d.auto).map(r=>[c.type,r.sp,r.sp,'REVOKED'])); }
+    return;
+  }
+  /* back to To decide: a name kept separate */
+  if (a==='unsep'){
+    const card=b.closest('.ng-card');
+    let type=NG.type, sp=b.dataset.sp;
+    if (card&&card.dataset.n!=null){ const o=(NG._single||[])[Number(card.dataset.n)]; if (!o) return; type=o.type; sp=o.sp; }
+    else { const p=(NG._list||[]).find(x=>x.type+'|'+x.key===card.dataset.b); if (p) type=p.type; }
+    if (!sp||!confirm('Undo "Separate" for "'+sp+'"? It goes back to To decide.')) return;
+    decide(card,[[type,sp,sp,'REVOKED']]);
+    return;
+  }
+  /* search card of a name in no group: add it to a group */
+  if (a==='addg'){
+    const card=b.closest('.ng-card'), o=(NG._single||[])[Number(card.dataset.n)]; if (!o) return;
+    const gname=(card.querySelector('input[data-addg]').value||'').replace(/\s+/g,' ').trim();
+    if (!gname){ alert('Type or pick the group name first.'); return; }
+    decide(card,[[o.type,o.sp,gname,'APPROVED']]);
     return;
   }
   const tr=b.closest('tr[data-g]'); if (!tr) return;
@@ -18566,15 +18645,14 @@ page.addEventListener('click',e=>{
   if (a==='dlg'){ exportGrData({type:g.type,names:new Set(g.sp),label:g.name}); return; }
   if (a==='open'){ NG.open[tr.dataset.g]=!NG.open[tr.dataset.g]; render(); return; }
   if (a==='revoke'){
-    const man=g.sp.filter(n=>{ const d=NG.dec.get(decKey(g.type,n)); return d&&d.status==='APPROVED'; });
-    if (!confirm('Unmerge '+g.name+'?\n'+man.length+' names go back to Pending. Names with the same PAN are clubbed again automatically.')) return;
-    decide(null,man.map(n=>[g.type,n,n,'REVOKED']));
+    if (!confirm('Unmerge '+g.name+'?\nAll '+g.sp.length+' names go back to To decide, together in one card, until you merge them again.')) return;
+    decide(null,g.sp.map(n=>[g.type,n,g.name,'REVOKED']));
     return;
   }
   if (a==='unm'){
     const sp=tr.dataset.sp;
-    if (!confirm('Unmerge "'+sp+'" from '+g.name+'? It goes back to Pending.')) return;
-    decide(null,[[g.type,sp,sp,'REVOKED']]);
+    if (!confirm('Unmerge "'+sp+'" from '+g.name+'? It goes back to To decide, in a card with this group, until you decide again.')) return;
+    decide(null,[[g.type,sp,g.name,'REVOKED']]);
     return;
   }
   if (a==='rename'){
