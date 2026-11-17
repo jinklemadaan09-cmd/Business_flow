@@ -2427,6 +2427,7 @@ const METRIC_DEFS = [
   ['Lost','No business for more than N months (N = NBD gap, default 6), counted by calendar month','A party (consignor / consignee / customer) is Lost in the month after it has gone N full months without business: last business month + N + 1 (last business Apr, N 6 → Lost in Nov). Months are counted by month, not by GR date. If the party books again in that month it is NBD instead, and RBD from the next month. Shown as the Lost column in the NBD / RBD tables (Yield Analysis and MoM), not added to Total. Checked within the selected Pan India / Zone / Circle / Branch. The zone / branch / destination of a Lost party is taken from its last business month.','Months with business','—','tag'],
   ['Freight lost / month','SUM(Total Freight in its last N months) ÷ Active Months in those N months','The average monthly Total Freight a Lost party gave while it was active, in the N months up to its last business month (N = NBD gap). Shows how much monthly business stopped.','Total Freight','Active Months','₹'],
   ['Half-Yearly Business','SUM(Total Freight) per half-year: H1 = Apr–Sep, H2 = Oct–Mar of each financial year','Yield Analysis → Half-Yearly Business table. Columns show the current and the previous financial year. A half-year with no loaded data shows "–" (for example 2025-26 until that data is loaded) and fills in by itself once the data is in the master. Ignores the Month / Date filter; all other slicers apply.','Total Freight','—','₹'],
+  ['Half-Yearly Business by Party','Same as Half-Yearly Business, one row per party × selected Hierarchy Levels','Yield Analysis → Half-Yearly Business by Party. Without levels: one row per Consignor / Consignee / Customer Name. Each level ticked in Hierarchy Levels (Branch, Destination, Zone, Circle, Lane …) adds a column and splits the party into one row per value: a party working from 2 branches = 2 rows, each with its own half-year Total Freight, Avg / month, Change % and Trend. No subtotal rows.','Total Freight','Completed months','₹'],
   ['Uptrade / Downtrade','Avg / month current half vs Avg / month previous half','Avg / month = half-year Total Freight ÷ completed months of that half that are in the loaded data (the running calendar month is not counted, so a few days of the month do not pull the average down; its freight is still in the half-year total). Current half = the latest half-year with at least one completed month; previous half = the half-year before it. Higher = Uptrade, lower = Downtrade, equal to the shown precision (under ₹0.01 Lacs or 0.05 % apart) = Flat, no business in the previous half = New, no business in the current half = No business.','Avg / month current half','Avg / month previous half','tag'],
   ['NBD / RBD','NBD if no GR in the previous N months (N = NBD gap setting, default 6)','New Business Development: the party (consignor / consignee / customer) gave no business in the previous N months and gives business again (or for the first time). It is NBD only in that first month and RBD from the next month (NBD Rules → NBD stays NBD for, default 1: first GR in Jan = NBD in Jan, RBD from Feb). Checked within the selected Pan India / Zone / Circle / Branch. After the window the business is RBD (Repeat Business). The first month of loaded data is the base: every party with business in it is RBD, and a party first seen in a later month is NBD from that month. Every GR is NBD or RBD (Total = NBD + RBD).','—','—','tag'],
 ];
@@ -19103,11 +19104,11 @@ function renderMom(){
   wrap.innerHTML=`<table class="yield-table nbd-table nbd-sum" data-lv="${SL}"><thead><tr>${sd.map(x=>`<th class="hier nbd-lv" rowspan="2">${esc(x[1])}</th>`).join('')}${(()=>{ const h1=G=>`<th colspan="4" class="${G[2]} nbd-gs">${G[1]} — ${esc((CM.find(x=>x[0]===cm)||CM[0])[1])}</th>`; return SG.slice(0,-1).map(h1).join('')+`<th colspan="4" class="nbd-hl nbd-gs">Lost — ${isN?esc(partyLbl(st))+'s':'Freight lost / month'}</th>`+h1(SG[SG.length-1]); })()}</tr><tr>${(()=>{ const h2=G=>`<th class="${G[2]} nbd-gs">${lb}${u}</th><th class="${G[2]}">${lc}${u}</th><th class="${G[2]}">Δ</th><th class="${G[2]}">Δ %</th>`; return SG.slice(0,-1).map(h2).join('')+h2(['l','','nbd-hl'])+h2(SG[SG.length-1]); })()}</tr></thead>
     <tbody>${body}</tbody><tfoot><tr><td class="hier">PAN INDIA</td>${'<td class="hier"></td>'.repeat(SL-1)}${cells(all,{})}</tr></tfoot></table>`;
 }
-function render(pg){ try{ if(!App.rows||!App.rows.length) return; if(pg==='yield'){ renderYield(); if(window.renderHalfYear) window.renderHalfYear(); } else if(pg==='mom') renderMom(); if(ST[pg]&&ST[pg].lost) showLost(pg,ST[pg].lost,true); const p=$('nbd-'+pg); if(p){ toEnd(p); requestAnimationFrame(()=>fixHead(p.querySelector('[data-wrap]'))); } }catch(e){ console.error('NBD',e); } }
+function render(pg){ try{ if(!App.rows||!App.rows.length) return; if(pg==='yield'){ renderYield(); if(window.renderHalfYear) window.renderHalfYear(); if(window.renderPartyHalf) window.renderPartyHalf(); } else if(pg==='mom') renderMom(); if(ST[pg]&&ST[pg].lost) showLost(pg,ST[pg].lost,true); const p=$('nbd-'+pg); if(p){ toEnd(p); requestAnimationFrame(()=>fixHead(p.querySelector('[data-wrap]'))); } }catch(e){ console.error('NBD',e); } }
 window.renderNbd=render;
 function after(){ const k=document.querySelector('.tab.active')?.dataset.page; if(k==='yield'||k==='mom') render(k); }
 /* safety net: if the panel is missing on an open Yield / MoM page (e.g. a render path that skips the page hook), draw it */
-setInterval(()=>{ try{ const k=document.querySelector('.tab.active')?.dataset.page; if((k==='yield'||k==='mom') && App.rows && App.rows.length){ if(!$('nbd-'+k)||(k==='yield'&&!$('hy-yield'))) render(k); else toEnd($('nbd-'+k)); } }catch(e){} },2000);
+setInterval(()=>{ try{ const k=document.querySelector('.tab.active')?.dataset.page; if((k==='yield'||k==='mom') && App.rows && App.rows.length){ if(!$('nbd-'+k)||(k==='yield'&&(!$('hy-yield')||!$('ph-yield')))) render(k); else toEnd($('nbd-'+k)); } }catch(e){} },2000);
 document.addEventListener('click',e=>{ const t=e.target.closest&&e.target.closest('.tab[data-page]'); if(t) setTimeout(after,50); });
 (function(){ const _r=window.renderActivePage; if(typeof _r!=='function') return; const w=function(){ const x=_r.apply(this,arguments); setTimeout(after,0); return x; }; try{ window.renderActivePage=renderActivePage=w; }catch(e){ window.renderActivePage=w; } })();
 })();
@@ -19257,6 +19258,133 @@ function draw(){
   more.innerHTML=`<div class="panel-sub" style="margin-top:6px">Avg / month uses completed months only: ${esc(hLab(cur))} has ${nC} completed month${nC===1?'':'s'} in the data (${[...curDone].sort((a,b)=>a-b).map(i=>MN[i%12]+'-'+String(Math.floor(i/12)).slice(2)).join(', ')||'none'}); the running month is in the half-year total but not in the average. "–" in a half-year column = no data loaded for that half-year yet.${list.length>ST.show?` Showing ${N(ST.show)} of ${N(list.length)} parties. <button type="button" class="btn btn-sm btn-outline" data-hy-more>Show 200 more</button>`:''}</div>`;
 }
 window.renderHalfYear=function(){ try{ draw(); }catch(e){ console.error('Half-Yearly Business',e); } };
+})();
+</script>
+<style>
+.ph-panel .yield-hier-select{position:relative;display:inline-block}
+.ph-panel .yield-hier-panel{left:0;right:auto;width:300px}
+.ph-panel .yield-hier-option.ph-fixed{opacity:.75;cursor:default}
+.ph-grp{font-size:10px;font-weight:700;color:#8a92a3;text-transform:uppercase;letter-spacing:.4px;padding:6px 4px 2px}
+.ph-grp.ln{border-top:1px solid var(--border);margin-top:4px}
+</style>
+<script id="partyHalfJs">
+/* ======================================================================
+   Half-Yearly Business by Party (Yield Analysis, below the Half-Yearly table).
+   One flat row per party; Hierarchy Levels (same picker as the Yield Analysis table) add columns
+   after the party and UNMERGE it: a party that works from 2 branches becomes 2 rows, each with its
+   own half-year business, average per month and Trend. No subtotal rows.
+   Same rules as the Half-Yearly table: H1 = Apr–Sep, H2 = Oct–Mar; Avg / month over completed months;
+   Uptrade / Downtrade / Flat / New / No business. The Month / Date filter does not apply.
+   ====================================================================== */
+(function(){
+const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const $=id=>document.getElementById(id);
+const MN=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const PARTY=[['cngr','Consignor'],['cnge','Consignee'],['customer','Customer Name']];
+const TR=[['ALL','All'],['up','Uptrade'],['dn','Downtrade'],['sm','Flat'],['nw','New'],['nb','No business']];
+const SORT=[['tot','Largest business first'],['drop','Biggest drop first'],['rise','Biggest rise first'],['name','Name A–Z']];
+const TXT={up:'▲ Uptrade',dn:'▼ Downtrade',nw:'New',nb:'No business',sm:'Flat'};
+const ST=window.__PH_ST=window.__PH_ST||{party:'cngr',lv:[],trend:'ALL',sort:'tot',cmp:'',q:'',show:300};
+const mi=k=>{ const p=String(k).split('-'); return (+p[0])*12+(+p[1]-1); };
+const mk=i=>Math.floor(i/12)+'-'+String(i%12+1).padStart(2,'0');
+const L=v=>'₹'+(v/1e5).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
+const N=v=>Math.round(v||0).toLocaleString('en-IN');
+const pv=(r,f)=>{ const v=r[f]; return v==null||v===''?'UNSPECIFIED':String(v); };
+const halfOf=i=>{ const y=Math.floor(i/12), m=i%12, fy=m>=3?y:y-1; return fy*2+((m>=3&&m<=8)?0:1); };
+const hMonths=id=>{ const fy=Math.floor(id/2), s=fy*12+3+(id%2)*6; return [0,1,2,3,4,5].map(x=>s+x); };
+const hLab=id=>{ const fy=Math.floor(id/2); return 'H'+(id%2+1)+' '+fy+'-'+String(fy+1).slice(2); };
+const hSpan=id=>id%2?'Oct–Mar':'Apr–Sep';
+const flat=(pa,ca)=>Math.abs(ca-pa)<500||Math.abs(ca-pa)/pa*100<0.05;
+const HIER=()=>(typeof YIELD_HIER!=='undefined'?YIELD_HIER:(window.V12_HIER||[])).filter(h=>h[0]!=='grno');
+const LANE=new Set(['originlane','destlane1','destlane2','destlane3']);
+/* level names as in the master (App.mapping, e.g. origin → BOOKING BRANCH), like the other Hierarchy Levels pickers */
+const lbl=f=>{ const m=window.App&&App.mapping&&App.mapping[f]; if(m) return String(m); const p=PARTY.find(x=>x[0]===f); if(p) return p[1]; const h=HIER().find(x=>x[0]===f); return h?h[1]:f; };
+function picker(){
+  const party=ST.party, sel=new Set(ST.lv), all=HIER().filter(h=>h[0]!==party);
+  const opt=(f,l,fixed)=>`<label class="yield-hier-option${fixed?' ph-fixed':''}"><input type="checkbox" value="${f}" ${fixed||sel.has(f)?'checked':''} ${fixed?'disabled':''}> <span>${esc(l)}</span></label>`;
+  return `<div class="yield-hier-help">The ${esc(lbl(party))} column is always first. Tick levels to add them as columns: each party is split into one row per value (for example one row per branch). Untick to merge back.</div>
+    <div class="yield-hier-options">${opt(party,lbl(party),true)}${all.filter(h=>!LANE.has(h[0])).map(h=>opt(h[0],h[1])).join('')}${all.filter(h=>LANE.has(h[0])).map(h=>opt(h[0],h[1])).join('')}</div>
+    <div class="yield-hier-actions"><button type="button" data-ph-all>Select all</button><button type="button" data-ph-clr>Clear</button></div>`;
+}
+function panel(){
+  let p=$('ph-yield'); if(p) return p;
+  const sec=$('page-yield'); if(!sec) return null;
+  p=document.createElement('div'); p.className='panel report-panel hy-panel ph-panel'; p.id='ph-yield';
+  p.innerHTML=`<div class="panel-head"><div><h2>Half-Yearly Business by Party</h2><div class="panel-sub">One row per party. Hierarchy Levels add columns and split the party into one row per value (a party working from 2 branches = 2 rows), each with its own half-year business, Avg / month and Trend. Click an amount to open its GRs. The Month / Date filter does not apply; other slicers do.</div></div></div><div class="hy-ctl" data-ctl></div><div class="table-scroll" data-wrap style="max-height:680px"></div><div data-more></div>`;
+  const hy=$('hy-yield'); if(hy&&hy.parentNode===sec) hy.after(p); else { const nb=$('nbd-yield'); if(nb&&nb.parentNode===sec) sec.insertBefore(p,nb); else sec.appendChild(p); }
+  p.addEventListener('change',e=>{
+    const cb=e.target.closest('.yield-hier-panel input[type=checkbox]');
+    if(cb){ const s=new Set(ST.lv); cb.checked?s.add(cb.value):s.delete(cb.value); ST.lv=HIER().map(h=>h[0]).filter(f=>s.has(f)&&f!==ST.party); ST.show=300; draw(true); return; }
+    const s=e.target.closest('[data-ph]'); if(!s) return; ST[s.dataset.ph]=s.value; if(s.dataset.ph==='party') ST.lv=ST.lv.filter(f=>f!==s.value); ST.show=300; draw(); });
+  p.addEventListener('input',e=>{ const s=e.target.closest('[data-ph-q]'); if(!s) return; ST.q=/@/.test(s.value)?'':s.value; ST.show=300; clearTimeout(ST._t); ST._t=setTimeout(()=>{ draw(); const i=p.querySelector('[data-ph-q]'); if(i){ i.focus(); i.setSelectionRange(i.value.length,i.value.length); } },250); });
+  p.addEventListener('click',e=>{
+    const hb=e.target.closest('.yield-hier-btn'); if(hb){ e.stopPropagation(); const pn=hb.parentNode.querySelector('.yield-hier-panel'); const on=pn.classList.contains('open'); document.querySelectorAll('.yield-hier-panel.open').forEach(x=>x.classList.remove('open')); if(!on) pn.classList.add('open'); return; }
+    if(e.target.closest('[data-ph-all]')){ e.stopPropagation(); ST.lv=HIER().map(h=>h[0]).filter(f=>f!==ST.party&&!LANE.has(f)&&!PARTY.some(x=>x[0]===f)); draw(true); return; }
+    if(e.target.closest('[data-ph-clr]')){ e.stopPropagation(); ST.lv=[]; draw(true); return; }
+    if(e.target.closest('.yield-hier-panel')){ e.stopPropagation(); return; }
+    if(e.target.closest('[data-ph-reset]')){ ST.q=''; ST.trend='ALL'; ST.show=300; draw(); return; }
+    if(e.target.closest('[data-ph-more]')){ ST.show+=300; draw(); return; }
+    const d=e.target.closest('td[data-ph-f]'); if(d&&window.openDirectGr){ let f={}, ms=null; try{ f=JSON.parse(d.dataset.phF); ms=JSON.parse(d.dataset.phM); }catch(_){} window.openDirectGr(f,ms,'Half-Yearly Business by Party'); }
+  });
+  return p;
+}
+function draw(keepOpen){
+  const p=panel(); if(!p||!window.App||!App.rows||!App.rows.length) return;
+  const wrap=p.querySelector('[data-wrap]'), more=p.querySelector('[data-more]');
+  const DM=new Set(); let lastD=null;
+  for(const r of App.rows){ if(!r.monthKey) continue; DM.add(mi(r.monthKey)); if(r.grdt&&(!lastD||r.grdt>lastD)) lastD=r.grdt; }
+  const now=new Date(), curM=now.getFullYear()*12+now.getMonth();
+  const done=id=>hMonths(id).filter(i=>DM.has(i)&&i<curM), has=id=>hMonths(id).some(i=>DM.has(i));
+  const opts=[...new Set([...DM].map(halfOf))].filter(id=>done(id).length).sort((a,b)=>b-a);
+  if(!opts.length){ wrap.innerHTML='<div class="empty-state"><h2>No completed month in the loaded data yet.</h2></div>'; more.innerHTML=''; return; }
+  let cur=+ST.cmp; if(!opts.includes(cur)){ cur=opts[0]; ST.cmp=String(cur); }
+  const prev=cur-1, fyC=Math.floor(cur/2), cols=[(fyC-1)*2,(fyC-1)*2+1,fyC*2,fyC*2+1];
+  const curDone=new Set(done(cur)), nC=curDone.size, nP=done(prev).length;
+  const party=ST.party; ST.lv=(ST.lv||[]).filter(f=>f!==party);
+  const defs=[party].concat(ST.lv);
+  const opt=(arr,v)=>arr.map(x=>`<option value="${x[0]}" ${String(v)===String(x[0])?'selected':''}>${esc(x[1])}</option>`).join('');
+  p.querySelector('[data-ctl]').innerHTML=`<label>Party <select data-ph="party">${opt(PARTY,party)}</select></label>
+    <div class="yield-hier-select"><button type="button" class="yield-hier-btn">Hierarchy Levels: ${esc(defs.map(lbl).join(' › '))} <span>▾</span></button><div class="yield-hier-panel${keepOpen?' open':''}">${picker()}</div></div>
+    <label>Compare <select data-ph="cmp">${opt(opts.map(id=>[id,hLab(id)+' vs '+hLab(id-1)]),cur)}</select></label>
+    <label>Trend <select data-ph="trend">${opt(TR,ST.trend)}</select></label>
+    <label>Sort <select data-ph="sort">${opt(SORT,ST.sort)}</select></label>
+    <label>Search <input data-ph-q type="search" name="ph-party-search" autocomplete="off" data-lpignore="true" data-form-type="other" placeholder="Party, branch, destination…" value="${esc(/@/.test(ST.q||'')?'':ST.q)}"></label>`;
+  const fr=typeof filterRowsCached==='function'?filterRowsCached({...App.filters,globalMonth:'',dateFrom:null,dateTo:null}):App.rows;
+  const want=new Set(cols.concat([prev])), G=new Map();
+  for(const r of fr){ if(!r.monthKey) continue; const i=mi(r.monthKey), h=halfOf(i); if(!want.has(h)) continue;
+    const vals=defs.map(f=>pv(r,f)), k=vals.join('\u0001'); let a=G.get(k); if(!a){ a={vals,h:{},cc:0,raw:new Set()}; G.set(k,a); }
+    const tv=r.total||0; a.h[h]=(a.h[h]||0)+tv; if(h===cur&&curDone.has(i)) a.cc+=tv;
+    const rw=r[party+'Raw']; if(rw!=null&&rw!=='') a.raw.add(String(rw).toUpperCase()); }
+  const calc=n=>{ const pa=nP?(n.h[prev]||0)/nP:0, ca=nC?n.cc/nC:0;
+    n.t=pa<=1e-9&&ca<=1e-9?'':pa<=1e-9?'nw':ca<=1e-9?'nb':flat(pa,ca)?'sm':ca>pa?'up':'dn'; n.pa=pa; n.ca=ca; n.d=ca-pa; return n; };
+  let list=[...G.values()].map(calc).filter(n=>n.t);
+  if(ST.trend!=='ALL') list=list.filter(n=>n.t===ST.trend);
+  const q=String(ST.q||'').trim().toUpperCase();
+  if(q&&!/@/.test(q)) list=list.filter(n=>n.vals.some(v=>v.toUpperCase().includes(q))||[...n.raw].some(x=>x.includes(q)));
+  const tot=n=>(n.h[prev]||0)+(n.h[cur]||0);
+  list.sort(ST.sort==='drop'?(a,b)=>a.d-b.d:ST.sort==='rise'?(a,b)=>b.d-a.d:ST.sort==='name'?(a,b)=>a.vals.join(' ').localeCompare(b.vals.join(' ')):(a,b)=>tot(b)-tot(a));
+  /* how many rows each party has (shown as "split N") */
+  const per=new Map(); list.forEach(n=>per.set(n.vals[0],(per.get(n.vals[0])||0)+1));
+  const mKeys=id=>hMonths(id).filter(i=>DM.has(i)).map(mk);
+  const runTxt=id=>{ if(!lastD) return hSpan(id); const li=lastD.getFullYear()*12+lastD.getMonth(); if(halfOf(li)!==id||li>=hMonths(id)[5]&&li<curM) return hSpan(id); return MN[hMonths(id)[0]%12]+'–'+lastD.getDate()+' '+MN[lastD.getMonth()]; };
+  const fOf=n=>{ const f={}; defs.forEach((d,i)=>f[d]=n.vals[i]); return f; };
+  const cell=(n,id,f)=>has(id)?(n.h[id]?`<td class="hy-d${id===cols[0]?' hy-gs':''}" data-ph-f="${esc(JSON.stringify(f))}" data-ph-m="${esc(JSON.stringify(mKeys(id)))}" title="Click to open these GRs">${id===cur||id===prev?'<b>'+L(n.h[id])+'</b>':L(n.h[id])}</td>`:`<td class="${id===cols[0]?'hy-gs':''}">–</td>`):`<td class="hy-dim${id===cols[0]?' hy-gs':''}" title="No data loaded for this half-year">–</td>`;
+  const tail=n=>{ const ch=n.pa>1e-9?(n.t==='sm'?0:n.d/n.pa*100):null;
+    return `<td class="hy-gs">${nP?(n.pa?L(n.pa):'–'):'<span class="hy-dim">–</span>'}</td><td>${n.ca?L(n.ca):'–'}</td><td class="${ch==null?'':ch>0?'hy-up':ch<0?'hy-dn':''}">${ch==null?'—':(ch>0?'+':'')+ch.toFixed(1)+'%'}</td><td>${n.t?`<span class="hy-tg ${n.t}">${TXT[n.t]}</span>`:''}</td>`; };
+  const split=ST.lv.length>0;
+  const body=list.slice(0,ST.show).map(n=>{ const f=fOf(n), c=per.get(n.vals[0]);
+    return `<tr>${n.vals.map((v,i)=>`<td class="hier" title="${esc(v)}">${esc(v)}${i===0&&split&&c>1?` <span class="nbd-badge" title="This party has ${c} rows at the selected levels">split ${c}</span>`:''}</td>`).join('')}${cols.map(id=>cell(n,id,f)).join('')}${tail(n)}</tr>`; }).join('');
+  const T={h:{},cc:0}; list.forEach(n=>{ [...want].forEach(id=>{ if(n.h[id]) T.h[id]=(T.h[id]||0)+n.h[id]; }); T.cc+=n.cc; }); calc(T);
+  const u='<span class="unit-head">Lacs</span>';
+  const hh=id=>`<th class="${id===cur?'hy-c':id===prev?'hy-p':''}${id===cols[0]?' hy-gs':''}">${hLab(id)}<br><span style="font-weight:600;text-transform:none">${id===cur?runTxt(id):hSpan(id)}</span>${u}</th>`;
+  const parties=new Set(list.map(n=>n.vals[0])).size;
+  wrap.innerHTML=list.length?`<table class="yield-table hy-table"><thead><tr>${defs.map(f=>`<th class="hier">${esc(lbl(f))}</th>`).join('')}${cols.map(hh).join('')}<th class="hy-t hy-gs">Avg / month<br>${esc(hLab(prev))} (${nP} mo)${u}</th><th class="hy-t">Avg / month<br>${esc(hLab(cur))} (${nC} mo)${u}</th><th class="hy-t">Change %</th><th class="hy-t">Trend</th></tr></thead>
+    <tbody>${body}</tbody><tfoot><tr><td class="hier">TOTAL (${N(list.length)} rows · ${N(parties)} parties)</td>${'<td class="hier"></td>'.repeat(defs.length-1)}${cols.map(id=>has(id)?`<td${id===cols[0]?' class="hy-gs"':''}>${T.h[id]?L(T.h[id]):'–'}</td>`:`<td class="hy-dim${id===cols[0]?' hy-gs':''}">–</td>`).join('')}${tail(T)}</tr></tfoot></table>`
+    :`<div class="empty-state"><h2>No parties for the selected Trend / Search.</h2>${ST.q||ST.trend!=='ALL'?'<button type="button" class="btn btn-sm btn-outline" data-ph-reset>Clear search and Trend</button>':''}</div>`;
+  more.innerHTML=`<div class="panel-sub" style="margin-top:6px">Avg / month uses completed months only (${esc(hLab(cur))}: ${nC} month${nC===1?'':'s'}). "–" in a half-year column = no data loaded for that half-year yet.${list.length>ST.show?` Showing ${N(ST.show)} of ${N(list.length)} rows. <button type="button" class="btn btn-sm btn-outline" data-ph-more>Show 300 more</button>`:''}</div>`;
+}
+window.renderPartyHalf=function(keepOpen){ try{ draw(keepOpen); }catch(e){ console.error('Half-Yearly Business by Party',e); } };
+document.addEventListener('click',e=>{ if(!e.target.closest('#ph-yield .yield-hier-select')) document.querySelectorAll('#ph-yield .yield-hier-panel.open').forEach(x=>x.classList.remove('open')); });
 })();
 </script>
 <script id="proModeJs">
