@@ -2427,7 +2427,7 @@ const METRIC_DEFS = [
   ['Lost','No business for more than N months (N = NBD gap, default 6), counted by calendar month','A party (consignor / consignee / customer) is Lost in the month after it has gone N full months without business: last business month + N + 1 (last business Apr, N 6 → Lost in Nov). Months are counted by month, not by GR date. If the party books again in that month it is NBD instead, and RBD from the next month. Shown as the Lost column in the NBD / RBD tables (Yield Analysis and MoM), not added to Total. Checked within the selected Pan India / Zone / Circle / Branch. The zone / branch / destination of a Lost party is taken from its last business month.','Months with business','—','tag'],
   ['Freight lost / month','SUM(Total Freight in its last N months) ÷ Active Months in those N months','The average monthly Total Freight a Lost party gave while it was active, in the N months up to its last business month (N = NBD gap). Shows how much monthly business stopped.','Total Freight','Active Months','₹'],
   ['Half-Yearly Business','SUM(Total Freight) per half-year: H1 = Apr–Sep, H2 = Oct–Mar of each financial year','Yield Analysis → Half-Yearly Business table. Columns show the current and the previous financial year. A half-year with no loaded data shows "–" (for example 2025-26 until that data is loaded) and fills in by itself once the data is in the master. Ignores the Month / Date filter; all other slicers apply.','Total Freight','—','₹'],
-  ['Uptrade / Downtrade','Avg / month current half vs Avg / month previous half','Avg / month = half-year Total Freight ÷ completed months of that half that are in the loaded data (the running calendar month is not counted, so a few days of the month do not pull the average down; its freight is still in the half-year total). Current half = the latest half-year with at least one completed month; previous half = the half-year before it. Higher = Uptrade, lower = Downtrade, no business in the previous half = New, no business in the current half = No business.','Avg / month current half','Avg / month previous half','tag'],
+  ['Uptrade / Downtrade','Avg / month current half vs Avg / month previous half','Avg / month = half-year Total Freight ÷ completed months of that half that are in the loaded data (the running calendar month is not counted, so a few days of the month do not pull the average down; its freight is still in the half-year total). Current half = the latest half-year with at least one completed month; previous half = the half-year before it. Higher = Uptrade, lower = Downtrade, equal to the shown precision (under ₹0.01 Lacs or 0.05 % apart) = Flat, no business in the previous half = New, no business in the current half = No business.','Avg / month current half','Avg / month previous half','tag'],
   ['NBD / RBD','NBD if no GR in the previous N months (N = NBD gap setting, default 6)','New Business Development: the party (consignor / consignee / customer) gave no business in the previous N months and gives business again (or for the first time). It is NBD only in that first month and RBD from the next month (NBD Rules → NBD stays NBD for, default 1: first GR in Jan = NBD in Jan, RBD from Feb). Checked within the selected Pan India / Zone / Circle / Branch. After the window the business is RBD (Repeat Business). The first month of loaded data is the base: every party with business in it is RBD, and a party first seen in a later month is NBD from that month. Every GR is NBD or RBD (Total = NBD + RBD).','—','—','tag'],
 ];
 function renderMetricDefinitions(){
@@ -19147,9 +19147,9 @@ const $=id=>document.getElementById(id);
 const MN=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const PARTY=[['cngr','Consignor'],['cnge','Consignee'],['customer','Customer Name']];
 const LVL=[['1','Party'],['2','Party › Branch'],['3','Party › Branch › Destination']];
-const TR=[['ALL','All'],['up','Uptrade'],['dn','Downtrade'],['nw','New'],['nb','No business']];
+const TR=[['ALL','All'],['up','Uptrade'],['dn','Downtrade'],['sm','Flat'],['nw','New'],['nb','No business']];
 const SORT=[['tot','Largest business first'],['drop','Biggest drop first'],['rise','Biggest rise first']];
-const TXT={up:'▲ Uptrade',dn:'▼ Downtrade',nw:'New',nb:'No business',sm:'Same'};
+const TXT={up:'▲ Uptrade',dn:'▼ Downtrade',nw:'New',nb:'No business',sm:'Flat'};
 const ST=window.__HY_ST=window.__HY_ST||{party:'cngr',lvl:'3',trend:'ALL',sort:'tot',cmp:'',q:'',exp:new Set(),show:200};
 const mi=k=>{ const p=String(k).split('-'); return (+p[0])*12+(+p[1]-1); };
 const mk=i=>Math.floor(i/12)+'-'+String(i%12+1).padStart(2,'0');
@@ -19168,16 +19168,19 @@ function panel(){
   p.innerHTML=`<div class="panel-head"><div><h2>Half-Yearly Business — Uptrade / Downtrade</h2><div class="panel-sub">Total Freight per half-year (H1 = Apr–Sep, H2 = Oct–Mar). Avg / month of the current half vs the previous half: higher = Uptrade, lower = Downtrade. Click ▸ to open a party's branches and destinations; click an amount to open its GRs. The Month / Date filter does not apply; other slicers do.</div></div></div><div class="hy-ctl" data-ctl></div><div data-kpi></div><div class="table-scroll" data-wrap style="max-height:680px"></div><div data-more></div>`;
   const nb=$('nbd-yield'); if(nb&&nb.parentNode===sec) sec.insertBefore(p,nb); else sec.appendChild(p);
   p.addEventListener('change',e=>{ const s=e.target.closest('[data-hy]'); if(!s) return; ST[s.dataset.hy]=s.value; ST.exp=new Set(); ST.show=200; draw(); });
-  p.addEventListener('input',e=>{ const s=e.target.closest('[data-hy-q]'); if(!s) return; ST.q=s.value; ST.show=200; clearTimeout(ST._t); ST._t=setTimeout(()=>{ draw(); const i=p.querySelector('[data-hy-q]'); if(i){ i.focus(); i.setSelectionRange(i.value.length,i.value.length); } },250); });
+  p.addEventListener('input',e=>{ const s=e.target.closest('[data-hy-q]'); if(!s) return; ST.q=/@/.test(s.value)?'':s.value; ST.show=200; clearTimeout(ST._t); ST._t=setTimeout(()=>{ draw(); const i=p.querySelector('[data-hy-q]'); if(i){ i.focus(); i.setSelectionRange(i.value.length,i.value.length); } },250); });
   p.addEventListener('click',e=>{
     const k=e.target.closest('[data-hy-k]'); if(k){ ST.trend=ST.trend===k.dataset.hyK?'ALL':k.dataset.hyK; ST.show=200; draw(); return; }
     const t=e.target.closest('[data-hy-e]'); if(t){ e.stopPropagation(); const x=t.dataset.hyE; if(ST.exp.has(x)) [...ST.exp].filter(y=>y===x||y.startsWith(x+'␟')).forEach(y=>ST.exp.delete(y)); else ST.exp.add(x); draw(); return; }
+    if(e.target.closest('[data-hy-clr]')){ ST.q=''; ST.trend='ALL'; ST.show=200; draw(); return; }
     const m=e.target.closest('[data-hy-more]'); if(m){ ST.show+=200; draw(); return; }
     const d=e.target.closest('td[data-hy-f]'); if(d&&window.openDirectGr){ let f={}, ms=null; try{ f=JSON.parse(d.dataset.hyF); ms=JSON.parse(d.dataset.hyM); }catch(_){} window.openDirectGr(f,ms,'Half-Yearly Business'); }
   });
   return p;
 }
 const node=()=>({h:{},cc:0,kids:null});
+/* equal to the shown precision (₹0.01 Lacs) or under 0.05 % apart = Flat, not Uptrade / Downtrade */
+const flat=(pa,ca)=>Math.abs(ca-pa)<500||Math.abs(ca-pa)/pa*100<0.05;
 function draw(){
   const p=panel(); if(!p||!window.App||!App.rows||!App.rows.length) return;
   const wrap=p.querySelector('[data-wrap]'), kEl=p.querySelector('[data-kpi]'), more=p.querySelector('[data-more]');
@@ -19199,7 +19202,7 @@ function draw(){
     <label>Compare <select data-hy="cmp">${opt(opts.map(id=>[id,hLab(id)+' vs '+hLab(id-1)]),cur)}</select></label>
     <label>Trend <select data-hy="trend">${opt(TR,ST.trend)}</select></label>
     <label>Sort <select data-hy="sort">${opt(SORT,ST.sort)}</select></label>
-    <label>Search <input data-hy-q type="search" placeholder="Party name" value="${esc(ST.q)}"></label>`;
+    <label>Search <input data-hy-q type="search" name="hy-party-search" autocomplete="off" data-lpignore="true" data-form-type="other" placeholder="Party name or any spelling" value="${esc(/@/.test(ST.q||'')?'':ST.q)}"></label>`;
   /* rows: every slicer except Month / Date */
   const fr=typeof filterRowsCached==='function'?filterRowsCached({...App.filters,globalMonth:'',dateFrom:null,dateTo:null}):App.rows;
   const want=new Set(cols.concat([prev]));
@@ -19207,11 +19210,12 @@ function draw(){
   const add=(n,h,tv,cc)=>{ n.h[h]=(n.h[h]||0)+tv; if(cc) n.cc+=tv; };
   for(const r of fr){ if(!r.monthKey) continue; const i=mi(r.monthKey), h=halfOf(i); if(!want.has(h)) continue;
     const tv=r.total||0, cc=h===cur&&curDone.has(i);
-    const pk=pv(r,party); let a=P.get(pk); if(!a){ a=node(); a.kids=new Map(); P.set(pk,a); } add(a,h,tv,cc);
+    const pk=pv(r,party); let a=P.get(pk); if(!a){ a=node(); a.kids=new Map(); a.raw=new Set(); P.set(pk,a); } add(a,h,tv,cc);
+    const rw=r[party+'Raw']; if(rw!=null&&rw!=='') a.raw.add(String(rw).toUpperCase());
     const bk=pv(r,'origin'); let b=a.kids.get(bk); if(!b){ b=node(); b.kids=new Map(); a.kids.set(bk,b); } add(b,h,tv,cc);
     const dk=pv(r,'destname'); let d=b.kids.get(dk); if(!d){ d=node(); b.kids.set(dk,d); } add(d,h,tv,cc); }
   const calc=n=>{ const pa=nP?(n.h[prev]||0)/nP:0, ca=nC?n.cc/nC:0;
-    const t=pa<=1e-9&&ca<=1e-9?'':pa<=1e-9?'nw':ca<=1e-9?'nb':Math.abs(ca-pa)<1e-9?'sm':ca>pa?'up':'dn';
+    const t=pa<=1e-9&&ca<=1e-9?'':pa<=1e-9?'nw':ca<=1e-9?'nb':flat(pa,ca)?'sm':ca>pa?'up':'dn';
     n.pa=pa; n.ca=ca; n.t=t; n.d=ca-pa; return n; };
   const all=[...P.entries()].map(([v,n])=>{ calc(n); n.v=v; return n; });
   /* KPI: parties per trend + monthly change */
@@ -19220,14 +19224,14 @@ function draw(){
   kEl.innerHTML=`<div class="hy-kpis">${kp('up','▲ Uptrade '+PARTY.find(x=>x[0]===party)[1]+'s','up')}${kp('dn','▼ Downtrade','dn')}${kp('nw','New (no business in '+hLab(prev)+')','nw')}${kp('nb','No business yet in '+hLab(cur),'nb')}</div>`;
   let list=all.filter(n=>n.t);
   if(ST.trend!=='ALL') list=list.filter(n=>n.t===ST.trend);
-  const q=String(ST.q||'').trim().toUpperCase(); if(q) list=list.filter(n=>n.v.toUpperCase().includes(q));
+  const q=String(ST.q||'').trim().toUpperCase(); if(q&&!/@/.test(q)) list=list.filter(n=>n.v.toUpperCase().includes(q)||[...(n.raw||[])].some(x=>x.includes(q)));
   const tot=n=>(n.h[prev]||0)+(n.h[cur]||0);
   const srt=ST.sort==='drop'?(a,b)=>a.d-b.d:ST.sort==='rise'?(a,b)=>b.d-a.d:(a,b)=>tot(b)-tot(a);
   list.sort(srt);
   const mKeys=id=>hMonths(id).filter(i=>DM.has(i)).map(mk);
   const runTxt=id=>{ if(!lastD) return hSpan(id); const li=lastD.getFullYear()*12+lastD.getMonth(); if(halfOf(li)!==id||li>=hMonths(id)[5]&&li<curM) return hSpan(id); return MN[hMonths(id)[0]%12]+'–'+lastD.getDate()+' '+MN[lastD.getMonth()]; };
   const cell=(n,id,f)=>has(id)?(n.h[id]?`<td class="hy-d${id===cols[0]?' hy-gs':''}" data-hy-f="${esc(JSON.stringify(f))}" data-hy-m="${esc(JSON.stringify(mKeys(id)))}" title="Click to open these GRs">${id===cur||id===prev?'<b>'+L(n.h[id])+'</b>':L(n.h[id])}</td>`:`<td class="${id===cols[0]?'hy-gs':''}">–</td>`):`<td class="hy-dim${id===cols[0]?' hy-gs':''}" title="No data loaded for this half-year">–</td>`;
-  const tail=n=>{ const ch=n.pa>1e-9?n.d/n.pa*100:null;
+  const tail=n=>{ const ch=n.pa>1e-9?(n.t==='sm'?0:n.d/n.pa*100):null;
     return `<td class="hy-gs">${nP?(n.pa?L(n.pa):'–'):'<span class="hy-dim">–</span>'}</td><td>${n.ca?L(n.ca):'–'}</td><td class="${ch==null?'':ch>0?'hy-up':ch<0?'hy-dn':''}">${ch==null?'—':(ch>0?'+':'')+ch.toFixed(1)+'%'}</td><td>${n.t?`<span class="hy-tg ${n.t}">${TXT[n.t]}</span>`:''}</td>`; };
   const cnt=(m,w)=>m.size===1?esc([...m.keys()][0]):N(m.size)+' '+w;
   let body='';
@@ -19249,7 +19253,7 @@ function draw(){
   const hh=id=>`<th class="${id===cur?'hy-c':id===prev?'hy-p':''}${id===cols[0]?' hy-gs':''}">${hLab(id)}<br><span style="font-weight:600;text-transform:none">${id===cur?runTxt(id):hSpan(id)}</span>${u}</th>`;
   wrap.innerHTML=list.length?`<table class="yield-table hy-table"><thead><tr><th class="hier">${esc(pl)}</th><th class="hier">Branch</th><th class="hier">Destination</th>${cols.map(hh).join('')}<th class="hy-t hy-gs">Avg / month<br>${esc(hLab(prev))} (${nP} mo)${u}</th><th class="hy-t">Avg / month<br>${esc(hLab(cur))} (${nC} mo)${u}</th><th class="hy-t">Change %</th><th class="hy-t">Trend</th></tr></thead>
     <tbody>${body}</tbody><tfoot><tr><td class="hier">TOTAL (${N(list.length)} ${esc(pl)}s)</td><td class="hier"></td><td class="hier"></td>${cols.map(id=>has(id)?`<td${id===cols[0]?' class="hy-gs"':''}>${T.h[id]?L(T.h[id]):'–'}</td>`:`<td class="hy-dim${id===cols[0]?' hy-gs':''}">–</td>`).join('')}${tail(T)}</tr></tfoot></table>`
-    :'<div class="empty-state"><h2>No parties for the selected Trend / Search.</h2></div>';
+    :`<div class="empty-state"><h2>No parties for the selected Trend / Search.</h2>${ST.q||ST.trend!=='ALL'?'<button type="button" class="btn btn-sm btn-outline" data-hy-clr>Clear search and Trend</button>':''}</div>`;
   more.innerHTML=`<div class="panel-sub" style="margin-top:6px">Avg / month uses completed months only: ${esc(hLab(cur))} has ${nC} completed month${nC===1?'':'s'} in the data (${[...curDone].sort((a,b)=>a-b).map(i=>MN[i%12]+'-'+String(Math.floor(i/12)).slice(2)).join(', ')||'none'}); the running month is in the half-year total but not in the average. "–" in a half-year column = no data loaded for that half-year yet.${list.length>ST.show?` Showing ${N(ST.show)} of ${N(list.length)} parties. <button type="button" class="btn btn-sm btn-outline" data-hy-more>Show 200 more</button>`:''}</div>`;
 }
 window.renderHalfYear=function(){ try{ draw(); }catch(e){ console.error('Half-Yearly Business',e); } };
