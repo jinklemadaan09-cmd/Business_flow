@@ -101,7 +101,7 @@ function GRA_menu_(ui) {
     .addItem('Setup (nightly trigger)', 'GRA_setup')
     .addSeparator()
     .addItem('Open archive folder', 'GRA_openFolder')
-    .addItem('Check archive files (fix duplicates)', 'GRA_checkFiles');
+    .addItem('Archive status (optional, it checks itself)', 'GRA_checkFiles');
 }
 
 /* ------------------------------------------------------------------ main run */
@@ -151,7 +151,13 @@ function GRA_run_(dry, fromMenu) {
       GRA_clearContinue_();
       var trim = GRA_trimMirror_(ss, s, dry);
       notes.push(trim);
-      if (!dry) GRA_purgeOld_(s);
+      if (!dry) {
+        GRA_purgeOld_(s);
+        var heal = GRA_heal_(ss, s);
+        if (heal.rebuild.length) { GRA_scheduleContinue_(1); result.building = true; notes.push('Rebuilding: ' + heal.rebuild.join(', ')); }
+        else GRA_statusMail_(s, heal);
+        if (heal.fixes.length) notes.push('Fixed: ' + heal.fixes.join('; '));
+      }
     } else {
       GRA_scheduleContinue_(GRA_engineBusy_() ? 5 : 1);
       notes.push('Time limit reached, continues by itself in 1 min');
@@ -443,7 +449,7 @@ function GRA_buildHalf_(ss, s, master, h, fp, oldFp, t0) {
   PropertiesService.getScriptProperties().setProperty('GRA_FP_' + h.key, JSON.stringify(fp));
   props.deleteProperty(GRA_STATE_KEY);
 
-  GRA_reportChange_(ss, s, h, diff, oldFp, fp, urls);
+  GRA_reportChange_(ss, s, h, diff, oldFp, fp, urls, !oldFp);
   var names = st.fileIds.map(function (id) { return DriveApp.getFileById(id).getName(); });
   return h.label + ': archive ' + (oldFp ? 'rebuilt' : 'created') + ' (' + h.rows.length + ' rows, verified): ' +
     names.map(function (n, i) { return n + ' ' + urls[i]; }).join(', ') + ', ' + jsonFile.getName() + ' ' + jsonFile.getUrl();
@@ -495,7 +501,7 @@ function GRA_diff_(prev, headers, rows, s, oldFp, fp) {
   return out;
 }
 
-function GRA_reportChange_(ss, s, h, d, oldFp, fp, urls) {
+function GRA_reportChange_(ss, s, h, d, oldFp, fp, urls, noMail) {
   var lines = [], why = [];
   if (!oldFp) {
     lines.push('First archive created: ' + GRA_fmt_(fp.rows) + ' rows.');
@@ -516,7 +522,7 @@ function GRA_reportChange_(ss, s, h, d, oldFp, fp, urls) {
   var title = h.label + (oldFp ? ' rebuilt' : ' archive created');
   var sh = ss.getSheetByName(GRA_TAB.changes);
   sh.appendRow([new Date(), h.key, title, why.join('; '), lines.join('\n'), urls.join('\n')]);
-  GRA_mail_(s, 'GR Archive: ' + title,
+  if (!noMail) GRA_mail_(s, 'GR Archive: ' + title,
     '<p><b>' + GRA_esc_(title) + '</b>' + (why.length ? '<br>Why: ' + GRA_esc_(why.join('; ')) : '') + '</p><ul>' +
     lines.map(function (l) { return '<li>' + GRA_esc_(l) + '</li>'; }).join('') + '</ul>' +
     '<p>' + urls.map(function (u, i) { return '<a href="' + u + '">Archive sheet' + (urls.length > 1 ? ' part ' + (i + 1) : '') + '</a>'; }).join(' · ') +
@@ -632,71 +638,129 @@ function GRA_stillMine_(st) {
   return !!cur && cur.key === st.key && cur.fileIds.join() === st.fileIds.join();
 }
 
-/**
- * Menu: checks the archive files and fixes what two overlapping runs can leave behind.
- * Keeps the newest copy of each period. Extra copies and unfinished leftovers go to Drive Trash
- * (or GR_ARCHIVE/old when KEEP_OLD_VERSION = YES).
- */
+/** Menu (optional): the same self-check every run already does, shown in a box. */
 function GRA_checkFiles() {
-  var ss = GRA_engineSs_(), s = GRA_settings_(ss), sh = ss.getSheetByName(GRA_TAB.files);
+  var ss = GRA_engineSs_(), s = GRA_settings_(ss);
   var lock = LockService.getDocumentLock() || LockService.getScriptLock();
-  if (!lock.tryLock(30000)) { GRA_dialog_('Check archive files', 'An archive run is going. Try again in a few minutes.', ''); return; }
-  var out = [];
-  try {
-    var reg = GRA_registry_(ss), folder = GRA_archiveFolder_(ss, s), oldFolder = GRA_subFolder_(folder, 'old'), keepOld = GRA_keepOld_(s);
-    var stamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd_HHmm');
-    var seenId = {}, byKey = {};
-    reg.forEach(function (x) {
-      if (x.status !== 'CURRENT') return;
-      if (seenId[x.id]) { sh.getRange(x.row, 8).setValue('DUPLICATE LINE'); out.push(x.key + ' ' + x.part + ': same file listed twice, extra line marked'); return; }
-      seenId[x.id] = 1;
-      var f = null;
-      try { f = DriveApp.getFileById(x.id); if (f.isTrashed()) f = null; } catch (e) { f = null; }
-      if (!f) { sh.getRange(x.row, 8).setValue('MISSING'); out.push(x.key + ' ' + x.part + ': file not found / in trash, marked MISSING'); return; }
-      x.file = f;
-      (byKey[x.key] = byKey[x.key] || []).push(x);
-    });
-    Object.keys(byKey).forEach(function (key) {
-      var list = byKey[key];
-      // newest build wins; older CURRENT copies of the same half-year go to old/
-      var newest = list.reduce(function (m, x) { return new Date(x.builtAt) > new Date(m) ? x.builtAt : m; }, list[0].builtAt);
-      var keep = list.filter(function (x) { return String(x.builtAt) === String(newest); });
-      var extraJson = keep.filter(function (x) { return x.part === 'JSON'; }).slice(1);
-      list.forEach(function (x) {
-        var extra = keep.indexOf(x) < 0 || extraJson.indexOf(x) >= 0;
-        if (extra) {
-          try { GRA_discard_(x.file, keepOld, oldFolder, ' (extra copy ' + stamp + ')'); } catch (e) {}
-          sh.getRange(x.row, 8).setValue('REPLACED extra copy ' + stamp);
-          out.push(key + ' ' + x.part + ': extra copy removed (' + x.file.getName() + ')');
-          return;
-        }
-        // a CURRENT file that was renamed / moved to old/ by an overlapping run goes back
-        var name = x.file.getName().replace(/ \((old|extra copy) [^)]*\)/g, '').replace(' - building', '');
-        if (name !== x.file.getName()) { x.file.setName(name); out.push(key + ' ' + x.part + ': name fixed to ' + name); }
-        var inOld = false, it = x.file.getParents();
-        while (it.hasNext()) if (it.next().getId() === oldFolder.getId()) inOld = true;
-        if (inOld) { x.file.moveTo(folder); out.push(key + ' ' + x.part + ': moved back from old/ to GR_ARCHIVE'); }
-      });
-      // row check against the saved fingerprint
-      var fp = GRA_storedFp_(key), sheets = keep.filter(function (x) { return x.part !== 'JSON'; }), rows = 0;
-      sheets.forEach(function (x) { try { rows += SpreadsheetApp.openById(x.id).getSheets()[0].getLastRow() - 1; } catch (e) {} });
-      out.push(key + ': ' + sheets.length + ' sheet file(s), ' + GRA_fmt_(rows) + ' rows' +
-        (fp ? (fp.rows === rows ? ' = ' + GRA_fmt_(fp.rows) + ' expected, OK' : ' but ' + GRA_fmt_(fp.rows) + ' expected, CHECK') : ''));
-    });
-    // half-written files that no run is working on any more
-    var st = JSON.parse(PropertiesService.getScriptProperties().getProperty(GRA_STATE_KEY) || 'null');
-    var live = st ? st.fileIds : [], files = folder.getFiles();
-    while (files.hasNext()) {
-      var f = files.next();
-      if (!f.isTrashed() && f.getName().indexOf(' - building') >= 0 && live.indexOf(f.getId()) < 0) {
-        out.push(f.getName() + ': unfinished leftover removed');
-        GRA_discard_(f, keepOld, oldFolder, ' (unfinished ' + stamp + ')');
+  if (!lock.tryLock(30000)) { GRA_dialog_('Archive status', 'An archive run is going. It checks itself when it finishes.', ''); return; }
+  var r;
+  try { r = GRA_heal_(ss, s); } finally { lock.releaseLock(); }
+  if (r.rebuild.length) GRA_scheduleContinue_(1);
+  GRA_dialog_('Archive status', GRA_statusText_(r), '');
+}
+
+/**
+ * Self-healing, run at the end of every finished archive run (no click needed). Keeps exactly one complete
+ * file set per period: fixes names, puts CURRENT files back in GR_ARCHIVE, removes extra copies, double lines,
+ * unfinished "- building" leftovers and (KEEP_OLD_VERSION = NO) everything in old/. A period whose files are
+ * missing or whose row count is wrong is cleared so the next run rebuilds it from the engine data.
+ */
+function GRA_heal_(ss, s) {
+  var sh = ss.getSheetByName(GRA_TAB.files), fixes = [], periods = [], rebuild = [];
+  var folder = GRA_archiveFolder_(ss, s), oldFolder = GRA_subFolder_(folder, 'old'), keepOld = GRA_keepOld_(s);
+  var stamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd_HHmm');
+  var st = JSON.parse(PropertiesService.getScriptProperties().getProperty(GRA_STATE_KEY) || 'null');
+  var live = st ? st.fileIds : [];
+  var seenId = {}, byKey = {};
+  GRA_registry_(ss).forEach(function (x) {
+    if (x.status !== 'CURRENT') return;
+    if (seenId[x.id]) { sh.getRange(x.row, 8).setValue('DUPLICATE LINE'); fixes.push(x.key + ': double line removed from ARCHIVE_FILES'); return; }
+    seenId[x.id] = 1;
+    var f = null;
+    try { f = DriveApp.getFileById(x.id); if (f.isTrashed()) f = null; } catch (e) { f = null; }
+    if (!f) { sh.getRange(x.row, 8).setValue('MISSING'); return; }
+    x.file = f;
+    (byKey[x.key] = byKey[x.key] || []).push(x);
+  });
+  // every period that has data in the engine fingerprints, or files in ARCHIVE_FILES
+  var keys = {};
+  Object.keys(byKey).forEach(function (k) { keys[k] = 1; });
+  PropertiesService.getScriptProperties().getKeys().forEach(function (k) { if (k.indexOf('GRA_FP_') === 0) keys[k.slice(7)] = 1; });
+  Object.keys(keys).sort().forEach(function (key) {
+    if (st && st.key === key) return;   // being built right now
+    var list = byKey[key] || [];
+    var newest = list.length ? list.reduce(function (m, x) { return new Date(x.builtAt) > new Date(m) ? x.builtAt : m; }, list[0].builtAt) : null;
+    var keep = list.filter(function (x) { return String(x.builtAt) === String(newest); });
+    var extraJson = keep.filter(function (x) { return x.part === 'JSON'; }).slice(1);
+    list.forEach(function (x) {
+      if (keep.indexOf(x) < 0 || extraJson.indexOf(x) >= 0) {
+        try { GRA_discard_(x.file, keepOld, oldFolder, ' (extra copy ' + stamp + ')'); } catch (e) {}
+        sh.getRange(x.row, 8).setValue('REPLACED extra copy ' + stamp);
+        fixes.push(key + ': extra copy removed');
       }
+    });
+    keep = keep.filter(function (x) { return extraJson.indexOf(x) < 0; });
+    var sheets = keep.filter(function (x) { return x.part !== 'JSON'; }), json = keep.filter(function (x) { return x.part === 'JSON'; });
+    var rows = 0, files = [];
+    sheets.forEach(function (x) {
+      var name = x.file.getName().replace(/ \((old|extra copy|unfinished) [^)]*\)/g, '').replace(' - building', '');
+      if (name !== x.file.getName()) { x.file.setName(name); fixes.push(key + ': name fixed to ' + name); }
+      var inOld = false, it = x.file.getParents();
+      while (it.hasNext()) if (it.next().getId() === oldFolder.getId()) inOld = true;
+      if (inOld) { x.file.moveTo(folder); fixes.push(key + ': ' + name + ' moved back to GR_ARCHIVE'); }
+      try { rows += SpreadsheetApp.openById(x.id).getSheets()[0].getLastRow() - 1; } catch (e) {}
+      files.push({ name: name, url: x.file.getUrl() });
+    });
+    var fp = GRA_storedFp_(key), label = list.length ? list[0].label : GRA_labelOf_(key);
+    var ok = !!fp && sheets.length > 0 && json.length === 1 && fp.rows === rows;
+    if (!ok) {
+      // broken or half-made period: clear it, the next run rebuilds it cleanly from the engine data
+      keep.forEach(function (x) { try { x.file.setTrashed(true); } catch (e) {} sh.getRange(x.row, 8).setValue('REPLACED broken ' + stamp); });
+      PropertiesService.getScriptProperties().deleteProperty('GRA_FP_' + key);
+      rebuild.push(key);
+      fixes.push(label + ': incomplete (' + GRA_fmt_(rows) + ' rows' + (fp ? ' of ' + GRA_fmt_(fp.rows) : '') + '), rebuilding it');
     }
-    if (st) out.push('Still building: ' + st.key + ' (' + GRA_fmt_(st.next) + ' rows written so far)');
-    GRA_log_(ss, 'CHECK', out.join(' | ') || 'Nothing to fix', '');
-  } finally { lock.releaseLock(); }
-  GRA_dialog_('Check archive files', out.length ? out.join('\n') : 'Everything is fine: one copy of each half-year, no duplicates.', '');
+    periods.push({ key: key, label: label, ok: ok, rows: rows, files: ok ? files : [] });
+  });
+  // unfinished leftovers that no run is working on, and the old/ folder
+  [folder, oldFolder].forEach(function (fd) {
+    var it = fd.getFiles();
+    while (it.hasNext()) {
+      var f = it.next();
+      if (f.isTrashed() || live.indexOf(f.getId()) >= 0 || seenId[f.getId()] && fd === folder) continue;
+      var building = f.getName().indexOf(' - building') >= 0;
+      if (fd === folder && !building) continue;
+      if (fd === oldFolder && keepOld && !building) continue;
+      fixes.push((fd === oldFolder ? 'old/' : '') + f.getName() + ': removed');
+      f.setTrashed(true);
+    }
+  });
+  if (!keepOld) GRA_registry_(ss).forEach(function (x) { if (x.status.indexOf('OLD') === 0 && x.status.indexOf('TRASHED') < 0) sh.getRange(x.row, 8).setValue(x.status + ' TRASHED'); });
+  var r = { periods: periods, fixes: fixes, rebuild: rebuild, building: st };
+  GRA_log_(ss, 'CHECK', GRA_statusText_(r).replace(/\n/g, ' | '), '');
+  return r;
+}
+
+function GRA_labelOf_(key) {
+  var m = key.match(/^FY(\d\d)-(\d\d)_H([12])$/);
+  if (!m) return key;
+  return GRA_halfOf_('20' + m[1] + (m[3] === '1' ? '-04-01' : '-10-01')).label;
+}
+
+function GRA_statusText_(r) {
+  var t = r.periods.map(function (p) {
+    return (p.ok ? 'OK     ' : 'REBUILD ') + p.label + ': ' + GRA_fmt_(p.rows) + ' rows' + (p.files.length ? ' · ' + p.files.map(function (f) { return f.name; }).join(', ') : '');
+  });
+  if (r.building) t.push('BUILDING ' + GRA_labelOf_(r.building.key) + ': ' + GRA_fmt_(r.building.next) + ' rows written so far');
+  if (r.fixes.length) t.push('', 'Fixed: ' + r.fixes.join('; '));
+  return t.join('\n') || 'No archive yet.';
+}
+
+/** One status mail when everything is archived and clean, and again only when that list changes. */
+function GRA_statusMail_(s, r) {
+  if (r.building || r.rebuild.length || !r.periods.length) return;
+  var sig = JSON.stringify(r.periods.map(function (p) { return [p.key, p.rows, p.files.map(function (f) { return f.url; })]; }));
+  var p = PropertiesService.getScriptProperties();
+  if (p.getProperty('GRA_STATUS_SIG') === sig) return;
+  p.setProperty('GRA_STATUS_SIG', sig);
+  var rowsHtml = r.periods.map(function (q) {
+    return '<tr><td>' + GRA_esc_(q.label) + '</td><td style="text-align:right">' + GRA_fmt_(q.rows) + '</td><td>' +
+      q.files.map(function (f) { return '<a href="' + f.url + '">' + GRA_esc_(f.name) + '</a>'; }).join('<br>') + '</td><td><b>OK</b></td></tr>';
+  }).join('');
+  GRA_mail_(s, 'GR Archive: all periods archived (' + r.periods.length + ')',
+    '<p>Each 6-month period has exactly one archive file in Drive > GR_DASHBOARD_DATA > GR_ARCHIVE:</p>' +
+    '<table border="1" cellpadding="5" style="border-collapse:collapse;font:13px Arial"><tr><th>Period</th><th>Rows</th><th>File</th><th>Status</th></tr>' +
+    rowsHtml + '</table><p>New periods are archived automatically every night. Nothing to do.</p>');
 }
 
 function GRA_registry_(ss) {
