@@ -407,6 +407,121 @@ tfoot td.am-cell{background:#fdf3d0}
 })();
 </script>
 
+<style id="speedCss">
+.yr-pill{display:inline-flex;align-items:center;gap:6px;margin-left:10px;padding:2px 4px 2px 10px;border-radius:12px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.25);font-style:normal;font-size:11.5px;font-weight:600;color:#dce7f5;white-space:nowrap}
+.yr-pill button{border:0;border-radius:10px;padding:2px 9px;font:inherit;font-weight:700;cursor:pointer;background:#fff;color:#0b2545}
+.yr-pill button:hover{background:#e8f2ff}
+.yr-pill.full{background:rgba(26,127,66,.25);border-color:rgba(140,220,170,.45)}
+.yr-note{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px;font-size:12px;color:#5b6b7e}
+.yr-note button{border:1px solid #bfd0e3;border-radius:6px;background:#eef4fb;color:#0b2545;font-weight:700;font-size:11.5px;padding:3px 10px;cursor:pointer}
+.lazy-wait [data-wrap]{opacity:.55}
+</style>
+<script id="speedJs">
+/* ======================================================================
+   Speed (Nov 2026)
+   1. GRLazy: a heavy table (NBD / RBD, Half-Yearly) is drawn only when it is on (or near) the screen.
+      A filter click while it is off screen marks it; it draws itself when you scroll to it.
+   2. GRSpeed.memo: a table's totals are kept for the same data + filters + options, so changing
+      Trend / Sort / Search / opening a row does not read every GR again.
+   3. GRYear: by default only the current financial year + the months NBD needs before it
+      (NBD gap + 1, e.g. Sep-25 onward for FY26-27) go into the dashboard. "Load last year" adds the
+      older months (kept in the browser already, no new download). The choice stays until the tab closes.
+   ====================================================================== */
+window.GRDataVer = window.GRDataVer || 0;
+window.GRLazy = (function(){
+  const MARGIN = 500, pend = new Map();
+  const io = ('IntersectionObserver' in window) ? new IntersectionObserver(es=>{
+    for (const e of es){ if (!e.isIntersecting) continue; const fn = pend.get(e.target); if (!fn) continue;
+      pend.delete(e.target); io.unobserve(e.target); e.target.classList.remove('lazy-wait');
+      try{ fn(); }catch(x){ console.error('Lazy draw', x); } }
+  }, { rootMargin: MARGIN+'px 0px' }) : null;
+  function near(el){
+    if (el.offsetParent===null) return false;                       /* page not shown */
+    const r = el.getBoundingClientRect();
+    return r.bottom > -MARGIN && r.top < (innerHeight||800) + MARGIN;
+  }
+  return {
+    /* true = not drawn now (it will draw when it comes near the screen); false = draw now */
+    defer(el, fn){
+      if (!io || !el) return false;
+      if (near(el)){ if (pend.has(el)){ pend.delete(el); io.unobserve(el); el.classList.remove('lazy-wait'); } return false; }
+      pend.set(el, fn); el.classList.add('lazy-wait'); io.observe(el);
+      return true;
+    },
+    pending(){ return pend.size; }
+  };
+})();
+window.GRSpeed = (function(){
+  const C = new Map();
+  const fsig = ()=>{ try{ return typeof filterSig_==='function' ? filterSig_({...App.filters,globalMonth:'',dateFrom:null,dateTo:null}) : JSON.stringify(App.filters); }catch(e){ return String(Math.random()); } };
+  return {
+    /* same table + same options + same filters (Month / Date ignored) + same data → same result */
+    memo(name, parts, build){
+      const key = parts.join('\u0001')+'\u0002'+fsig()+'\u0002'+window.GRDataVer, c = C.get(name);
+      if (c && c.rows===App.rows && c.key===key) return c.val;
+      const val = build(); C.set(name, { rows:App.rows, key, val }); return val;
+    }
+  };
+})();
+window.GRYear = (function(){
+  const KEY = 'grpnl_full_year', MN = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const S = { full:false, from:null, halfFrom:null, hidden:0, total:0, oldest:null, reapply:null, busy:false };
+  try{ S.full = sessionStorage.getItem(KEY)==='1'; }catch(e){}
+  const lab = i=>MN[i%12]+'-'+String(Math.floor(i/12)).slice(2);
+  /* first month kept: start of the current financial year minus (NBD gap + 1) months */
+  function cutoff(){
+    const now = new Date(), y = now.getFullYear(), m = now.getMonth(), fy = m>=3 ? y : y-1;
+    const g = Math.max(6, Math.round(+(((window.App&&App.settings)||{}).nbdGapMonths)||6));
+    return fy*12 + 3 - (g + 1);
+  }
+  const halfStart = i=>{ for (let k=i; k<i+6; k++){ const mm = k%12; if (mm===3 || mm===9) return k; } return i; };
+  /* rows = engine rows (arrays), di = GR date column */
+  function trim(rows, di){
+    S.total = rows.length; S.hidden = 0; S.from = null; S.halfFrom = null; S.oldest = null;
+    if (di < 0 || typeof parseGrDate!=='function') return rows;
+    const cut = cutoff(), memo = new Map(), out = []; let oldest = Infinity;
+    for (const r of rows){
+      const v = r[di]; let i = memo.get(v);
+      if (i===undefined){ const d = parseGrDate(v); i = d ? d.getFullYear()*12 + d.getMonth() : null; memo.set(v, i); }
+      if (i!=null && i<oldest) oldest = i;
+      if (S.full || i==null || i>=cut) out.push(r); else S.hidden++;
+    }
+    S.oldest = isFinite(oldest) ? oldest : null;
+    if (S.hidden){ S.from = cut; S.halfFrom = halfStart(cut); }
+    return out;
+  }
+  function pill(){
+    const meta = document.querySelector('#topHeader .hx-meta'); if (!meta) return;
+    let el = document.getElementById('yrPill');
+    const canLoad = S.hidden>0, canTrim = S.full && S.oldest!=null && S.oldest<cutoff();
+    if (!canLoad && !canTrim){ if (el) el.remove(); return; }
+    if (!el){ el = document.createElement('i'); el.id = 'yrPill'; el.className = 'yr-pill'; meta.appendChild(el);
+      el.addEventListener('click', e=>{ if (e.target.closest('button')) toggle(); }); }
+    el.classList.toggle('full', !canLoad);
+    el.innerHTML = canLoad
+      ? `<span title="${S.hidden.toLocaleString('en-IN')} older GRs are not loaded, so the dashboard stays fast">From ${lab(S.from)}</span><button type="button">${S.busy?'Loading…':'+ Load last year'}</button>`
+      : `<span>All data (${lab(S.oldest)} onward)</span><button type="button" title="Show only the current FY + the months NBD needs (faster)">${S.busy?'…':'Recent only'}</button>`;
+  }
+  function toggle(){
+    if (S.busy || !S.reapply) return;
+    S.full = !S.full; try{ sessionStorage.setItem(KEY, S.full?'1':'0'); }catch(e){}
+    S.busy = true; pill();
+    setTimeout(()=>{ try{ S.reapply(); }catch(e){ console.error('Load last year', e); } S.busy = false; pill(); }, 30);
+  }
+  /* small line for a table that shows a half-year which is not loaded */
+  function note(host, what){
+    if (!host || !S.hidden) return;
+    const d = document.createElement('div'); d.className = 'yr-note';
+    d.innerHTML = `<span>${what||'Months before '+lab(S.halfFrom)+' are not loaded (kept out so the dashboard stays fast).'}</span><button type="button">+ Load last year data</button>`;
+    d.querySelector('button').addEventListener('click', toggle);
+    host.appendChild(d);
+  }
+  /* months a Half-Yearly table may use: a half-year cut in the middle is left out, not shown as a small total */
+  const usable = i=>!(S.hidden && S.halfFrom!=null && i<S.halfFrom);
+  return { S, trim, pill, toggle, note, usable, cutoff };
+})();
+</script>
+
 <header id="topHeader">
   <div class="h-left">
     <div class="h-title-wrap">
@@ -1131,72 +1246,7 @@ function discountAggForRows(rows){
   for (const r of rows){ const d=getDiscount(r.grno); amt+=d.amt; beforeAmt+=d.beforeAmt; }
   return { amt, beforeAmt, pct: safeDiv(amt,beforeAmt)*100 };
 }
-function buildDiscountMapFromJson(json){
-  const map = new Map();
-  let dup = 0;
-  const rows = Array.isArray(json && json.data) ? json.data : [];
-  for (const rec of rows){
-    const gr = normGrno(rec && rec.grno);
-    if (!gr) continue;
-    if (map.has(gr)){ dup++; continue; } // duplicate GRNO -> keep first occurrence only (unique)
-    // Only the amount fields are taken from the source as numbers; % is never
-    // trusted from the sheet — it's always derived from amt/beforeAmt.
-    map.set(gr, { amt: num(rec.discountAmt), beforeAmt: num(rec.beforeDisAmt), reason: rec.reason||'', approver: rec.approver||'' });
-  }
-  // Apps Script already dedupes across its source files (json.duplicatesSkipped);
-  // this dup count only reflects any collisions within the JSON payload itself.
-  return { map, total: rows.length, dup, serverDup: num(json && json.duplicatesSkipped) };
-}
 // ---- Local cache (instant load on open; refreshed silently in the background) ----
-function loadDiscountCacheFromStorage(){
-  try{
-    const raw = localStorage.getItem(DISCOUNT_CACHE_KEY);
-    if (!raw) return false;
-    const cached = JSON.parse(raw);
-    if (!cached || !Array.isArray(cached.data)) return false;
-    const { map, dup, serverDup } = buildDiscountMapFromJson(cached);
-    const d = App.discount;
-    d.map = map; d.loaded = true; d.rowCount = map.size; d.dupCount = dup + serverDup; d.error = null;
-    d.loadedAt = cached.savedAt ? new Date(cached.savedAt) : null;
-    d.fromCache = true;
-    return true;
-  } catch(e){ return false; }
-}
-function saveDiscountCacheToStorage(json){
-  try{
-    localStorage.setItem(DISCOUNT_CACHE_KEY, JSON.stringify(Object.assign({}, json, { savedAt: new Date().toISOString() })));
-  } catch(e){ /* storage full/unavailable — non-fatal, just skip caching */ }
-}
-function updateDiscountStatus(){
-  const el = document.getElementById('discStatus'); if (!el) return;
-  const d = App.discount;
-  const cacheTag = d.fromCache ? ' (cached)' : '';
-  if (d.loading){
-    el.textContent = d.loaded ? `Discount: ${d.rowCount.toLocaleString('en-IN')} GRs${cacheTag} · refreshing…` : 'Discount: refreshing…';
-    el.title=''; return;
-  }
-  if (d.error){ el.textContent = `Discount: fetch failed${d.loaded?' (showing last saved data)':''}`; el.title = d.error; return; }
-  if (!d.loaded){ el.textContent = 'Discount: not loaded'; el.title=''; return; }
-  el.textContent = `Discount: ${d.rowCount.toLocaleString('en-IN')} GRs${cacheTag} · ${d.loadedAt?d.loadedAt.toLocaleTimeString():'—'}`;
-  el.title = d.dupCount ? `${d.dupCount} duplicate GRNO rows ignored` : 'Up to date';
-}
-async function fetchDiscountData(silent){
-  const d = App.discount;
-  d.loading = true; updateDiscountStatus();
-  try{
-    const res = await fetch(DISCOUNT_SHEET_URL, { cache:'no-store' });
-    if (!res.ok) throw new Error('HTTP '+res.status);
-    const json = await res.json();
-    const { map, dup, serverDup } = buildDiscountMapFromJson(json);
-    d.map = map; d.loaded = true; d.loadedAt = new Date(); d.rowCount = map.size; d.dupCount = dup + serverDup; d.error = null; d.fromCache = false;
-    saveDiscountCacheToStorage(json);
-    d.loading = false; updateDiscountStatus();
-    if (App.rows && App.rows.length) renderActivePage();
-  } catch(err){
-    d.loading = false; d.error = err.message; updateDiscountStatus();
-    if (!silent) alert('Failed to fetch discount data from Apps Script: '+err.message+(d.loaded?'\n\nShowing the last saved discount data in the meantime.':'\n\nIf you opened this file directly (file://), some browsers block this fetch — try hosting it locally or via a simple web server.'));
-  }
-}
 
 /* ---------------------------- DATE PARSING ---------------------------- */
 function excelSerialToDate(n){ const ms = Math.round((n - 25569) * 86400 * 1000); return new Date(ms); }
@@ -1936,6 +1986,7 @@ function populateGrMonthFilter(){
   sel.onchange = ()=> renderGrPage();
 }
 function updateHeaderStats(){
+  if (window.GRYear) setTimeout(()=>GRYear.pill(), 0);
   document.getElementById('fileStatus').textContent = `File: ${App.fileName}`;
   document.getElementById('statGrCount').textContent = App.rows.length.toLocaleString('en-IN');
   document.getElementById('statLoadedAt').textContent = App.loadedAt.toLocaleString();
@@ -2642,19 +2693,6 @@ function exportTablePdf(tableKey){
   const body = data.rows.map(r=> data.accessors.map(fn=>String(fn(r))));
   doc.autoTable({ head:[data.columns], body, startY: my+6, styles:{fontSize:6.5,cellPadding:2}, headStyles:{fillColor:[11,37,69],textColor:255}, margin:{left:20,right:20} });
   doc.save(sanitizeFilename(data.title)+'.pdf');
-}
-function exportKpiPdf(){
-  const { jsPDF } = window.jspdf;
-  const doc = new jsPDF({ orientation:'portrait', unit:'pt', format:'a4' });
-  doc.setFontSize(15); doc.setTextColor(11,37,69); doc.text('GR P&L — MoM Performance Summary', 30, 34);
-  doc.setFontSize(9); doc.setTextColor(90,100,115);
-  const meta = buildExportMeta(); let y=54;
-  meta.forEach(m=>{ doc.text(`${m[0]}: ${m[1]}`, 30, y); y+=13; });
-  const cards = document.querySelectorAll('#kpiGrid .kpi-card');
-  const rows = [];
-  cards.forEach(c=>{ rows.push([c.querySelector('h3').textContent, c.innerText.replace(/\n+/g,' | ')]); });
-  doc.autoTable({ startY:y+10, head:[['KPI','Detail']], body: rows, styles:{fontSize:8,cellPadding:4}, headStyles:{fillColor:[11,37,69]}, columnStyles:{0:{cellWidth:110}} });
-  doc.save('MoM_Performance_Summary.pdf');
 }
 function sanitizeFilename(s){ return String(s).replace(/[^a-z0-9]+/gi,'_').slice(0,80); }
 
@@ -3896,7 +3934,6 @@ function rc7Group(rows,field){
   rows.forEach(r=>{const v=String(r[field]??'').trim()||'UNSPECIFIED';if(!m.has(v))m.set(v,[]);m.get(v).push(r);});
   return m;
 }
-function rc7Sums(rows){return sumRows(rows);}
 function rc7Fmt(metric,v){
   const u=RC7_METRICS[metric].unit;
   if(u==='pct') return Number(v||0).toFixed(1)+'%';
@@ -4367,16 +4404,6 @@ function rc7DriverTable(metric,rows,field,hostId,tagId){
   });
 }
 
-function rc7SelectedGroups(rows,levels){
-  let map=new Map();
-  rows.forEach(r=>{
-    const vals=levels.map(f=>String(r[f]??'').trim()||'UNSPECIFIED');
-    const k=vals.join('\u241F');
-    if(!map.has(k))map.set(k,{vals,rows:[]});
-    map.get(k).rows.push(r);
-  });
-  return (window.stAddSubtotals||(g=>g))([...map.values()].sort((a,b)=>a.vals.join('|').localeCompare(b.vals.join('|'))),levels.length);
-}
 function rc7SortCompare(metric, rowsA, rowsB, totalRows){
   const s1=App.rcV7AnalysisSort, s2=App.rcV7AnalysisSort2;
   if(s1 && s1.key){
@@ -4393,64 +4420,6 @@ function rc7SortCompare(metric, rowsA, rowsB, totalRows){
     return dir2*(va2-vb2);
   }
   return 0;
-}
-function rc7SortSelectedGroups(metric, groups, totalRows, levelCount){
-  groups=(groups||[]).filter(g=>!(g&&g.vals&&g.vals.__sub!=null));
-  function recurse(items, depth){
-    if(depth >= levelCount-1){
-      return items.slice().sort((a,b)=>rc7SortCompare(metric,a.rows,b.rows,totalRows));
-    }
-    const buckets=new Map();
-    items.forEach(it=>{
-      const k=it.vals[depth];
-      if(!buckets.has(k)) buckets.set(k,[]);
-      buckets.get(k).push(it);
-    });
-    const bucketArr=[...buckets.entries()].map(([k,arr])=>({key:k,items:arr,rows:arr.flatMap(it=>it.rows)}));
-    bucketArr.sort((a,b)=>rc7SortCompare(metric,a.rows,b.rows,totalRows));
-    let out=[];
-    bucketArr.forEach(b=>{ out=out.concat(recurse(b.items,depth+1)); });
-    return out;
-  }
-  return (window.stAddSubtotals||(g=>g))(recurse(groups,0),levelCount);
-}
-function rc7Tree(rows, metric, sortKey, sortDir){
-  const out=[];
-  function walk(sub,level,path){
-    const [field]=RC7_HIER[level];
-    let groups=[...rc7Group(sub,field).entries()];
-    if(sortKey){
-      groups.sort((a,b)=>rc7SortCompare(metric,a[1],b[1],rows));
-    }else{
-      groups.sort((a,b)=>String(a[0]).localeCompare(String(b[0])));
-    }
-    for(const [name,g] of groups){
-      const p=path.concat(name),key=p.join('\u241F'),leaf=level===RC7_HIER.length-1;
-      const expanded=!leaf && App.rcV7Expand.has(key);
-      out.push({level,path:p,key,rows:g,leaf,isSubtotal:expanded});
-      if(expanded)walk(g,level+1,p);
-    }
-  }
-  if(rows.length)walk(rows,0,[]);
-  return out;
-}
-function rc7CurrentItems(rows,metric){
-  const sortKey=App.rcV7AnalysisSort?App.rcV7AnalysisSort.key:'', sortDir=App.rcV7AnalysisSort?App.rcV7AnalysisSort.dir:'desc';
-  if(App.rcV7HierLevels.length){
-    const levels=App.rcV7HierLevels.slice();
-    let groups=rc7SelectedGroups(rows,levels);
-    if(sortKey){
-      groups=rc7SortSelectedGroups(metric, groups, rows, levels.length);
-    }
-    return {levels,mode:'selected',items:groups.map(g=>({vals:g.vals,rows:g.rows,level:levels.length-1,leaf:true,isSubtotal:false}))};
-  }
-  const nodes=rc7Tree(rows,metric,sortKey,sortDir);
-  const depth=nodes.length?Math.max(...nodes.map(n=>n.level)):0;
-  const levels=RC7_HIER.slice(0,depth+1).map(x=>x[0]);
-  const items=nodes.map(n=>({
-    ...n,vals:levels.map((f,i)=>i<=n.level?n.path[i]:'—')
-  }));
-  return {levels,mode:'drill',items};
 }
 
 function rc7RenderHierControl(){
@@ -4582,101 +4551,6 @@ function rc7RenderAnalysis(metric,rows){
   App.rcV7ExportSourceRows=rows; App.rcV7ExportMetric=metric; App.rcV7ExportColumns=[def[1]];
 }
 
-function rc7RenderAnalysisOld(metric,rows){
-  const wrap=document.getElementById('tableRcWrap');if(!wrap)return;
-  rc7WireAnalysisSort();
-  const search=norm(document.getElementById('searchRc')?.value||'');
-  let {levels,items,mode}=rc7CurrentItems(rows,metric);
-  const defs=levels.map(f=>RC7_HIER.find(x=>x[0]===f));
-  if(search)items=items.filter(it=>it.vals.some(v=>norm(v).includes(search)));
-  const hasNumericFilter=Object.keys(App.colFilters.rc||{}).some(k=>k==='base'||k==='comp');
-  if(hasNumericFilter){
-    items=items.filter(it=>{
-      const a=rc7Analysis(metric,it.rows,rows);
-      return cfNumericPass('rc','base',a.bVal) && cfNumericPass('rc','comp',a.cVal);
-    });
-  }
-
-  const overall=rc7Overall(metric,rows),m=RC7_METRICS[metric];
-  const pageSize=60;
-  App.pageIndex.rc=App.pageIndex.rc||1;
-  const totalPages=Math.max(1,Math.ceil(items.length/pageSize));
-  if(App.pageIndex.rc>totalPages)App.pageIndex.rc=totalPages;
-  const p=App.pageIndex.rc;
-  const page=items.slice((p-1)*pageSize,p*pageSize);
-
-  const head=`<thead><tr>${defs.map((d,i)=>`<th class="hier">${d[1]}</th>`).join('')}
-    <th>${escapeHtml(rc7Base())}<span class="rc-th-metric">${escapeHtml(m.label)}</span>${cfIcon('rc','base','numeric',m.label+' — '+rc7Base())}</th>
-    <th>${escapeHtml(rc7Comp())}<span class="rc-th-metric">${escapeHtml(m.label)}</span>${cfIcon('rc','comp','numeric',m.label+' — '+rc7Comp())}</th>
-    <th>Delta<span class="rc-th-metric">${escapeHtml(m.label)}</span></th>
-    <th>${escapeHtml(rc7EffectHeader(metric,1))}</th><th>${escapeHtml(rc7EffectHeader(metric,2))}</th>
-    <th>Contribution</th>${m.component?'<th>Major Component</th>':''}<th class="rc-th-center">Reason</th></tr></thead>`;
-
-  const computed=page.map(it=>({...it,a:rc7Analysis(metric,it.rows,rows)}));
-  const body=computed.map(it=>{
-    let hc=it.vals.map((v,i)=>{
-      let prefix='';
-      if(!App.rcV7HierLevels.length && i===it.level && !it.leaf){
-        prefix=`<button class="rc-treebtn" data-expand-key="${escapeHtml(it.key)}">${it.isSubtotal?'−':'+'}</button>`;
-      }
-      const tag=it.isSubtotal&&i===it.level?'<span class="rc-subtotal-tag">SUBTOTAL</span>':'';
-      return `<td class="hier">${prefix}${escapeHtml(v)}${tag}</td>`;
-    }).join('');
-    const a=it.a,deltaCls=rc7StateClass(metric,a.delta),contribCls=rc7StateClass(metric,a.netContribution);
-    return `<tr class="${it.isSubtotal?'rc-subtotal-row':''}" data-rc-path="${escapeHtml(it.vals.join('\u241F'))}">
-      ${hc}
-      <td class="rc-num-drill" data-period="base" title="${rc7FmtTitle(metric,a.bVal)}">${rc7Fmt(metric,a.bVal)}</td>
-      <td class="rc-num-drill" data-period="comp" title="${rc7FmtTitle(metric,a.cVal)}">${rc7Fmt(metric,a.cVal)}</td>
-      <td class="rc-num-drill ${deltaCls}" data-period="both" title="${rc7FmtTitle(metric,a.delta)}">${a.delta>=0?'+':''}${rc7FmtDelta(metric,a.delta)}</td>
-      <td class="rc-num-drill" data-period="both" title="${rc7FmtEffectTitle(metric,a.effect1)}">${rc7FmtEffect(metric,a.effect1)}</td>
-      <td class="rc-num-drill" data-period="both" title="${rc7FmtEffectTitle(metric,a.effect2)}">${rc7FmtEffect(metric,a.effect2)}</td>
-      <td class="rc-num-drill ${contribCls}" data-period="both" title="${rc7FmtEffectTitle(metric,a.netContribution)}">${rc7FmtEffect(metric,a.netContribution)}</td>
-      ${m.component?`<td class="rc-component-cell">${escapeHtml(rc7ComponentText(metric,a))}</td>`:''}
-      <td class="rc-reason-cell">${escapeHtml(a.reason)}</td>
-    </tr>`;
-  }).join('');
-
-  const blanks=Array(Math.max(0,levels.length-1)).fill('<td></td>').join('');
-  const gt=`<tfoot><tr><td class="hier">GRAND TOTAL</td>${blanks}
-    <td title="${rc7FmtTitle(metric,overall.bVal)}">${rc7Fmt(metric,overall.bVal)}</td><td title="${rc7FmtTitle(metric,overall.cVal)}">${rc7Fmt(metric,overall.cVal)}</td>
-    <td class="${rc7StateClass(metric,overall.delta)}" title="${rc7FmtTitle(metric,overall.delta)}">${overall.delta>=0?'+':''}${rc7FmtDelta(metric,overall.delta)}</td>
-    <td title="${rc7FmtEffectTitle(metric,overall.effect1)}">${rc7FmtEffect(metric,overall.effect1)}</td><td title="${rc7FmtEffectTitle(metric,overall.effect2)}">${rc7FmtEffect(metric,overall.effect2)}</td>
-    <td title="${rc7FmtEffectTitle(metric,overall.netContribution)}">${rc7FmtEffect(metric,overall.netContribution)}</td>${m.component?`<td class="rc-component-cell">${escapeHtml(rc7ComponentText(metric,overall))}</td>`:''}
-    <td class="rc-reason-cell">${escapeHtml(overall.reason)}</td></tr></tfoot>`;
-
-  wrap.innerHTML=`<table class="rc-v7-table" style="min-width:${Math.max(1150,620+levels.length*145+(m.component?180:0))}px">${head}<tbody>${body}</tbody>${gt}</table>`;
-  const table=wrap.querySelector('table');
-  if(window.applyStickyHierarchy)applyStickyHierarchy(table,Math.max(1,levels.length));
-
-  table.querySelectorAll('[data-expand-key]').forEach(b=>b.onclick=e=>{
-    e.stopPropagation();const key=b.dataset.expandKey;
-    if(App.rcV7Expand.has(key)){
-      [...App.rcV7Expand].filter(x=>x===key||x.startsWith(key+'\u241F')).forEach(x=>App.rcV7Expand.delete(x));
-    }else App.rcV7Expand.add(key);
-    App.pageIndex.rc=1;renderRcPage();
-  });
-
-  table.querySelectorAll('tbody .rc-num-drill').forEach(td=>td.onclick=e=>{
-    e.stopPropagation();
-    const tr=td.closest('tr'),vals=tr.dataset.rcPath.split('\u241F');
-    const filters={};levels.forEach((f,i)=>{if(vals[i]&&vals[i]!=='—')filters[f]=vals[i];});
-    const period=td.dataset.period;
-    const months=period==='base'?[App.baseMonth]:period==='comp'?[App.compMonth]:[App.baseMonth,App.compMonth];
-    if(window.openDirectGr)openDirectGr(filters,months,`${m.label} · Root Cause`);
-  });
-
-  document.getElementById('pagerRc').innerHTML=`<span class="hint-inline">Showing ${page.length?((p-1)*pageSize+1):0}–${(p-1)*pageSize+page.length} of ${items.length} groups</span>
-    <button class="btn btn-sm" ${p<=1?'disabled':''} onclick="rcV7Page(-1)">‹ Prev</button><span>Page ${p} / ${totalPages}</span>
-    <button class="btn btn-sm" ${p>=totalPages?'disabled':''} onclick="rcV7Page(1)">Next ›</button>`;
-
-  App.rcV7CurrentLevels=levels;
-  /* PERFORMANCE: keep raw grouped rows only. Full root-cause calculations are
-     generated lazily when the user actually clicks Excel/PDF download. */
-  App.rcV7ExportSourceItems=items;
-  App.rcV7ExportSourceRows=rows;
-  App.rcV7ExportMetric=metric;
-  App.rcV7ExportColumns=defs.map(d=>d[1]);
-}
 
 window.rcV7Page=function(d){App.pageIndex.rc=Math.max(1,(App.pageIndex.rc||1)+d);renderRcPage();};
 
@@ -7533,10 +7407,6 @@ function laneDaysInMonth(monthKey){
   const [y,m] = monthKey.split('-').map(Number);
   return new Date(y, m, 0).getDate();
 }
-function laneScaledTarget(weeklyTarget, daysInPeriod){
-  if (weeklyTarget==null || !isFinite(weeklyTarget)) return null;
-  return (weeklyTarget/7) * daysInPeriod;
-}
 function laneAchvColor(pct){
   if (pct==null) return '';
   // Achievement colour rule: below 100% = red, 100% or above = green.
@@ -7599,31 +7469,6 @@ function laneAttachDrill(td, t, period, label){
 }
 
 /* ---- 1. ALL LANES OVERVIEW (compact table, current context period) ---- */
-function renderLaneOverview(){
-  const wrap = document.getElementById('laneOverviewWrap'); if(!wrap) return;
-  if (!App.laneTargets.rows.length || !App.laneMap.loaded){ wrap.innerHTML=''; return; }
-  const rows = getFilteredRows();
-  const monthKey = laneContextMonthKey();
-  const cols = App.laneTargets.metricKeys.map(k=>laneMetricDef(k));
-  if (!monthKey){ wrap.innerHTML=''; return; }
-  const period = { label:'', monthKeys:[monthKey], fromDay:1, toDay:laneDaysInMonth(monthKey), daysInPeriod:laneDaysInMonth(monthKey) };
-  const computed = App.laneTargets.rows.map(t=>({ t, r: laneAggForLanePeriod(rows, t, period) }));
-  const primaryKey = cols[0] && cols[0].key;
-  computed.sort((a,b)=>{ const pa=primaryKey&&a.r.achv[primaryKey]?a.r.achv[primaryKey].pct:null, pb=primaryKey&&b.r.achv[primaryKey]?b.r.achv[primaryKey].pct:null; if(pa==null&&pb==null)return 0; if(pa==null)return 1; if(pb==null)return -1; return pa-pb; });
-
-  const head = '<tr><th>Lane</th>'+cols.map(c=>`<th>${escapeHtml(c.label)} achv%</th>`).join('')+'</tr>';
-  const body = computed.map(({t,r})=>{
-    const cells = cols.map(c=>{ const a=r.achv[c.key]; return a? `<td style="${laneAchvColor(a.pct)}">${a.pct.toFixed(1)}%</td>` : '<td>&mdash;</td>'; }).join('');
-    return `<tr class="lane-overview-row" data-lane-id="${t.id}" style="cursor:pointer;"><td>${escapeHtml(laneLabel(t))}</td>${cells}</tr>`;
-  }).join('');
-  wrap.innerHTML = `<table class="yield-table"><thead>${head}</thead><tbody>${body}</tbody></table>`;
-  wrap.querySelectorAll('.lane-overview-row').forEach(el=>el.onclick=()=>{
-    App.laneUI.selectedLane = el.dataset.laneId;
-    const sel = document.getElementById('laneTrendSelect'); if(sel) sel.value = el.dataset.laneId;
-    renderLaneTrend();
-    document.getElementById('laneTrendTitle')?.scrollIntoView({behavior:'smooth', block:'start'});
-  });
-}
 window.exportLaneOverview = function(fmt){
   if (!App.laneTargets.rows.length) return;
   const rows = getFilteredRows();
@@ -8564,14 +8409,12 @@ table.datatable tbody tr:hover .sticky-hier{background:#edf5fc!important;}
   function measures(){return window.V12_MOM_MEASURES||[];}
   function getMeasure(k){return measures().find(m=>m.key===k)||measures().find(m=>m.key==='total')||measures()[0];}
   function weekPeriods(){return momBuildAlignedWeekPeriods(App.baseMonth,App.compMonth);}
-  function monthRows(all,k){return all.filter(r=>r.monthKey===k);}
   function rangeAgg(all,k,p){return yieldAgg(all.filter(r=>r.monthKey===k && r.grdt && r.grdt.getDate()>=p.fromDay && r.grdt.getDate()<=p.toDay));}
   function monthAgg(all,k,cap){return yieldAgg(all.filter(r=>r.monthKey===k && (cap==null || (r.grdt && r.grdt.getDate()<=cap))));}
   function val(all,k,p,m){return (rangeAgg(all,k,p)[m.key]||0);}
   function monthVal(all,k,m,cap){return (monthAgg(all,k,cap)[m.key]||0);}
   function fmt(m,v){return window.v12MomFormat(m,v);}
   function fmtGT(m,v){ if(m.type==='tons') return window.v12FmtTons(v)+' MT'; if(m.type==='lacs') return window.v12FmtLacs(v)+' L'; return fmt(m,v); }
-  function fmtDelta(m,v){return window.v12MomDeltaFormat(m,v);}
   function pct(d,b){if(Math.abs(Number(b||0))<1e-9)return '—';const x=d/b*100;return (x>=0?'+':'')+x.toFixed(1)+'%';}
   function pctClass(d,b,invert){if(Math.abs(Number(b||0))<1e-9)return '';return window.v12DeltaClass(d,invert);}
   function hierarchyName(fields){
@@ -9396,7 +9239,7 @@ function idb(){
   });
 }
 async function idbGet(k){ const db=await idb(); return new Promise((res,rej)=>{ const q=db.transaction(STORE).objectStore(STORE).get(k); q.onsuccess=()=>res(q.result); q.onerror=()=>rej(q.error); }); }
-async function idbPut(k,v){ const db=await idb(); return new Promise((res,rej)=>{ const t=db.transaction(STORE,'readwrite'); t.objectStore(STORE).put(v,k); t.oncomplete=()=>res(); t.onerror=()=>rej(t.error); }); }
+async function idbPut(k,v){ const db=await idb(); return new Promise((res,rej)=>{ const t=db.transaction(STORE,'readwrite'); t.objectStore(STORE).put(v,k); t.oncomplete=()=>res(); t.onerror=()=>rej(t.error); t.onabort=()=>rej(t.error||new Error('Local save stopped (browser storage full?)')); }); }
 async function idbDel(k){ try{ const db=await idb(); return new Promise(res=>{ const t=db.transaction(STORE,'readwrite'); t.objectStore(STORE).delete(k); t.oncomplete=()=>res(); t.onerror=()=>res(); }); }catch(e){} }
 
 async function saveSnapshot(){
@@ -9525,7 +9368,8 @@ async function sync(manual){
       changed = await fullLoad(await api({}));
     }
     L.lastSync = new Date();
-    if (changed){ await saveSnapshot(); applyToDashboard(manual); }
+    /* show the data first, then keep the local copy (saving 2+ lakh GRs takes a few seconds and must never hold the screen) */
+    if (changed){ applyToDashboard(manual); setTimeout(()=>{ saveSnapshot(); }, 1500); }
     else if (manual && App.dataSource!=='live') applyToDashboard(true);
   }catch(e){
     L.error = e.message || String(e);
@@ -9616,7 +9460,14 @@ function applyToDashboard(force){
   if (!L.rows.size) return;
   if (App.dataSource==='file' && !force) { setStatus(); return; } // user is looking at an uploaded Excel
   buildDiscountFromMaster();
-  const aoa = [L.headers.slice()].concat([...L.rows.values()]);
+  let liveRows = [...L.rows.values()];
+  if (window.GRYear){   /* default: current FY + the months NBD needs; "+ Load last year" adds the rest */
+    const hd = L.headers.map(h=>String(h||'').trim());
+    const dcol = (App.mapping && App.mapping.grdt && hd.includes(App.mapping.grdt)) ? App.mapping.grdt : (smartMap(hd).mapping.grdt || '');
+    liveRows = GRYear.trim(liveRows, dcol ? hd.indexOf(dcol) : -1);
+    GRYear.S.reapply = ()=>applyToDashboard(true);
+  }
+  const aoa = [L.headers.slice()].concat(liveRows);
   const label = 'Live · Google Drive master';
   const firstTime = !(App.rows && App.rows.length) || App.dataSource!=='live';
 
@@ -9656,6 +9507,7 @@ function applyToDashboard(force){
   updateHeaderStats(); renderDataQuality();
   (window.renderActivePage || renderActivePage)();
   setStatus();
+  if (window.GRYear) GRYear.pill();
 }
 
 /* ---------------- UI ---------------- */
@@ -10128,7 +9980,6 @@ function rules(){ App.filters.__rules = App.filters.__rules || {}; return App.fi
 const draft = {};   // dim -> snapshot taken when the list opens; restored unless Apply is pressed
 function takeSnapshot(dim){ const r=rules()[dim], s=document.getElementById('mssearch_'+dim);
   draft[dim]={vals:(App.filters[dim]||[]).slice(), rule:r?{q:r.q,auto:r.auto,ex:new Set(r.ex||[])}:null, q:s?s.value:'', applied:false}; }
-function restoreSnapshot(dim){ restoreSnapshot_(draft[dim], dim); }
 function restoreSnapshot_(d, dim){ if(!d) return;
   App.filters[dim]=d.vals.slice(); if(d.rule) rules()[dim]={q:d.rule.q,auto:d.rule.auto,ex:new Set(d.rule.ex)}; else delete rules()[dim];
   const s=document.getElementById('mssearch_'+dim); if(s) s.value=d.q;
@@ -16875,14 +16726,6 @@ function bubbles(items){
     if(r>7||bad) s+=grText(X(b.x)+r+2,Y(b.y)+3,b.l.length>12?b.l.slice(0,11)+'…':b.l,{a:'start',fs:8.5,c:bad?COL.red:COL.text,w:700}); });
   return frame(s);
 }
-function diverge(labels,up,down,gr){
-  const pl=10,pr=10,pt=18,pb=26,iw=W-pl-pr,ih=H-pt-pb,mid=pt+ih/2,n=labels.length,gw=iw/n,bw=Math.min(40,gw*.55),mx=Math.max(1,...up,...down)*1.25;
-  let s=`<line x1="${pl}" y1="${mid}" x2="${W-pr}" y2="${mid}" stroke="${COL.axis}"/>`;
-  labels.forEach((l,i)=>{ const x=pl+gw*(i+.5)-bw/2, h1=ih/2*up[i]/mx, h2=ih/2*down[i]/mx;
-    s+=`<rect x="${x}" y="${mid-h1}" width="${bw}" height="${h1}" rx="2" fill="${COL.teal}"><title>${esc(l+': '+up[i]+' new')}</title></rect><rect x="${x}" y="${mid}" width="${bw}" height="${h2}" rx="2" fill="${COL.red}"><title>${esc(l+': '+down[i]+' lost')}</title></rect>`+
-      grText(x+bw/2,mid-h1-4,'+'+up[i],{w:800,c:COL.teal})+grText(x+bw/2,mid+h2+11,'−'+down[i],{w:800,c:COL.red})+grText(x+bw/2,H-6,l,{w:700}); });
-  return frame(s);
-}
 const legend=items=>`<div class="tr-lg">${items.map(([n,c])=>`<span><i style="background:${c}"></i>${esc(n)}</span>`).join('')}</div>`;
 const card=(title,note,cap,body,tone,wide)=>`<div class="tr-card"${wide?' style="grid-column:1/-1"':''}><h3>${esc(title)}</h3><div class="tr-note ${tone||''}">${esc(note||'')}</div>${cap?`<div class="tr-cap">${esc(cap)}</div>`:''}${body}</div>`;
 
@@ -18226,7 +18069,7 @@ if (typeof prevBuild==='function'){
   };
 }
 function applyAll(rerender){
-  NG.stats=null;
+  NG.stats=null; window.GRDataVer=(window.GRDataVer||0)+1;
   if (App.rows&&App.rows.length){
     applyRows(App.rows);
     if (App.dims) dimsFrom(App.rows,App.dims);
@@ -18737,7 +18580,7 @@ const dv=(r,f)=>{ const v=r[f]; const s=v==null?'':String(v).trim().toUpperCase(
 /* history: scope|party → months with business + months each destination / load type / country was used */
 const H={ src:null, key:'', map:null, first:null, dims:DIMS };
 function history(party,scope){
-  const src=App.rows||[], key=party+'|'+scope;
+  const src=App.rows||[], key=party+'|'+scope+'|'+(window.GRDataVer||0);
   if(H.src===src && H.key===key && H.map) return H;
   const map=new Map(); let first=Infinity, hasC=false;
   for(const r of src){ if(r.destcountry){ hasC=true; break; } }
@@ -18785,14 +18628,19 @@ window.nbdTag=function(row,party,scope){ const h=history(party||'cngr',scope||'p
 const FLD={yield:'NBD/RBD',mom:'NBD/RBD (MoM)'};
 const CSF=pg=>FLD[pg]+' · Cross Sell';
 /* tag every GR (stamped on the row too, so a click can open exactly these GRs in GR Drill) */
+const TAGC={};
 function tagRows(rows,st,pg){
   const h=history(st.party,st.scope), g=gap(), cache=new Map(), TG=new Map(), fld=FLD[pg], csf=CSF(pg);
+  const ck=[st.party,st.scope,g,win(),baseOn()].join('|');
+  let C=TAGC[pg]; if(!C||C.map!==h.map||C.key!==ck){ C=TAGC[pg]={map:h.map,key:ck,tg:new Map()}; }
   for(const r of rows){ if(!r.monthKey) continue;
+    const hit=C.tg.get(r); if(hit){ TG.set(r,hit); continue; }
     const k=sv(r,st.scope)+'\u0001'+pv(r,st.party), m=mi(r.monthKey);
-    const ck=k+'\u0002'+m+'\u0002'+h.dims.map(d=>dv(r,d[1])).join('\u0003');
-    let tg=cache.get(ck); if(!tg){ tg=tagOf(h,k,m,g,r); cache.set(ck,tg); }
+    const ck2=k+'\u0002'+m+'\u0002'+h.dims.map(d=>dv(r,d[1])).join('\u0003');
+    let tg=cache.get(ck2); if(!tg){ tg=tagOf(h,k,m,g,r); cache.set(ck2,tg); }
     r[fld]=TAGTXT[tg.t]; r[csf]=tg.cs?'YES':''; WHYS.forEach(w=>{ r[fld+' · '+w[1]]=tg.cs&&tg.why.includes(w[0])?'YES':''; });
-    TG.set(r,{k,m,b:tg.t==='NBD'?'nbd':tg.t==='RBD'?'rbd':'nj',cs:tg.cs,why:tg.why,last:tg.last,s:tg.s});
+    const x={k,m,b:tg.t==='NBD'?'nbd':tg.t==='RBD'?'rbd':'nj',cs:tg.cs,why:tg.why,last:tg.last,s:tg.s};
+    C.tg.set(r,x); TG.set(r,x);
   }
   return {TG,h,g};
 }
@@ -18898,12 +18746,6 @@ function ctlHtml(pg,st){
     <div class="rt-sel msel nbd-hsel"><button type="button" class="yield-hier-btn msel-btn" data-nbd-mb>Metrics: ${esc(mm.join(', '))} <span>▾</span></button><div class="rt-pop msel-pop nbd-mpop"></div></div>`;
   }
   return h;
-}
-function njNote(h,g,months){
-  if(h.first==null) return '';
-  if(baseOn()) return '';
-  const bad=months.filter(k=>mi(k)-g<h.first);
-  return bad.length?`<div class="nbd-note">The base-month rule is Off (Metric Definitions → NBD Rules). Data starts ${esc(mLab(mk(h.first)))}, so for ${esc(bad.map(mLab).join(', '))} the full ${g}-month look-back is not available: a party with no business in the months we have is <b>Not judged</b>.</div>`:'';
 }
 function panelFor(pg){
   const id='nbd-'+pg; let p=$(id); if(p) return p;
@@ -19104,7 +18946,10 @@ function renderMom(){
   wrap.innerHTML=`<table class="yield-table nbd-table nbd-sum" data-lv="${SL}"><thead><tr>${sd.map(x=>`<th class="hier nbd-lv" rowspan="2">${esc(x[1])}</th>`).join('')}${(()=>{ const h1=G=>`<th colspan="4" class="${G[2]} nbd-gs">${G[1]} — ${esc((CM.find(x=>x[0]===cm)||CM[0])[1])}</th>`; return SG.slice(0,-1).map(h1).join('')+`<th colspan="4" class="nbd-hl nbd-gs">Lost — ${isN?esc(partyLbl(st))+'s':'Freight lost / month'}</th>`+h1(SG[SG.length-1]); })()}</tr><tr>${(()=>{ const h2=G=>`<th class="${G[2]} nbd-gs">${lb}${u}</th><th class="${G[2]}">${lc}${u}</th><th class="${G[2]}">Δ</th><th class="${G[2]}">Δ %</th>`; return SG.slice(0,-1).map(h2).join('')+h2(['l','','nbd-hl'])+h2(SG[SG.length-1]); })()}</tr></thead>
     <tbody>${body}</tbody><tfoot><tr><td class="hier">PAN INDIA</td>${'<td class="hier"></td>'.repeat(SL-1)}${cells(all,{})}</tr></tfoot></table>`;
 }
-function render(pg){ try{ if(!App.rows||!App.rows.length) return; if(pg==='yield'){ renderYield(); if(window.renderHalfYear) window.renderHalfYear(); if(window.renderPartyHalf) window.renderPartyHalf(); } else if(pg==='mom') renderMom(); if(ST[pg]&&ST[pg].lost) showLost(pg,ST[pg].lost,true); const p=$('nbd-'+pg); if(p){ toEnd(p); requestAnimationFrame(()=>fixHead(p.querySelector('[data-wrap]'))); } }catch(e){ console.error('NBD',e); } }
+function render(pg){ try{ if(!App.rows||!App.rows.length) return; if(pg==='yield'){ drawNbd(pg); if(window.renderHalfYear) window.renderHalfYear(); if(window.renderPartyHalf) window.renderPartyHalf(); } else if(pg==='mom') drawNbd(pg); }catch(e){ console.error('NBD',e); } }
+/* the NBD table is drawn when it is on (or near) the screen; a filter click while it is off screen draws it on scroll */
+function drawNbd(pg,now){ const p0=panelFor(pg); if(!now&&p0&&window.GRLazy&&GRLazy.defer(p0,()=>{ try{ drawNbd(pg,true); }catch(e){ console.error('NBD',e); } })){ toEnd(p0); return; }
+  if(pg==='yield') renderYield(); else renderMom(); if(ST[pg]&&ST[pg].lost) showLost(pg,ST[pg].lost,true); const p=$('nbd-'+pg); if(p){ toEnd(p); requestAnimationFrame(()=>fixHead(p.querySelector('[data-wrap]'))); } }
 window.renderNbd=render;
 function after(){ const k=document.querySelector('.tab.active')?.dataset.page; if(k==='yield'||k==='mom') render(k); }
 /* safety net: if the panel is missing on an open Yield / MoM page (e.g. a render path that skips the page hook), draw it */
@@ -19184,10 +19029,11 @@ const node=()=>({h:{},cc:0,kids:null});
 const flat=(pa,ca)=>Math.abs(ca-pa)<500||Math.abs(ca-pa)/pa*100<0.05;
 function draw(){
   const p=panel(); if(!p||!window.App||!App.rows||!App.rows.length) return;
+  if(!arguments[1]&&window.GRLazy&&GRLazy.defer(p,()=>draw(arguments[0],true))) return;
   const wrap=p.querySelector('[data-wrap]'), kEl=p.querySelector('[data-kpi]'), more=p.querySelector('[data-more]');
   /* months in the loaded data (all rows) and the latest GR date */
   const DM=new Set(); let lastD=null;
-  for(const r of App.rows){ if(!r.monthKey) continue; DM.add(mi(r.monthKey)); if(r.grdt&&(!lastD||r.grdt>lastD)) lastD=r.grdt; }
+  for(const r of App.rows){ if(!r.monthKey) continue; const i0=mi(r.monthKey); if(window.GRYear&&!GRYear.usable(i0)) continue; DM.add(i0); if(r.grdt&&(!lastD||r.grdt>lastD)) lastD=r.grdt; }
   const now=new Date(), curM=now.getFullYear()*12+now.getMonth();
   const done=id=>hMonths(id).filter(i=>DM.has(i)&&i<curM);       /* completed months of a half in the data */
   const has=id=>hMonths(id).some(i=>DM.has(i));
@@ -19205,6 +19051,8 @@ function draw(){
     <label>Sort <select data-hy="sort">${opt(SORT,ST.sort)}</select></label>
     <label>Search <input data-hy-q type="search" name="hy-party-search" autocomplete="off" data-lpignore="true" data-form-type="other" placeholder="Party name or any spelling" value="${esc(/@/.test(ST.q||'')?'':ST.q)}"></label>`;
   /* rows: every slicer except Month / Date */
+  const P=window.GRSpeed?GRSpeed.memo('hy',[party,cur,prev,cols.join(','),curM],build_):build_();
+  function build_(){
   const fr=typeof filterRowsCached==='function'?filterRowsCached({...App.filters,globalMonth:'',dateFrom:null,dateTo:null}):App.rows;
   const want=new Set(cols.concat([prev]));
   const P=new Map();
@@ -19215,6 +19063,8 @@ function draw(){
     const rw=r[party+'Raw']; if(rw!=null&&rw!=='') a.raw.add(String(rw).toUpperCase());
     const bk=pv(r,'origin'); let b=a.kids.get(bk); if(!b){ b=node(); b.kids=new Map(); a.kids.set(bk,b); } add(b,h,tv,cc);
     const dk=pv(r,'destname'); let d=b.kids.get(dk); if(!d){ d=node(); b.kids.set(dk,d); } add(d,h,tv,cc); }
+  return P;
+  }
   const calc=n=>{ const pa=nP?(n.h[prev]||0)/nP:0, ca=nC?n.cc/nC:0;
     const t=pa<=1e-9&&ca<=1e-9?'':pa<=1e-9?'nw':ca<=1e-9?'nb':flat(pa,ca)?'sm':ca>pa?'up':'dn';
     n.pa=pa; n.ca=ca; n.t=t; n.d=ca-pa; return n; };
@@ -19256,6 +19106,7 @@ function draw(){
     <tbody>${body}</tbody><tfoot><tr><td class="hier">TOTAL (${N(list.length)} ${esc(pl)}s)</td><td class="hier"></td><td class="hier"></td>${cols.map(id=>has(id)?`<td${id===cols[0]?' class="hy-gs"':''}>${T.h[id]?L(T.h[id]):'–'}</td>`:`<td class="hy-dim${id===cols[0]?' hy-gs':''}">–</td>`).join('')}${tail(T)}</tr></tfoot></table>`
     :`<div class="empty-state"><h2>No parties for the selected Trend / Search.</h2>${ST.q||ST.trend!=='ALL'?'<button type="button" class="btn btn-sm btn-outline" data-hy-clr>Clear search and Trend</button>':''}</div>`;
   more.innerHTML=`<div class="panel-sub" style="margin-top:6px">Avg / month uses completed months only: ${esc(hLab(cur))} has ${nC} completed month${nC===1?'':'s'} in the data (${[...curDone].sort((a,b)=>a-b).map(i=>MN[i%12]+'-'+String(Math.floor(i/12)).slice(2)).join(', ')||'none'}); the running month is in the half-year total but not in the average. "–" in a half-year column = no data loaded for that half-year yet.${list.length>ST.show?` Showing ${N(ST.show)} of ${N(list.length)} parties. <button type="button" class="btn btn-sm btn-outline" data-hy-more>Show 200 more</button>`:''}</div>`;
+  if(window.GRYear&&!has(cols[0])) GRYear.note(more,'');
 }
 window.renderHalfYear=function(){ try{ draw(); }catch(e){ console.error('Half-Yearly Business',e); } };
 })();
@@ -19330,9 +19181,10 @@ function panel(){
 }
 function draw(keepOpen){
   const p=panel(); if(!p||!window.App||!App.rows||!App.rows.length) return;
+  if(!arguments[1]&&window.GRLazy&&GRLazy.defer(p,()=>draw(arguments[0],true))) return;
   const wrap=p.querySelector('[data-wrap]'), more=p.querySelector('[data-more]');
   const DM=new Set(); let lastD=null;
-  for(const r of App.rows){ if(!r.monthKey) continue; DM.add(mi(r.monthKey)); if(r.grdt&&(!lastD||r.grdt>lastD)) lastD=r.grdt; }
+  for(const r of App.rows){ if(!r.monthKey) continue; const i0=mi(r.monthKey); if(window.GRYear&&!GRYear.usable(i0)) continue; DM.add(i0); if(r.grdt&&(!lastD||r.grdt>lastD)) lastD=r.grdt; }
   const now=new Date(), curM=now.getFullYear()*12+now.getMonth();
   const done=id=>hMonths(id).filter(i=>DM.has(i)&&i<curM), has=id=>hMonths(id).some(i=>DM.has(i));
   const opts=[...new Set([...DM].map(halfOf))].filter(id=>done(id).length).sort((a,b)=>b-a);
@@ -19349,12 +19201,17 @@ function draw(keepOpen){
     <label>Trend <select data-ph="trend">${opt(TR,ST.trend)}</select></label>
     <label>Sort <select data-ph="sort">${opt(SORT,ST.sort)}</select></label>
     <label>Search <input data-ph-q type="search" name="ph-party-search" autocomplete="off" data-lpignore="true" data-form-type="other" placeholder="Party, branch, destination…" value="${esc(/@/.test(ST.q||'')?'':ST.q)}"></label>`;
+  const want=new Set(cols.concat([prev]));
+  const G=window.GRSpeed?GRSpeed.memo('ph',[party,defs.join(','),cur,prev,cols.join(','),curM],build_):build_();
+  function build_(){
   const fr=typeof filterRowsCached==='function'?filterRowsCached({...App.filters,globalMonth:'',dateFrom:null,dateTo:null}):App.rows;
-  const want=new Set(cols.concat([prev])), G=new Map();
+  const G=new Map();
   for(const r of fr){ if(!r.monthKey) continue; const i=mi(r.monthKey), h=halfOf(i); if(!want.has(h)) continue;
     const vals=defs.map(f=>pv(r,f)), k=vals.join('\u0001'); let a=G.get(k); if(!a){ a={vals,h:{},cc:0,raw:new Set()}; G.set(k,a); }
     const tv=r.total||0; a.h[h]=(a.h[h]||0)+tv; if(h===cur&&curDone.has(i)) a.cc+=tv;
     const rw=r[party+'Raw']; if(rw!=null&&rw!=='') a.raw.add(String(rw).toUpperCase()); }
+  return G;
+  }
   const calc=n=>{ const pa=nP?(n.h[prev]||0)/nP:0, ca=nC?n.cc/nC:0;
     n.t=pa<=1e-9&&ca<=1e-9?'':pa<=1e-9?'nw':ca<=1e-9?'nb':flat(pa,ca)?'sm':ca>pa?'up':'dn'; n.pa=pa; n.ca=ca; n.d=ca-pa; return n; };
   let list=[...G.values()].map(calc).filter(n=>n.t);
@@ -19379,6 +19236,7 @@ function draw(keepOpen){
     <tbody>${body}</tbody><tfoot><tr><td class="hier">TOTAL (${N(list.length)} rows · ${N(parties)} parties)</td>${'<td class="hier"></td>'.repeat(defs.length-1)}${cols.map(id=>has(id)?`<td${id===cols[0]?' class="hy-gs"':''}>${T.h[id]?L(T.h[id]):'–'}</td>`:`<td class="hy-dim${id===cols[0]?' hy-gs':''}">–</td>`).join('')}${tail(T)}</tr></tfoot></table>`
     :`<div class="empty-state"><h2>No parties for the selected Trend / Search.</h2>${ST.q||ST.trend!=='ALL'?'<button type="button" class="btn btn-sm btn-outline" data-ph-reset>Clear search and Trend</button>':''}</div>`;
   more.innerHTML=`<div class="panel-sub" style="margin-top:6px">Avg / month uses completed months only (${esc(hLab(cur))}: ${nC} month${nC===1?'':'s'}). "–" in a half-year column = no data loaded for that half-year yet.${list.length>ST.show?` Showing ${N(ST.show)} of ${N(list.length)} rows. <button type="button" class="btn btn-sm btn-outline" data-ph-more>Show 300 more</button>`:''}</div>`;
+  if(window.GRYear&&!has(cols[0])) GRYear.note(more,'');
 }
 window.renderPartyHalf=function(keepOpen){ try{ draw(keepOpen); }catch(e){ console.error('Half-Yearly Business by Party',e); } };
 document.addEventListener('click',e=>{ if(!e.target.closest('#ph-yield .yield-hier-select')) document.querySelectorAll('#ph-yield .yield-hier-panel.open').forEach(x=>x.classList.remove('open')); });
