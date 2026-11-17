@@ -21,6 +21,9 @@ function onOpen() {
     .addItem('Rewrite master sheets from JSON', 'rewriteMasterSheets')
     .addSeparator()
     .addItem('Check folders (which files are seen)', 'debugFolders')
+    .addSubMenu(SpreadsheetApp.getUi().createMenu('Dashboard data folder')
+      .addItem('Move engine files into GR_DASHBOARD_DATA now', 'setupDashboardDataFolder')
+      .addItem('Open dashboard data folder', 'openDashboardDataFolder'))
     .addItem('Check one GR (where is it, what got merged)', 'debugGr')
     .addItem('Check joins (how many GRs matched per step)', 'debugJoin')
     .addItem('Check date column (diagnostic)', 'debugDateColumn')
@@ -175,6 +178,7 @@ function withLock_(fn) {
 
 function runIncrementalRefresh_() {
   var t0 = Date.now();
+  try { ensureDataFolderLayout_(false); } catch (e) { Logger.log('Dashboard data folder: ' + e.message); } // one-time move, ids stay the same
   var state = loadState_();
   var sources = getActiveSources_();
   if (!sources.length) throw new Error('No Active source in SOURCE_CONFIG.');
@@ -660,6 +664,13 @@ function debugFolders() {
   ensureAutoRefresh_();
   var state = loadState_();
   var lines = [];
+  try {
+    var dataId = props_().getProperty(DATA_FOLDER_PROP_);
+    lines.push(dataId
+      ? '📁 Engine files (dashboard JSON, archive, reports) are in ' + dataFolderName_() + ' — never read as input: ' + DriveApp.getFolderById(dataId).getUrl()
+      : '📁 Engine files are not in ' + dataFolderName_() + ' yet: use Dashboard data folder > Move engine files now (or wait for the next refresh).');
+    lines.push('');
+  } catch (e) { /* show the folders anyway */ }
   getActiveSources_().forEach(function (src) {
     var cfg = getColumnConfigForSource_(src.Source_Code);
     var man = state.sources[src.Source_Code] || { files: {} };

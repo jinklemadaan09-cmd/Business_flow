@@ -58,6 +58,9 @@ var SETTINGS = {
   GP_TOTAL_EXPENSE_COL: 'TOTAL EXPENSE',
 
   CACHE_FOLDER_NAME: 'GR_PNL_ENGINE_CACHE',
+  // DataFolders.gs: one folder for everything the engine writes (cache JSON, archive, reports),
+  // kept apart from the P&L / DSR input folders. The input scan never reads it.
+  DATA_FOLDER_NAME: 'GR_DASHBOARD_DATA',
 
   // Sign-in for the shared dashboard link (Auth.gs). Users are kept in the USERS sheet.
   REQUIRE_LOGIN: true,

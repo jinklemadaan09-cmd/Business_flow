@@ -35,7 +35,7 @@ var GRA_DEFAULTS = [
   ['DATE_COLUMN', 'GR DT', 'Date column (the half-year is taken from it)'],
   ['KEY_COLUMN', 'GR NO', 'Unique key of each row'],
   ['SUM_COLUMNS', 'TOTAL FREIGHT, TOTAL EXPENSE, CWEIGHT, AWEIGHT, BASIC FREIGHT', 'The change mail shows the old vs new total of these columns'],
-  ['ARCHIVE_FOLDER_ID', '', 'Drive folder ID for the archive. Blank = a GR_ARCHIVE folder is created next to this spreadsheet.'],
+  ['ARCHIVE_FOLDER_ID', '', 'Drive folder ID for the archive. Blank = a GR_ARCHIVE folder is created inside GR_DASHBOARD_DATA.'],
   ['KEEP_OLD_DAYS', '90', 'How many days an old archive version stays in GR_ARCHIVE/old'],
   ['WARN_PCT', '70', 'Send a warning mail when the sheet is this % full (cells)'],
   ['URGENT_PCT', '85', 'Send an URGENT mail when the sheet is this % full (cells)'],
@@ -641,10 +641,9 @@ function GRA_purgeOld_(s) {
 
 function GRA_archiveFolder_(ss, s) {
   var id = GRA_idFrom_(s.ARCHIVE_FOLDER_ID);
-  if (id) return DriveApp.getFolderById(id);
-  var parents = DriveApp.getFileById(ss.getId()).getParents();
-  var base = parents.hasNext() ? parents.next() : DriveApp.getRootFolder();
-  var f = GRA_subFolder_(base, 'GR_ARCHIVE');
+  if (id) return folderByIdRestore_(id, 'archive') || DriveApp.getFolderById(id);
+  // New archives go in GR_DASHBOARD_DATA (DataFolders.gs), away from the input folders.
+  var f = GRA_subFolder_(getDataFolder_(), 'GR_ARCHIVE');
   GRA_setSetting_(ss, 'ARCHIVE_FOLDER_ID', f.getId());
   return f;
 }

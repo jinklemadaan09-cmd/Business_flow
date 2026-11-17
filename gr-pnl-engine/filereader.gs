@@ -49,7 +49,9 @@ function scanSourceFolder_(sourceConfig, manifest, signature) {
     catch (e) { throw new Error('Invalid File_Name_Pattern for ' + sourceConfig.Source_Code + ': ' + pattern); }
   }
 
-  var out = { pending: [], seen: {}, seenCount: 0, skipped: [], files: [] };
+  // Engine output folders (GR_DASHBOARD_DATA, cache, archive, reports) are never read as input.
+  var out = { pending: [], seen: {}, seenCount: 0, skipped: [], files: [],
+              skipIds: engineFolderIds_(), skipNames: engineFolderNames_() };
   walkFolder_(root, root.getName(), regex, sourceConfig, manifest, signature, out);
 
   // Oldest first, so when the same key is in two files the newer file is applied last.
@@ -103,6 +105,10 @@ function walkFolder_(folder, pathLabel, regex, sourceConfig, manifest, signature
   while (subs.hasNext()) {
     var sub = subs.next();
     if (sub.isTrashed()) continue;
+    if (out.skipIds[sub.getId()] || out.skipNames[sub.getName()]) {
+      out.files.push({ path: pathLabel + '/' + sub.getName() + '/', status: 'SKIPPED: engine data folder (not an input)' });
+      continue;
+    }
     walkFolder_(sub, pathLabel + '/' + sub.getName(), regex, sourceConfig, manifest, signature, out);
   }
 }

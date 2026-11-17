@@ -20,13 +20,12 @@ var REPORT_TMP_PREFIX_ = '__upload_';
 function getReportsFolder_() {
   var p = props_();
   var id = p.getProperty(PROP_REPORTS_FOLDER_);
-  if (id) {
-    try { var f = DriveApp.getFolderById(id); if (!f.isTrashed()) return f; } catch (e) { /* missing — find or create */ }
-  }
+  var f = folderByIdRestore_(id, 'reports'); // back out of the Trash if deleted by mistake
+  if (f) return f;
   var name = SETTINGS.REPORTS_FOLDER_NAME || 'GR_PNL_REPORTS';
   var it = DriveApp.getFoldersByName(name), folder = null;
   while (it.hasNext()) { var c = it.next(); if (!c.isTrashed()) { folder = c; break; } }
-  if (!folder) folder = DriveApp.createFolder(name);
+  if (!folder) folder = getDataFolder_().createFolder(name);
   p.setProperty(PROP_REPORTS_FOLDER_, folder.getId());
   return folder;
 }

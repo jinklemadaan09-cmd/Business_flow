@@ -50,3 +50,24 @@ saved back with Actions > GR engine: sync > mode pull.
    would happen, nothing changes.
 3. **Archive (6 months) > Setup** once (allow permissions), then **Run archive now** (or wait for 2 AM).
    Long runs continue on their own; the mail says when a half-year archive is ready.
+
+# Dashboard data folder (`DataFolders.gs`)
+
+Everything the engine writes to Drive now lives in one folder, `GR_DASHBOARD_DATA`, away from the
+P&L / DSR input folders:
+
+| Inside `GR_DASHBOARD_DATA` | What |
+|---|---|
+| `GR_PNL_ENGINE_CACHE` | The JSON files the dashboard loads (`engine_state.json`, `dashboard_master_part_N.json`, `delta_*.json`, `cache_*.json`) |
+| `GR_ARCHIVE` (+ `old`) | Half-year archive sheets and their gzip JSON copies |
+| `GR_PNL_REPORTS` | Files users download from the dashboard |
+
+- The folder is made next to the engine spreadsheet. If the spreadsheet itself sits inside an input
+  folder, it is made in My Drive instead.
+- On the first refresh after the merge, the existing folders are moved into it. Drive keeps a folder's
+  id when it moves, and the engine finds every folder by id, so the dashboard and the 2-hourly refresh
+  keep working. Menu: **GR PNL Engine > Dashboard data folder > Move engine files into GR_DASHBOARD_DATA now**
+  does the same at once and shows the result.
+- "Get data from folder" and **Check folders** never read these folders as input (they show as
+  `SKIPPED: engine data folder`).
+- If one of these folders is put in the Drive Trash by mistake, the engine takes it back out on its next run.
