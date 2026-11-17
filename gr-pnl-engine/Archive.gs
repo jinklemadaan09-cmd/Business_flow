@@ -60,8 +60,21 @@ function GRA_setup() {
 
 function GRA_nightly(e) { GRA_run_(false); }
 function GRA_continue(e) { GRA_run_(false); }
-function GRA_runNow() { GRA_run_(false); }
-function GRA_dryRun() { GRA_run_(true); }
+function GRA_runNow() { GRA_showResult_('Run archive now', GRA_run_(false, true)); }
+function GRA_dryRun() { GRA_showResult_('Dry run', GRA_run_(true, true)); }
+
+/** Menu: shows where the archive is. */
+function GRA_openFolder() {
+  var ss = GRA_engineSs_(), s = GRA_settings_(ss), id = GRA_idFrom_(s.ARCHIVE_FOLDER_ID);
+  if (!id) {
+    GRA_dialog_('Archive folder', 'No archive has been created yet. Use Archive (6 months) > Run archive now.', '');
+    return;
+  }
+  var f = DriveApp.getFolderById(id), owner = '';
+  try { owner = f.getOwner().getEmail(); } catch (e) {}
+  GRA_dialog_('Archive folder', 'Folder "' + f.getName() + '"' + (owner ? ' in the Drive of ' + owner : '') +
+    '. The ARCHIVE_FILES tab lists every archive file with its link.', f.getUrl());
+}
 
 /**
  * Hook for the engine: call it just before the engine writes the DASHBOARD_MASTER mirror, so the mirror
@@ -84,14 +97,22 @@ function GRA_menu_(ui) {
   return ui.createMenu('Archive (6 months)')
     .addItem('Dry run (check only, nothing changes)', 'GRA_dryRun')
     .addItem('Run archive now', 'GRA_runNow')
-    .addItem('Setup (nightly trigger)', 'GRA_setup');
+    .addItem('Setup (nightly trigger)', 'GRA_setup')
+    .addSeparator()
+    .addItem('Open archive folder', 'GRA_openFolder');
 }
 
 /* ------------------------------------------------------------------ main run */
 
-function GRA_run_(dry) {
+function GRA_run_(dry, fromMenu) {
   var lock = LockService.getScriptLock();
-  if (!lock.tryLock(20000)) return;
+  if (!lock.tryLock(fromMenu ? 30000 : 20000)) {
+    // the engine refresh is holding the lock: try again by itself in a minute
+    if (!dry) GRA_scheduleContinue_();
+    return { busy: true, text: 'The engine refresh is running right now.' +
+      (dry ? ' Try the dry run again in a few minutes.' : ' The archive starts by itself in about 1 minute.') };
+  }
+  var result = { text: '', building: false };
   var t0 = Date.now(), ss = GRA_engineSs_();
   try {
     GRA_ensureTabs_(ss);
@@ -125,14 +146,36 @@ function GRA_run_(dry) {
     } else {
       GRA_scheduleContinue_();
       notes.push('Time limit reached, continues by itself in 1 min');
+      result.building = true;
     }
+    result.text = notes.filter(String).join('\n');
     GRA_log_(ss, dry ? 'DRY RUN' : 'RUN', notes.filter(String).join(' | '), Math.round((Date.now() - t0) / 1000) + ' s');
   } catch (err) {
+    result.text = 'Error: ' + String(err && err.message || err) + '\nNothing was deleted.';
     GRA_log_(ss, 'ERROR', String(err && err.stack || err), '');
     GRA_mail_(GRA_settings_(ss), 'GR Archive: ERROR', '<p>The archive run failed. Nothing was deleted.</p><pre>' + GRA_esc_(String(err && err.stack || err)) + '</pre>');
   } finally {
     lock.releaseLock();
   }
+  return result;
+}
+
+/** Menu feedback: what happened and where the archive is. Silent when there is no UI (triggers). */
+function GRA_showResult_(title, r) {
+  if (!r) return;
+  var text = r.text, url = '';
+  if (r.building) text += '\n\nThe archive is being written in steps of about 5 minutes and continues by itself. ' +
+    'Files are named "... - building" until they are checked. You get a mail when it is ready.';
+  try { var s = GRA_settings_(GRA_engineSs_()), id = GRA_idFrom_(s.ARCHIVE_FOLDER_ID); if (id) url = DriveApp.getFolderById(id).getUrl(); } catch (e) {}
+  GRA_dialog_(title, text + '\n\nFull details: ARCHIVE_LOG tab.', url);
+}
+
+function GRA_dialog_(title, text, url) {
+  try {
+    var html = '<div style="font:13px Arial;line-height:1.5;white-space:pre-wrap">' + GRA_esc_(text) + '</div>' +
+      (url ? '<p style="font:13px Arial"><a href="' + url + '" target="_blank">Open the GR_ARCHIVE folder</a></p>' : '');
+    SpreadsheetApp.getUi().showModalDialog(HtmlService.createHtmlOutput(html).setWidth(520).setHeight(320), title);
+  } catch (e) { /* no UI (trigger run) */ }
 }
 
 /* ------------------------------------------------------------------ size guard */
