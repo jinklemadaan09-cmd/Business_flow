@@ -15,7 +15,10 @@ The dashboard is not affected: it reads the engine JSON, which still holds every
    goes to the `ARCHIVE_CHANGES` tab and by mail, for example:
    `FY26-27 H1 archive rebuilt. Reason: files re-read: Aug-26.xlsx; new columns: LHC_AMT.
    Rows 80,120 → 80,145 (+25) · GRs changed 312 · TOTAL FREIGHT 41,20,00,000 → 41,26,00,000`.
-   The previous version stays in `GR_ARCHIVE/old` for 90 days (`KEEP_OLD_DAYS`).
+   The new file **replaces** the old one for the same period: one file per half-year, never two
+   (the old one goes to Drive Trash, 30 days). Set `KEEP_OLD_VERSION = YES` to keep it in `GR_ARCHIVE/old` instead.
+   Two runs can never write the same period at once; **Archive (6 months) > Check archive files** keeps the
+   newest copy of each period and removes any extra copy or unfinished leftover.
 4. **Mirror trim**: rows older than `KEEP_MONTHS` (6) leave the mirror tab, and only rows whose
    GR NO is in a verified archive. Rows not found in an archive stay.
 
