@@ -1,7 +1,7 @@
 /**
  * CACHE.GS
  * --------
- * Engine storage lives as JSON files in a Drive folder (GR_PNL_ENGINE_CACHE),
+ * Engine storage lives as JSON files in a Drive folder (GR_DASHBOARD_DATA/GR_PNL_ENGINE_CACHE),
  * NOT as sheets. That removes the 10-million-cell pressure from this
  * spreadsheet and makes every write a single file save.
  *
@@ -20,13 +20,9 @@ function props_() { return PropertiesService.getScriptProperties(); }
 
 function getCacheFolder_() {
   var id = props_().getProperty(PROP_CACHE_FOLDER);
-  if (id) {
-    try {
-      var f = DriveApp.getFolderById(id);
-      if (!f.isTrashed()) return f;
-    } catch (e) { /* missing — recreate */ }
-  }
-  var folder = DriveApp.createFolder(SETTINGS.CACHE_FOLDER_NAME);
+  var f = folderByIdRestore_(id, 'engine cache'); // back out of the Trash if deleted by mistake
+  if (f) return f;
+  var folder = getDataFolder_().createFolder(SETTINGS.CACHE_FOLDER_NAME);
   props_().setProperty(PROP_CACHE_FOLDER, folder.getId());
   return folder;
 }
