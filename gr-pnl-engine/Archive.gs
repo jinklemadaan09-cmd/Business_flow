@@ -105,14 +105,20 @@ function GRA_menu_(ui) {
 /* ------------------------------------------------------------------ main run */
 
 function GRA_run_(dry, fromMenu) {
-  var lock = LockService.getScriptLock();
+  // The archive never holds the engine's script lock for long, so Refresh / the hourly engine refresh are
+  // never blocked by it. It uses its own lock, and gives way while the engine still has work to finish.
+  if (!dry && GRA_engineBusy_()) {
+    GRA_scheduleContinue_(5);
+    return { busy: true, text: 'The engine refresh is still working (new or changed files). ' +
+      'The archive waits for it and starts by itself in about 5 minutes.' };
+  }
+  var lock = LockService.getDocumentLock() || LockService.getScriptLock();
   if (!lock.tryLock(fromMenu ? 30000 : 20000)) {
-    // the engine refresh is holding the lock: try again by itself in a minute
-    if (!dry) GRA_scheduleContinue_();
-    return { busy: true, text: 'The engine refresh is running right now.' +
-      (dry ? ' Try the dry run again in a few minutes.' : ' The archive starts by itself in about 1 minute.') };
+    if (!dry) GRA_scheduleContinue_(1);
+    return { busy: true, text: 'An archive run is already going. It continues by itself; check ARCHIVE_LOG in a few minutes.' };
   }
   var result = { text: '', building: false };
+  if (!dry) GRA_ensureNightly_();   // any real run also makes sure the nightly 2 AM run exists
   var t0 = Date.now(), ss = GRA_engineSs_();
   try {
     GRA_ensureTabs_(ss);
@@ -144,7 +150,7 @@ function GRA_run_(dry, fromMenu) {
       notes.push(trim);
       if (!dry) GRA_purgeOld_(s);
     } else {
-      GRA_scheduleContinue_();
+      GRA_scheduleContinue_(GRA_engineBusy_() ? 5 : 1);
       notes.push('Time limit reached, continues by itself in 1 min');
       result.building = true;
     }
@@ -346,7 +352,11 @@ function GRA_buildHalf_(ss, s, master, h, fp, oldFp, t0) {
 
   var wrote = 0;   // at least one chunk per run, so a slow start can never stall the build
   while (st.next < h.rows.length) {
-    if (wrote && Date.now() - t0 > GRA_TIME_BUDGET_MS) return 'timeout';
+    if (wrote && Date.now() - t0 > GRA_TIME_BUDGET_MS) {
+      GRA_log_(ss, 'BUILDING', h.label + ': ' + GRA_fmt_(st.next) + ' of ' + GRA_fmt_(h.rows.length) + ' rows written to ' +
+        st.fileIds.map(function (id) { var f = DriveApp.getFileById(id); return f.getName() + ' ' + f.getUrl(); }).join(', '), '');
+      return 'timeout';
+    }
     wrote++;
     var part = Math.floor(st.next / st.perPart), inPart = st.next - part * st.perPart;
     var take = Math.min(GRA_CHUNK_ROWS, st.perPart - inPart, h.rows.length - st.next);
@@ -418,7 +428,9 @@ function GRA_buildHalf_(ss, s, master, h, fp, oldFp, t0) {
   props.deleteProperty(GRA_STATE_KEY);
 
   GRA_reportChange_(ss, s, h, diff, oldFp, fp, urls);
-  return h.label + ': archive ' + (oldFp ? 'rebuilt' : 'created') + ' (' + h.rows.length + ' rows, verified)';
+  var names = st.fileIds.map(function (id) { return DriveApp.getFileById(id).getName(); });
+  return h.label + ': archive ' + (oldFp ? 'rebuilt' : 'created') + ' (' + h.rows.length + ' rows, verified): ' +
+    names.map(function (n, i) { return n + ' ' + urls[i]; }).join(', ') + ', ' + jsonFile.getName() + ' ' + jsonFile.getUrl();
 }
 
 function GRA_failBuild_(ss, s, h, st, why) {
@@ -530,15 +542,15 @@ function GRA_trimMirror_(ss, s, dry) {
   if (di < 0 || ki < 0) return 'Mirror: ' + s.DATE_COLUMN + ' / ' + s.KEY_COLUMN + ' not found, trim skipped';
   var n = sh.getLastRow() - 1;
   var dates = sh.getRange(2, di + 1, n, 1).getValues(), keys = sh.getRange(2, ki + 1, n, 1).getValues();
-  var cutoff = GRA_cutoffIso_(s), keySets = {}, drop = [], notArchived = 0;
+  var cutoff = GRA_cutoffIso_(s), keySets = {}, drop = [], notArchived = 0, dropHalves = {};
   for (var r = 0; r < n; r++) {
     var iso = GRA_iso_(dates[r][0]);
     if (!iso || iso >= cutoff) continue;
     var hk = GRA_halfOf_(iso).key;
     if (keySets[hk] === undefined) keySets[hk] = GRA_archivedKeys_(ss, hk);
-    if (keySets[hk] && keySets[hk][GRA_norm_(keys[r][0])]) drop.push(r + 2); else notArchived++;
+    if (keySets[hk] && keySets[hk][GRA_norm_(keys[r][0])]) { drop.push(r + 2); dropHalves[hk] = 1; } else notArchived++;
   }
-  var refill = dry ? false : GRA_noteRefill_(cutoff, drop.length);
+  var refill = dry ? false : GRA_noteRefill_(cutoff, Object.keys(dropHalves));
   var msg = 'Mirror: ' + GRA_fmt_(drop.length) + ' rows older than ' + cutoff + (dry ? ' will be removed' : ' removed') +
             (notArchived ? ', ' + GRA_fmt_(notArchived) + ' older rows kept because they are not in an archive' : '');
   if (refill) {
@@ -547,6 +559,10 @@ function GRA_trimMirror_(ss, s, dry) {
       '<p>Old rows that were removed from the mirror tab were written back by the engine refresh. Add <code>rows = GRA_mirrorFilter(headers, rows)</code> to the engine code that writes the mirror.</p>');
   }
   if (dry || !drop.length) return msg;
+  // the engine also writes this tab: hold its lock only for the few seconds of the delete
+  var eng = LockService.getScriptLock();
+  if (!eng.tryLock(30000)) return msg.replace(' removed', ' to remove (next run, engine busy)');
+  try {
   // delete contiguous runs from the bottom up
   var runs = [], start = drop[0], prev = drop[0];
   for (var i = 1; i <= drop.length; i++) {
@@ -555,14 +571,19 @@ function GRA_trimMirror_(ss, s, dry) {
     if (i < drop.length) { start = prev = drop[i]; }
   }
   for (var j = runs.length - 1; j >= 0; j--) sh.deleteRows(runs[j][0], runs[j][1]);
+  } finally { eng.releaseLock(); }
   return msg;
 }
 
-/** True when rows older than the cutoff show up again after they were already trimmed once (engine refill). */
-function GRA_noteRefill_(cutoff, count) {
-  var p = PropertiesService.getScriptProperties(), done = p.getProperty('GRA_TRIMMED_CUTOFF');
-  if (count > 0 && done !== cutoff) { p.setProperty('GRA_TRIMMED_CUTOFF', cutoff); return false; }
-  return count > 0 && done === cutoff;
+/** True when rows of a half-year that was already trimmed (same cutoff) show up again (engine refill). */
+function GRA_noteRefill_(cutoff, halves) {
+  var p = PropertiesService.getScriptProperties();
+  var done = JSON.parse(p.getProperty('GRA_TRIMMED') || 'null') || {};
+  if (done.cutoff !== cutoff) done = { cutoff: cutoff, halves: [] };
+  var again = halves.some(function (h) { return done.halves.indexOf(h) >= 0; });
+  halves.forEach(function (h) { if (done.halves.indexOf(h) < 0) done.halves.push(h); });
+  p.setProperty('GRA_TRIMMED', JSON.stringify(done));
+  return again;
 }
 
 function GRA_cutoffIso_(s) {
@@ -639,9 +660,25 @@ function GRA_storedFp_(key) {
 
 /* ------------------------------------------------------------------ continuation trigger */
 
-function GRA_scheduleContinue_() {
+/** Installs the nightly trigger if it is missing, so every finished half-year is archived without a click. */
+function GRA_ensureNightly_() {
+  if (ScriptApp.getProjectTriggers().some(function (t) { return t.getHandlerFunction() === 'GRA_nightly'; })) return;
+  var s = GRA_settings_(GRA_engineSs_());
+  ScriptApp.newTrigger('GRA_nightly').timeBased().everyDays(1).atHour(Number(s.RUN_HOUR) || 2).create();
+}
+
+function GRA_scheduleContinue_(minutes) {
   GRA_clearContinue_();
-  ScriptApp.newTrigger('GRA_continue').timeBased().after(60 * 1000).create();
+  ScriptApp.newTrigger('GRA_continue').timeBased().after((minutes || 1) * 60 * 1000).create();
+}
+
+/** The engine is mid-refresh: its lock is held, or it has a continuation queued for new / changed files. */
+function GRA_engineBusy_() {
+  if (ScriptApp.getProjectTriggers().some(function (t) { return t.getHandlerFunction() === 'continueRefresh'; })) return true;
+  var l = LockService.getScriptLock();
+  if (!l.tryLock(1000)) return true;
+  l.releaseLock();
+  return false;
 }
 
 function GRA_clearContinue_() {
