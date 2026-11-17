@@ -1083,7 +1083,7 @@ const App = {
     minShareMove: 5, newLostThreshold: 0, topN: 3, smlToPtl: false,
     lowGpThreshold: 1.50, highGpThreshold: 2.50, profitLowPct: 25, profitHighPct: 25,
     nbdGapMonths: (function(){ try{ const v=parseInt(localStorage.getItem('grpnl_nbd_gap_v1'),10); return v>0?v:6; }catch(e){ return 6; } })(),
-    nbdWindowMonths: (function(){ try{ const v=parseInt(localStorage.getItem('grpnl_nbd_win_v1'),10); return v>0?v:6; }catch(e){ return 6; } })(),
+    nbdWindowMonths: (function(){ try{ const v=parseInt(localStorage.getItem('grpnl_nbd_win_v2'),10); return v>0?v:1; }catch(e){ return 1; } })(),
     nbdBaseRbd: (function(){ try{ return localStorage.getItem('grpnl_nbd_base_v1')!=='0'; }catch(e){ return true; } })()
   },
   rules: [],
@@ -2424,7 +2424,11 @@ const METRIC_DEFS = [
   ['No. of Consignments per Month','GR Count ÷ Active Months','Average consignments (GRs) per month, over the same active months as Avg Monthly Sales.','GR Count','Active Months','GRs'],
   ['Rate Type','RATETYPE column: TARIFF / CONTRACTUAL / UNSCHEDULED','A GR with a blank rate type is UNSCHEDULED — its own group, not counted as Tariff.','—','—','tag'],
   ['Cross Sell','RBD party + a destination zone / circle / branch, load type (FTL ↔ LTL) or destination country not used in the previous N months','The party gave business in the previous N months (so it is not NBD), but this GR goes to a destination zone, destination branch, load type or destination country (DESTINATION COUNTRY column, used as it is; a blank value is not checked) that the party did not use in those N months. The destination is judged at the Check within level: Pan India / Zone → new destination zone, Circle → new destination circle, Branch → new destination branch (FTL ↔ LTL and country at every level). Every GR is NBD or RBD; Cross Sell is the part of RBD where the party started something new, so it is checked only after the NBD window ends. N = NBD gap setting.','—','—','tag'],
-  ['NBD / RBD','NBD if no GR in the previous N months (N = NBD gap setting, default 6)','New Business Development: the party (consignor / consignee / customer) gave no business in the previous N months and gives business again (or for the first time). It then stays NBD for M months counted from that first month (M = NBD Rules → NBD stays NBD for, default 6: first GR in Jan = NBD Jan–Jun, RBD from Jul). Checked within the selected Pan India / Zone / Circle / Branch. After the window the business is RBD (Repeat Business). The first month of loaded data is the base: every party with business in it is RBD, and a party first seen in a later month is NBD from that month. Every GR is NBD or RBD (Total = NBD + RBD).','—','—','tag'],
+  ['Lost','No business for more than N months (N = NBD gap, default 6), counted by calendar month','A party (consignor / consignee / customer) is Lost in the month after it has gone N full months without business: last business month + N + 1 (last business Apr, N 6 → Lost in Nov). Months are counted by month, not by GR date. If the party books again in that month it is NBD instead, and RBD from the next month. Shown as the Lost column in the NBD / RBD tables (Yield Analysis and MoM), not added to Total. Checked within the selected Pan India / Zone / Circle / Branch. The zone / branch / destination of a Lost party is taken from its last business month.','Months with business','—','tag'],
+  ['Freight lost / month','SUM(Total Freight in its last N months) ÷ Active Months in those N months','The average monthly Total Freight a Lost party gave while it was active, in the N months up to its last business month (N = NBD gap). Shows how much monthly business stopped.','Total Freight','Active Months','₹'],
+  ['Half-Yearly Business','SUM(Total Freight) per half-year: H1 = Apr–Sep, H2 = Oct–Mar of each financial year','Yield Analysis → Half-Yearly Business table. Columns show the current and the previous financial year. A half-year with no loaded data shows "–" (for example 2025-26 until that data is loaded) and fills in by itself once the data is in the master. Ignores the Month / Date filter; all other slicers apply.','Total Freight','—','₹'],
+  ['Uptrade / Downtrade','Avg / month current half vs Avg / month previous half','Avg / month = half-year Total Freight ÷ completed months of that half that are in the loaded data (the running calendar month is not counted, so a few days of the month do not pull the average down; its freight is still in the half-year total). Current half = the latest half-year with at least one completed month; previous half = the half-year before it. Higher = Uptrade, lower = Downtrade, no business in the previous half = New, no business in the current half = No business.','Avg / month current half','Avg / month previous half','tag'],
+  ['NBD / RBD','NBD if no GR in the previous N months (N = NBD gap setting, default 6)','New Business Development: the party (consignor / consignee / customer) gave no business in the previous N months and gives business again (or for the first time). It is NBD only in that first month and RBD from the next month (NBD Rules → NBD stays NBD for, default 1: first GR in Jan = NBD in Jan, RBD from Feb). Checked within the selected Pan India / Zone / Circle / Branch. After the window the business is RBD (Repeat Business). The first month of loaded data is the base: every party with business in it is RBD, and a party first seen in a later month is NBD from that month. Every GR is NBD or RBD (Total = NBD + RBD).','—','—','tag'],
 ];
 function renderMetricDefinitions(){
   document.getElementById('defTableBody').innerHTML = METRIC_DEFS.map(d=>`<tr><td style="text-align:left;font-weight:600;">${d[0]}</td><td style="text-align:left;">${d[1]}</td><td style="text-align:left;">${d[2]}</td><td style="text-align:left;">${d[3]}</td><td style="text-align:left;">${d[4]}</td><td>${d[5]}</td></tr>`).join('');
@@ -2508,7 +2512,7 @@ const SETTINGS_META = [
   ['profitHighPct','Profitability Mix — High % (top)','number',1,'Root Cause → Profitability Mix table: top X% of entities by Base Month Total GP (₹) are classified as High GP. The remaining middle band is Neutral GP. Loss-Making (Base Total GP < ₹0) is always its own band, outside this split.'],
   ['smlToPtl','SML handling','select-bool',null,'SML is always standardized to LTL in the dashboard.'],
   ['nbdGapMonths','NBD Rules — NBD gap (months without business)','number',1,'A party becomes NBD in a month when it gave no business in the previous N months (default 6, so business in the 7th month or later = NBD). Cross Sell also looks back these N months. Saved in this browser.'],
-  ['nbdWindowMonths','NBD Rules — NBD stays NBD for (months)','number',1,'Once a party becomes NBD, all its business stays NBD for N months counted from that first month (default 6: first GR in Jan = NBD Jan–Jun, RBD from Jul). Inside this window a new zone / branch / load type is still NBD, not Cross Sell. Saved in this browser.'],
+  ['nbdWindowMonths','NBD Rules — NBD stays NBD for (months)','number',1,'Once a party becomes NBD, its business stays NBD for N months counted from that first month (default 1: first GR in Jan = NBD in Jan only, RBD from Feb). Inside this window a new zone / branch / load type is still NBD, not Cross Sell. Saved in this browser.'],
   ['nbdBaseRbd','NBD Rules — First data month is the RBD base','select-onoff',null,'On (default): the first month in the loaded data (now '+'<span data-nbd-basem>the first loaded month</span>'+') is the base month. Every party with business in it is RBD, and NBD is counted from the next month. When older data is loaded, the base month moves back by itself. Off: no base month; a GR whose look-back starts before the loaded data and finds no business is shown as Not judged. Saved in this browser.']
 ];
 function renderSettingsForm(){
@@ -2539,8 +2543,8 @@ document.getElementById('btnApplySettings').addEventListener('click', ()=>{
   }
   App.settings.nbdGapMonths = Math.max(1, Math.round(App.settings.nbdGapMonths||6));
   try{ localStorage.setItem('grpnl_nbd_gap_v1', String(App.settings.nbdGapMonths)); }catch(e){}
-  App.settings.nbdWindowMonths = Math.max(1, Math.round(App.settings.nbdWindowMonths||6));
-  try{ localStorage.setItem('grpnl_nbd_win_v1', String(App.settings.nbdWindowMonths)); }catch(e){}
+  App.settings.nbdWindowMonths = Math.max(1, Math.round(App.settings.nbdWindowMonths||1));
+  try{ localStorage.setItem('grpnl_nbd_win_v2', String(App.settings.nbdWindowMonths)); }catch(e){}
   try{ localStorage.setItem('grpnl_nbd_base_v1', App.settings.nbdBaseRbd?'1':'0'); }catch(e){}
   const after = JSON.stringify(App.settings);
   if (before !== after){
@@ -18677,6 +18681,12 @@ body.pro-on #tabNav .tab[draggable=true]{cursor:grab}
 .nbd-no{color:#8896a8;font-weight:700;font-size:10.5px}.nbd-till{font-size:10px;color:#5b6b7e;font-weight:500}
 .nbd-h3{font-size:13px;font-weight:800;color:#0b2545;margin:14px 0 6px}
 .nbd-table.nbd-sum td.hier{min-width:220px}
+.nbd-table th.nbd-hl{background:#a3261b!important}.nbd-table td.nbd-l{background:#fdf1f0;color:#8f1f15}
+.nbd-table td.nbd-lk{cursor:pointer}.nbd-table td.nbd-lk:hover{background:#fbdcd8!important;box-shadow:inset 0 0 0 1px #e3a39c}
+.nbd-tag.l{background:#fde2e0;color:#b0281c}
+.nbd-lost{border:2px dashed #e3a39c;border-radius:8px;padding:10px 12px;margin:10px 0}
+.nbd-lost-h{display:flex;align-items:center;gap:10px;font-size:13px;font-weight:800;color:#a3261b;margin-bottom:6px}
+.nbd-lost-h button{margin-left:auto}
 </style>
 <script id="nbdJs">
 (function(){
@@ -18706,7 +18716,7 @@ const L_=L;
 const N=v=>Math.round(v||0).toLocaleString('en-IN');
 const gap=()=>{ const g=Math.round(+((App.settings||{}).nbdGapMonths)||6); return g>0?g:6; };
 /* NBD window: a party stays NBD for this many months from the month it became NBD (that month counted) */
-const win=()=>{ const w=Math.round(+((App.settings||{}).nbdWindowMonths)||6); return w>0?w:6; };
+const win=()=>{ const w=Math.round(+((App.settings||{}).nbdWindowMonths)||1); return w>0?w:1; };
 /* NBD Rules → First data month is the RBD base (default On) */
 const baseOn=()=>(App.settings||{}).nbdBaseRbd!==false;
 const pv=(r,f)=>{ const v=r[f]; return v==null||v===''?'UNSPECIFIED':String(v); };
@@ -18801,6 +18811,51 @@ function aggOf(rows,TG){
   if(rows.length===1) A.gr=rows[0];
   return A;
 }
+/* ---- Lost: a party with no business for more than N months (N = NBD gap, default 6), counted by calendar month,
+   not by GR date. Its Lost month = last business month + N + 1 (last business Apr, N 6 → Lost in Nov). If it books
+   again in that month it is NBD instead, and RBD from the next month. A month after the latest loaded month is never
+   judged. "Freight lost / month" = the party's average monthly Total Freight over its active months in the N months
+   up to its last business month. Checked within the same Pan India / Zone / Circle / Branch as NBD. ---- */
+const LOSTC={fr:null,key:'',list:[]};
+function dataLastIdx(){ const src=App.rows||[]; if(LOSTC.dlSrc===src) return LOSTC.dl; let x=-Infinity; for(const r of src) if(r.monthKey){ const i=mi(r.monthKey); if(i>x) x=i; } LOSTC.dlSrc=src; LOSTC.dl=isFinite(x)?x:null; return LOSTC.dl; }
+function lostList(st,months){
+  const ms=new Set((months||[]).filter(m=>m!=null)); if(!ms.size) return [];
+  const h=history(st.party,st.scope), g=gap(), dl=dataLastIdx(); if(dl==null||!h.map) return [];
+  const fr=typeof filterRowsCached==='function'?filterRowsCached({...App.filters,globalMonth:'',dateFrom:null,dateTo:null}):(App.rows||[]);
+  const ck=[st.party,st.scope,g,dl,[...ms].sort((a,b)=>a-b).join(',')].join('|');
+  if(LOSTC.fr===fr && LOSTC.src===h.map && LOSTC.key===ck) return LOSTC.list;
+  const want=new Map();
+  h.map.forEach((e,k)=>{ const l=e.ms[e.ms.length-1]; if(l==null) return; const lm=l+g+1; if(lm<=dl && ms.has(lm)) want.set(k,{k,last:l,lm,t:0,n:0,ams:new Set(),rep:null,repT:-Infinity}); });
+  if(want.size) for(const r of fr){ if(!r.monthKey) continue; const w=want.get(sv(r,st.scope)+'\u0001'+pv(r,st.party)); if(!w) continue; const i=mi(r.monthKey); if(i>w.last||i<=w.last-g) continue;
+    const tv=r.total||0; w.t+=tv; w.n++; w.ams.add(i); if(i===w.last && tv>w.repT){ w.rep=r; w.repT=tv; } }
+  const list=[...want.values()].filter(w=>w.rep).map(w=>Object.assign(w,{party:pv(w.rep,st.party),avg:w.ams.size?w.t/w.ams.size:0})).sort((a,b)=>b.avg-a.avg);
+  LOSTC.fr=fr; LOSTC.src=h.map; LOSTC.key=ck; LOSTC.list=list; return list;
+}
+/* Lost parties that fall in a group (f = level → value, judged on the party's last business GR) */
+const lostIn=(list,f,m)=>list.filter(x=>(m==null||x.lm===m)&&Object.keys(f||{}).every(k=>pv(x.rep,k)===String(f[k])));
+const lostSum=l=>l.reduce((s,x)=>s+x.avg,0);
+/* two cells: Lost parties + Freight lost / month; a click opens the Lost list */
+const lostCells=(list,f,ms)=>{ const a=`data-nbd-lost="${fz({f:f||{},m:ms})}" title="Click to see the Lost parties"`;
+  return list.length?`<td class="nbd-l nbd-gs nbd-lk" ${a}><b>${N(list.length)}</b></td><td class="nbd-l nbd-lk" ${a}>${L_(lostSum(list))}</td>`:'<td class="nbd-l nbd-gs">–</td><td class="nbd-l">–</td>'; };
+const lostHead=(pl,u,rs)=>[`<th colspan="2" class="nbd-hl nbd-gs"${rs?' rowspan="1"':''}>Lost</th>`,`<th class="nbd-hl nbd-gs">${pl}</th><th class="nbd-hl">Freight lost / month${u}</th>`];
+function showLost(pg,spec,quiet){
+  const p=$('nbd-'+pg); if(!p) return; const box=p.querySelector('[data-lost]'); if(!box) return;
+  ST[pg].lost=spec||null;
+  if(!spec){ box.innerHTML=''; return; }
+  const st=ST[pg], g=gap(), dl=dataLastIdx(), ms=(spec.m||[]).map(Number);
+  const list=lostIn(lostList(st,ms),spec.f,null);
+  const where=Object.keys(spec.f||{}).map(k=>spec.f[k]).join(' › ')||'All';
+  const mon=[...new Set(ms)].sort((a,b)=>a-b).map(x=>mLab(mk(x))); const monTxt=mon.length>3?mon[0]+' – '+mon[mon.length-1]:mon.join(', ');
+  const sc=st.scope!=='pan'?[st.scope,scopeLbl(st)]:null, MAX=1000;
+  let b=''; list.slice(0,MAX).forEach(x=>{ const r=x.rep;
+    b+=`<tr><td class="hier nbd-d" data-nbd-f="${fz({[st.party]:x.party})}" title="Click to open this party's GRs">${esc(x.party)}</td>${sc?`<td>${esc(pv(r,sc[0]))}</td>`:''}<td>${esc(pv(r,'originzone'))}</td><td>${esc(pv(r,'origin'))}</td><td>${esc(pv(r,'destname'))}</td><td>${esc(mLab(mk(x.last)))}</td><td>${esc(mLab(mk(x.lm)))}</td><td>${dl-x.last}</td><td>${N(x.n)}</td><td>${L_(x.t)}</td><td><b>${L_(x.avg)}</b></td><td style="text-align:center!important"><span class="nbd-tag l">Lost</span></td></tr>`; });
+  const u='<span class="unit-head">Lacs</span>';
+  box.innerHTML=`<div class="nbd-lost"><div class="nbd-lost-h">Lost ${esc(partyLbl(st))}s · ${esc(where)} · ${esc(monTxt)} <span class="nbd-badge">${N(list.length)} parties · ${L_(lostSum(list))} Lacs / month</span><button type="button" class="btn btn-sm btn-outline" data-nbd-lost-x>Close</button></div>
+    <div class="panel-sub" style="margin-bottom:6px">No business for more than ${g} months, counted by month. Months without business are counted up to ${esc(mLab(mk(dl)))} (latest loaded month). Click a party to open its GRs.</div>
+    <div class="table-scroll" style="max-height:420px"><table class="yield-table nbd-table"><thead><tr><th class="hier">${esc(partyLbl(st))}</th>${sc?`<th>${esc(sc[1])}</th>`:''}<th>Origin Zone</th><th>Last Branch</th><th>Main Destination</th><th>Last Business Month</th><th>Lost In</th><th>Months Without Business</th><th>GRs (last ${g} months)</th><th>Freight (last ${g} months)${u}</th><th class="nbd-hl">Freight lost / month${u}</th><th>Status</th></tr></thead><tbody>${b||'<tr><td colspan="12">No Lost parties.</td></tr>'}</tbody></table></div>
+    ${list.length>MAX?`<div class="panel-sub" style="margin-top:6px">Showing the first ${N(MAX)} of ${N(list.length)} (largest freight lost first).</div>`:''}</div>`;
+  if(!quiet) box.scrollIntoView({block:'nearest',behavior:'smooth'});
+}
 /* metrics for the NBD table: tick in "Metrics" (default Freight + GRs) */
 const MET=[['n','GRs'],['t','Freight'],['ftl','FTL Freight'],['ltl','LTL Freight'],['w','Chargeable Wt (MT)']];
 const CM=[['t','Freight'],['p','Consignors'],['n','GRs'],['F','FTL Freight'],['L','LTL Freight']];
@@ -18853,9 +18908,9 @@ function panelFor(pg){
   const id='nbd-'+pg; let p=$(id); if(p) return p;
   const sec=$('page-'+pg); if(!sec) return null;
   p=document.createElement('div'); p.className='panel report-panel nbd-panel'; p.id=id;
-  p.innerHTML=`<div class="panel-head"><div><h2>${pg==='mom'?'Cross Sell / NBD / RBD — Base vs Comparison Month':'Cross Sell / NBD / RBD — New vs Repeat Business'}</h2></div></div>${pg==='yield'?'<div data-sum></div><div class="nbd-h3">By party</div><div class="nbd-ctl" data-ctl></div>':'<div class="nbd-ctl" data-ctl></div><div data-sum></div>'}<div class="table-scroll" data-wrap id="${id}-wrap"></div><div data-xtra></div>`;
+  p.innerHTML=`<div class="panel-head"><div><h2>${pg==='mom'?'Cross Sell / NBD / RBD — Base vs Comparison Month':'Cross Sell / NBD / RBD — New vs Repeat Business'}</h2></div></div>${pg==='yield'?'<div data-sum></div><div data-lost></div><div class="nbd-h3">By party</div><div class="nbd-ctl" data-ctl></div>':'<div class="nbd-ctl" data-ctl></div><div data-sum></div>'}<div class="table-scroll" data-wrap id="${id}-wrap"></div>${pg==='mom'?'<div data-lost></div>':''}<div data-xtra></div>`;
   sec.appendChild(p);
-  p.addEventListener('change',e=>{ const s=e.target.closest('select[data-nbd]'); if(!s) return; ST[pg][s.dataset.nbd]=s.value; ST[pg].exp=new Set(); render(pg); });
+  p.addEventListener('change',e=>{ const s=e.target.closest('select[data-nbd]'); if(!s) return; ST[pg][s.dataset.nbd]=s.value; ST[pg].exp=new Set(); showLost(pg,null); render(pg); });
   p.addEventListener('click',e=>{
     const st=ST[pg];
     const hb=e.target.closest('[data-nbd-h]'); if(hb){ e.stopPropagation(); hierPop(p,pg,hb); return; }
@@ -18870,6 +18925,8 @@ function panelFor(pg){
       return; }
     const ex=e.target.closest('[data-nbd-e]'); if(ex){ e.stopPropagation(); st.exp.add(ex.dataset.nbdE); render(pg); return; }
     const co=e.target.closest('[data-nbd-c]'); if(co){ e.stopPropagation(); const k=co.dataset.nbdC; [...st.exp].filter(x=>x===k||x.startsWith(k+'␟')).forEach(x=>st.exp.delete(x)); render(pg); return; }
+    if(e.target.closest('[data-nbd-lost-x]')){ e.stopPropagation(); showLost(pg,null); return; }
+    const lo=e.target.closest('[data-nbd-lost]'); if(lo){ e.stopPropagation(); let sp=null; try{ sp=JSON.parse(lo.dataset.nbdLost); }catch(_){} if(sp) showLost(pg,sp); return; }
     const td=e.target.closest('td[data-nbd-f]'); if(!td) return; e.stopPropagation();
     let f={}; try{ f=JSON.parse(td.dataset.nbdF); }catch(_){}
     const m=td.dataset.nbdM?[td.dataset.nbdM]:null;
@@ -18916,17 +18973,22 @@ function renderYield(){
   /* ---- 1. Summary: rows = selected levels (default Origin Zone), columns = NBD / RBD / Cross Sell / Total (Total = NBD + RBD; Cross Sell is part of RBD) ---- */
   const TGnj=[...TG.values()].some(x=>x.b==='nj');
   const SG=[['nbd','NBD','nbd-hn','nbd-n',{[fld]:'NBD'}],['rbd','RBD','nbd-hr','nbd-r',{[fld]:'RBD'}],['cs','Cross Sell','nbd-hc','nbd-c',{[csf]:'YES'}]].concat(TGnj?[['nj','Not judged','nbd-hx','nbd-x',{[fld]:'NOT JUDGED'}]]:[]).concat([['all','Total','nbd-ht','nbd-t',{}]]);
+  const LMS=months.map(mi), LST=lostList(st,LMS), LH=lostHead(pl,u);
+  const h1=G=>`<th colspan="4" class="${G[2]} nbd-gs">${G[1]}</th>`, h2=G=>`<th class="${G[2]} nbd-gs">${pl}</th><th class="${G[2]}">Freight${u}</th><th class="${G[2]}">FTL${u}</th><th class="${G[2]}">LTL${u}</th>`;
+  const GH1=SG=>SG.slice(0,-1).map(h1).join('')+LH[0]+h1(SG[SG.length-1]), GH2=SG=>SG.slice(0,-1).map(h2).join('')+LH[1]+h2(SG[SG.length-1]);
   { const sd=st.sumLv.map(f=>[f,hLbl(f)]), SL=sd.length, sout=[];
     const walk=(rs,d,path)=>{ for(const x of groups(rs,sd[d][0]).slice(0,500)){ const pth=path.concat([x.v]); if(d<SL-1){ walk(x.rs,d+1,pth); sout.push({path:pth,d,a:x.a,sub:true}); } else sout.push({path:pth,d,a:x.a}); } };
     walk(all,0,[]);
-    const sc=(a,f)=>SG.map(G=>{ const b=a[G[0]], gf=Object.assign({},f,G[4]);
-      return cell(G[3]+' nbd-gs',b.p.size?N(b.p.size):'–',gf)+cell(G[3],b.t?'<b>'+L_(b.t)+'</b>':'–',gf)+cell(G[3],b.F.t?L_(b.F.t):'–',Object.assign({},gf,{loadtype:'FTL'}))+cell(G[3],b.Lt.t?L_(b.Lt.t):'–',Object.assign({},gf,{loadtype:'LTL'})); }).join('');
+    const gc=(a,f,G)=>{ const b=a[G[0]], gf=Object.assign({},f,G[4]);
+      return cell(G[3]+' nbd-gs',b.p.size?N(b.p.size):'–',gf)+cell(G[3],b.t?'<b>'+L_(b.t)+'</b>':'–',gf)+cell(G[3],b.F.t?L_(b.F.t):'–',Object.assign({},gf,{loadtype:'FTL'}))+cell(G[3],b.Lt.t?L_(b.Lt.t):'–',Object.assign({},gf,{loadtype:'LTL'})); };
+    /* Lost sits between Cross Sell / Not judged and Total; it is not part of Total (no business came from these parties) */
+    const sc=(a,f)=>SG.slice(0,-1).map(G=>gc(a,f,G)).join('')+lostCells(lostIn(LST,f),f,LMS)+gc(a,f,SG[SG.length-1]);
     let b='';
     for(const o of sout){ const f={}; o.path.forEach((v,i)=>f[sd[i][0]]=v);
       b+=`<tr class="${o.sub?'nbd-st':''}">${sd.map((x,i)=>`<td class="hier">${i<=o.d?esc(o.path[i])+(o.sub&&i===o.d?' Total':''):''}</td>`).join('')}${sc(o.a,f)}</tr>`; }
     const A0=aggOf(all,TG);
     sumEl.innerHTML=`<div class="nbd-h3">Summary</div><div class="nbd-ctl"><div class="rt-sel msel nbd-hsel"><button type="button" class="yield-hier-btn msel-btn" data-nbd-h="sumLv">Hierarchy Levels: ${esc(st.sumLv.map(hLbl).join(' › '))} <span>▾</span></button><div class="rt-pop msel-pop nbd-hpop"></div></div></div>
-      <div class="table-scroll"><table class="yield-table nbd-table nbd-sum"><thead><tr>${sd.map(x=>`<th class="hier nbd-lv" rowspan="2">${esc(x[1])}</th>`).join('')}${SG.map(G=>`<th colspan="4" class="${G[2]} nbd-gs">${G[1]}</th>`).join('')}</tr><tr>${SG.map(G=>`<th class="${G[2]} nbd-gs">${pl}</th><th class="${G[2]}">Freight${u}</th><th class="${G[2]}">FTL${u}</th><th class="${G[2]}">LTL${u}</th>`).join('')}</tr></thead>
+      <div class="table-scroll"><table class="yield-table nbd-table nbd-sum"><thead><tr>${sd.map(x=>`<th class="hier nbd-lv" rowspan="2">${esc(x[1])}</th>`).join('')}${GH1(SG)}</tr><tr>${GH2(SG)}</tr></thead>
       <tbody>${b}</tbody><tfoot><tr><td class="hier">PAN INDIA</td>${'<td class="hier"></td>'.repeat(SL-1)}${sc(A0,{})}</tr></tfoot></table></div>`;
   }
 
@@ -18935,8 +18997,10 @@ function renderYield(){
     const mlv=(st.mLv||[]).filter(f=>!PF0.includes(f)).map(f=>[f,hLbl(f)]), ML=mlv.length;
     const mrs=(typeof filterRowsCached==='function'?filterRowsCached({...App.filters,globalMonth:'',dateFrom:null,dateTo:null}):all).filter(r=>r.monthKey);
     const T2=tagRows(mrs,st,'yield').TG;
-    const mc=(a,f,m)=>SG.map(G=>{ const b=a[G[0]], gf=Object.assign({},f,G[4]);
-      return cell(G[3]+' nbd-gs',b.p.size?N(b.p.size):'–',gf,m)+cell(G[3],b.t?'<b>'+L_(b.t)+'</b>':'–',gf,m)+cell(G[3],b.F.t?L_(b.F.t):'–',Object.assign({},gf,{loadtype:'FTL'}),m)+cell(G[3],b.Lt.t?L_(b.Lt.t):'–',Object.assign({},gf,{loadtype:'LTL'}),m); }).join('');
+    const MMS=[...new Set(mrs.map(r=>mi(r.monthKey)))], MLST=lostList(st,MMS);
+    const mg=(a,f,m,G)=>{ const b=a[G[0]], gf=Object.assign({},f,G[4]);
+      return cell(G[3]+' nbd-gs',b.p.size?N(b.p.size):'–',gf,m)+cell(G[3],b.t?'<b>'+L_(b.t)+'</b>':'–',gf,m)+cell(G[3],b.F.t?L_(b.F.t):'–',Object.assign({},gf,{loadtype:'FTL'}),m)+cell(G[3],b.Lt.t?L_(b.Lt.t):'–',Object.assign({},gf,{loadtype:'LTL'}),m); };
+    const mc=(a,f,m)=>SG.slice(0,-1).map(G=>mg(a,f,m,G)).join('')+(m?lostCells(lostIn(MLST,f,mi(m)),f,[mi(m)]):lostCells(lostIn(MLST,f),f,MMS))+mg(a,f,m,SG[SG.length-1]);
     let mb='';
     const mrow=(path,rs)=>{ const f={}; path.forEach((v,j)=>f[mlv[j][0]]=v);
       const by=new Map(); for(const r of rs){ let x=by.get(r.monthKey); if(!x){ x=[]; by.set(r.monthKey,x); } x.push(r); }
@@ -18949,7 +19013,7 @@ function renderYield(){
         mb+=`<tr class="nbd-st">${mlv.map((y,j)=>`<td class="hier">${j<=d?esc(pth[j])+(j===d?' Total':''):''}</td>`).join('')}<td class="hier"></td>${mc(x.a,f,null)}<td class="nbd-gs">${share(x.a.nbd.t,x.a.t)}</td><td></td></tr>`; } };
     mw(mrs,0,[]);
     xEl.innerHTML=`<div class="nbd-h3">Month on Month</div><div class="nbd-ctl"><div class="rt-sel msel nbd-hsel"><button type="button" class="yield-hier-btn msel-btn" data-nbd-h="mLv">Hierarchy Levels: ${esc(mlv.map(x=>x[1]).concat(['Month']).join(' › '))} <span>▾</span></button><div class="rt-pop msel-pop nbd-hpop"></div></div></div>
-      <div class="table-scroll" style="max-height:640px"><table class="yield-table nbd-table nbd-sum"><thead><tr>${mlv.map(x=>`<th class="hier nbd-lv" rowspan="2">${esc(x[1])}</th>`).join('')}<th class="hier nbd-lv" rowspan="2">Month</th>${SG.map(G=>`<th colspan="4" class="${G[2]} nbd-gs">${G[1]}</th>`).join('')}<th rowspan="2" class="nbd-gs">NBD %</th><th rowspan="2">NBD Freight vs previous month${u}</th></tr><tr>${SG.map(G=>`<th class="${G[2]} nbd-gs">${pl}</th><th class="${G[2]}">Freight${u}</th><th class="${G[2]}">FTL${u}</th><th class="${G[2]}">LTL${u}</th>`).join('')}</tr></thead>
+      <div class="table-scroll" style="max-height:640px"><table class="yield-table nbd-table nbd-sum"><thead><tr>${mlv.map(x=>`<th class="hier nbd-lv" rowspan="2">${esc(x[1])}</th>`).join('')}<th class="hier nbd-lv" rowspan="2">Month</th>${GH1(SG)}<th rowspan="2" class="nbd-gs">NBD %</th><th rowspan="2">NBD Freight vs previous month${u}</th></tr><tr>${GH2(SG)}</tr></thead>
       <tbody>${mb}</tbody></table></div>`;
   }
 
@@ -18973,7 +19037,7 @@ function renderYield(){
     const best=[['nbd',a.nbd.t,a.nbd.n],['rbd',a.rbd.t,a.rbd.n],['nj',a.nj.t,a.nj.n]].filter(x=>x[2]).sort((x,y)=>y[1]-x[1])[0], k=best?best[0]:'rbd';
     const cs=a.cs.n?TAGH.cs:k==='rbd'?'<span class="nbd-no">No</span>':'<span class="nbd-no">—</span>';
     const why=a.cs.n?whysOf(h).filter(x=>a.why[x[0]]).map(x=>`<span class="nbd-why">${esc(x[1])}</span>`).join(''):'';
-    const tg=k==='nbd'?TAGH.nbd+(a.nbdS!=null?` <span class="nbd-till">till ${esc(mLab(mk(a.nbdS+W-1)))}</span>`:''):k==='nj'?TAGH.nj:TAGH.rbd;
+    const tg=k==='nbd'?TAGH.nbd+(a.nbdS!=null&&W>1?` <span class="nbd-till">till ${esc(mLab(mk(a.nbdS+W-1)))}</span>`:''):k==='nj'?TAGH.nj:TAGH.rbd;
     return `<td class="nbd-tx" style="text-align:center!important">${cs}</td><td class="nbd-tx nbd-wy">${why}</td><td class="nbd-tx nbd-k">${tg}</td>`; };
   const COLS=[['n','GRs',a=>N(a.n),null],['t','Freight',a=>'<b>'+L_(a.t)+'</b>',null],['ftl','FTL',a=>a.all.F.t?L_(a.all.F.t):'–',{loadtype:'FTL'}],['ltl','LTL',a=>a.all.Lt.t?L_(a.all.Lt.t):'–',{loadtype:'LTL'}],['w','Chargeable Wt (MT)',a=>(a.all.w/1000).toLocaleString('en-IN',{maximumFractionDigits:1}),null]]
     .filter(c=>st.met.includes(c[0]));
@@ -19017,11 +19081,18 @@ function renderMom(){
   const lf=cm==='F'?{loadtype:'FTL'}:cm==='L'?{loadtype:'LTL'}:{};
   const cl=x=>Math.abs(x)<1e-9?'':x>0?'num-fav':'num-adv';
   const sd=st.sumLv.map(f=>[f,hLbl(f)]), SL=sd.length;
+  /* Lost (parties for Parties / GRs, freight lost per month otherwise); more Lost is adverse */
+  const iB=mi(B), iC=mi(C), LST=lostList(st,[iB,iC]), lv=l=>isN?l.length:lostSum(l);
+  const lostG=f=>{ const lb=lostIn(LST,f,iB), lc=lostIn(LST,f,iC), vb=lv(lb), vc=lv(lc), d=vc-vb;
+    const c=(m,v,cls)=>v?`<td class="${cls} nbd-lk" data-nbd-lost="${fz({f:f||{},m:[m]})}" title="Click to see the Lost parties">${v}</td>`:`<td class="${cls}">–</td>`;
+    return c(iB,vb?fmt(vb):'',"nbd-l nbd-gs")+c(iC,vc?'<b>'+fmt(vc)+'</b>':'','nbd-l')
+      +`<td class="nbd-l ${cl(-d)}" style="font-weight:700">${Math.abs(d)<1e-9?'–':(d>0?'▲ ':'▼ ')+fmt(Math.abs(d))}</td><td class="nbd-l ${cl(-d)}">${vb?(d>=0?'+':'−')+Math.abs(d/vb*100).toFixed(1)+'%':'—'}</td>`; };
   const cells=(rs,f)=>{ const aB=aggOf(rs.filter(r=>r.monthKey===B),TG), aC=aggOf(rs.filter(r=>r.monthKey===C),TG);
-    return SG.map(G=>{ const vb=val(aB[G[0]]), vc=val(aC[G[0]]), d=vc-vb, gf=Object.assign({},f,G[4],lf);
+    const one=G=>{ const vb=val(aB[G[0]]), vc=val(aC[G[0]]), d=vc-vb, gf=Object.assign({},f,G[4],lf);
       const c=(m,v,cls)=>`<td class="${cls} nbd-d" data-nbd-f="${fz(gf)}" data-nbd-m="${esc(m)}" title="Click to open these GRs">${v}</td>`;
       return c(B,vb?fmt(vb):'–',G[3]+' nbd-gs')+c(C,vc?'<b>'+fmt(vc)+'</b>':'–',G[3])
-        +`<td class="${G[3]} ${cl(d)}" style="font-weight:700">${Math.abs(d)<1e-9?'–':(d>0?'▲ ':'▼ ')+fmt(Math.abs(d))}</td><td class="${G[3]} ${cl(d)}">${vb?(d>=0?'+':'−')+Math.abs(d/vb*100).toFixed(1)+'%':'—'}</td>`; }).join(''); };
+        +`<td class="${G[3]} ${cl(d)}" style="font-weight:700">${Math.abs(d)<1e-9?'–':(d>0?'▲ ':'▼ ')+fmt(Math.abs(d))}</td><td class="${G[3]} ${cl(d)}">${vb?(d>=0?'+':'−')+Math.abs(d/vb*100).toFixed(1)+'%':'—'}</td>`; };
+    return SG.slice(0,-1).map(one).join('')+lostG(f)+one(SG[SG.length-1]); };
   const grp=(rs,f)=>{ const m=new Map(); for(const r of rs){ const k=pv(r,f); let a=m.get(k); if(!a){ a=[]; m.set(k,a); } a.push(r); } return [...m.entries()].map(([v,r])=>({v,rs:r,t:r.reduce((s,x)=>s+(x.monthKey===C?(x.total||0):0),0)})).sort((x,y)=>y.t-x.t); };
   let body=''; let n=0;
   const walk=(rs,d,path)=>{ for(const x of grp(rs,sd[d][0])){ if(n++>3000) return; const pth=path.concat([x.v]), f={}; pth.forEach((v,i)=>f[sd[i][0]]=v);
@@ -19029,16 +19100,159 @@ function renderMom(){
       else body+=`<tr>${sd.map((y,i)=>`<td class="hier">${esc(pth[i])}</td>`).join('')}${cells(x.rs,f)}</tr>`; } };
   walk(all,0,[]);
   const lb=esc(mLab(B)), lc=esc(mLab(C)), u=isN?'':'<span class="unit-head">Lacs</span>';
-  wrap.innerHTML=`<table class="yield-table nbd-table nbd-sum" data-lv="${SL}"><thead><tr>${sd.map(x=>`<th class="hier nbd-lv" rowspan="2">${esc(x[1])}</th>`).join('')}${SG.map(G=>`<th colspan="4" class="${G[2]} nbd-gs">${G[1]} — ${esc((CM.find(x=>x[0]===cm)||CM[0])[1])}</th>`).join('')}</tr><tr>${SG.map(G=>`<th class="${G[2]} nbd-gs">${lb}${u}</th><th class="${G[2]}">${lc}${u}</th><th class="${G[2]}">Δ</th><th class="${G[2]}">Δ %</th>`).join('')}</tr></thead>
+  wrap.innerHTML=`<table class="yield-table nbd-table nbd-sum" data-lv="${SL}"><thead><tr>${sd.map(x=>`<th class="hier nbd-lv" rowspan="2">${esc(x[1])}</th>`).join('')}${(()=>{ const h1=G=>`<th colspan="4" class="${G[2]} nbd-gs">${G[1]} — ${esc((CM.find(x=>x[0]===cm)||CM[0])[1])}</th>`; return SG.slice(0,-1).map(h1).join('')+`<th colspan="4" class="nbd-hl nbd-gs">Lost — ${isN?esc(partyLbl(st))+'s':'Freight lost / month'}</th>`+h1(SG[SG.length-1]); })()}</tr><tr>${(()=>{ const h2=G=>`<th class="${G[2]} nbd-gs">${lb}${u}</th><th class="${G[2]}">${lc}${u}</th><th class="${G[2]}">Δ</th><th class="${G[2]}">Δ %</th>`; return SG.slice(0,-1).map(h2).join('')+h2(['l','','nbd-hl'])+h2(SG[SG.length-1]); })()}</tr></thead>
     <tbody>${body}</tbody><tfoot><tr><td class="hier">PAN INDIA</td>${'<td class="hier"></td>'.repeat(SL-1)}${cells(all,{})}</tr></tfoot></table>`;
 }
-function render(pg){ try{ if(!App.rows||!App.rows.length) return; if(pg==='yield') renderYield(); else if(pg==='mom') renderMom(); const p=$('nbd-'+pg); if(p){ toEnd(p); requestAnimationFrame(()=>fixHead(p.querySelector('[data-wrap]'))); } }catch(e){ console.error('NBD',e); } }
+function render(pg){ try{ if(!App.rows||!App.rows.length) return; if(pg==='yield'){ renderYield(); if(window.renderHalfYear) window.renderHalfYear(); } else if(pg==='mom') renderMom(); if(ST[pg]&&ST[pg].lost) showLost(pg,ST[pg].lost,true); const p=$('nbd-'+pg); if(p){ toEnd(p); requestAnimationFrame(()=>fixHead(p.querySelector('[data-wrap]'))); } }catch(e){ console.error('NBD',e); } }
 window.renderNbd=render;
 function after(){ const k=document.querySelector('.tab.active')?.dataset.page; if(k==='yield'||k==='mom') render(k); }
 /* safety net: if the panel is missing on an open Yield / MoM page (e.g. a render path that skips the page hook), draw it */
-setInterval(()=>{ try{ const k=document.querySelector('.tab.active')?.dataset.page; if((k==='yield'||k==='mom') && App.rows && App.rows.length){ if(!$('nbd-'+k)) render(k); else toEnd($('nbd-'+k)); } }catch(e){} },2000);
+setInterval(()=>{ try{ const k=document.querySelector('.tab.active')?.dataset.page; if((k==='yield'||k==='mom') && App.rows && App.rows.length){ if(!$('nbd-'+k)||(k==='yield'&&!$('hy-yield'))) render(k); else toEnd($('nbd-'+k)); } }catch(e){} },2000);
 document.addEventListener('click',e=>{ const t=e.target.closest&&e.target.closest('.tab[data-page]'); if(t) setTimeout(after,50); });
 (function(){ const _r=window.renderActivePage; if(typeof _r!=='function') return; const w=function(){ const x=_r.apply(this,arguments); setTimeout(after,0); return x; }; try{ window.renderActivePage=renderActivePage=w; }catch(e){ window.renderActivePage=w; } })();
+})();
+</script>
+<style>
+.hy-ctl{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:4px 0 10px}
+.hy-ctl label{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:700;color:#41536a;text-transform:uppercase;letter-spacing:.02em}
+.hy-ctl select,.hy-ctl input{font:inherit;font-size:12px;font-weight:600;height:30px;padding:0 8px;border:1px solid var(--border-strong);border-radius:7px;background:#fff;color:#18344f;text-transform:none}
+.hy-kpis{display:flex;gap:10px;margin:0 0 10px;flex-wrap:wrap}
+.hy-kpi{flex:1;min-width:170px;background:#fff;border:1px solid #d7e0ea;border-left:4px solid #1f5fa8;border-radius:8px;padding:7px 12px;cursor:pointer}
+.hy-kpi.on{box-shadow:0 0 0 2px #1f5fa8 inset}
+.hy-kpi .v{font-size:18px;font-weight:800;color:#0b2545}.hy-kpi .l{font-size:10.5px;color:#5b6b7e;text-transform:uppercase;letter-spacing:.03em}.hy-kpi .s{font-size:11px;font-weight:700}
+.hy-kpi.up{border-left-color:#1a7f42}.hy-kpi.dn{border-left-color:#c0392b}.hy-kpi.nw{border-left-color:#1f5fa8}.hy-kpi.nb{border-left-color:#8896a8}
+.hy-table th.hy-p{background:#3a4a5e!important}.hy-table th.hy-c{background:#1f5fa8!important}.hy-table th.hy-t{background:#7a4a00!important}
+.hy-table .hy-gs{border-left:2px solid #0b2545!important}
+.hy-table td.hy-d{cursor:pointer}.hy-table td.hy-d:hover{background:#e8f2ff!important;box-shadow:inset 0 0 0 1px #8db9e8}
+.hy-table tr.hy-l1 td{background:#f6f8fb}.hy-table tr.hy-l2 td{background:#fbfcfe;color:#3a4a5e}
+.hy-table tr.hy-l0 td{font-weight:700}
+.hy-tg{display:inline-block;padding:1px 9px;border-radius:10px;font-weight:800;font-size:10.5px}
+.hy-tg.up{background:#d8f1e1;color:#1a7f42}.hy-tg.dn{background:#fde2e0;color:#b0281c}.hy-tg.nw{background:#dbe8f7;color:#1f5fa8}.hy-tg.nb{background:#efefef;color:#6b6b6b}.hy-tg.sm{background:#eef3f9;color:#3a4a5e}
+.hy-up{color:#1a7f42;font-weight:800}.hy-dn{color:#c0392b;font-weight:800}.hy-dim{color:#9aa8b8}
+.hy-tb{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border:1px solid #bfd0e3;border-radius:4px;background:#eef4fb;color:#0b2545;font-weight:900;cursor:pointer;margin-right:6px;font-size:11px}
+</style>
+<script id="halfYearJs">
+/* ======================================================================
+   Half-Yearly Business (Yield Analysis): Total Freight per half-year for each party,
+   with Booking Branch and Destination levels, and Uptrade / Downtrade.
+   H1 = Apr–Sep, H2 = Oct–Mar of a financial year. Shows the current and the previous financial year;
+   a half-year with no loaded data shows "–" and fills in by itself when that data is loaded.
+   Avg / month = half-year freight in completed months ÷ completed months of that half in the loaded data
+   (the running calendar month is not counted in the average, only in the half-year total).
+   Ignores the Month / Date filter; every other slicer applies.
+   ====================================================================== */
+(function(){
+const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const $=id=>document.getElementById(id);
+const MN=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const PARTY=[['cngr','Consignor'],['cnge','Consignee'],['customer','Customer Name']];
+const LVL=[['1','Party'],['2','Party › Branch'],['3','Party › Branch › Destination']];
+const TR=[['ALL','All'],['up','Uptrade'],['dn','Downtrade'],['nw','New'],['nb','No business']];
+const SORT=[['tot','Largest business first'],['drop','Biggest drop first'],['rise','Biggest rise first']];
+const TXT={up:'▲ Uptrade',dn:'▼ Downtrade',nw:'New',nb:'No business',sm:'Same'};
+const ST=window.__HY_ST=window.__HY_ST||{party:'cngr',lvl:'3',trend:'ALL',sort:'tot',cmp:'',q:'',exp:new Set(),show:200};
+const mi=k=>{ const p=String(k).split('-'); return (+p[0])*12+(+p[1]-1); };
+const mk=i=>Math.floor(i/12)+'-'+String(i%12+1).padStart(2,'0');
+const L=v=>'₹'+(v/1e5).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
+const N=v=>Math.round(v||0).toLocaleString('en-IN');
+const pv=(r,f)=>{ const v=r[f]; return v==null||v===''?'UNSPECIFIED':String(v); };
+/* half id = FY start year × 2 + (0 = H1, 1 = H2) */
+const halfOf=i=>{ const y=Math.floor(i/12), m=i%12, fy=m>=3?y:y-1; return fy*2+((m>=3&&m<=8)?0:1); };
+const hMonths=id=>{ const fy=Math.floor(id/2), s=fy*12+3+(id%2)*6; return [0,1,2,3,4,5].map(x=>s+x); };
+const hLab=id=>{ const fy=Math.floor(id/2); return 'H'+(id%2+1)+' '+fy+'-'+String(fy+1).slice(2); };
+const hSpan=id=>id%2?'Oct–Mar':'Apr–Sep';
+function panel(){
+  let p=$('hy-yield'); if(p) return p;
+  const sec=$('page-yield'); if(!sec) return null;
+  p=document.createElement('div'); p.className='panel report-panel hy-panel'; p.id='hy-yield';
+  p.innerHTML=`<div class="panel-head"><div><h2>Half-Yearly Business — Uptrade / Downtrade</h2><div class="panel-sub">Total Freight per half-year (H1 = Apr–Sep, H2 = Oct–Mar). Avg / month of the current half vs the previous half: higher = Uptrade, lower = Downtrade. Click ▸ to open a party's branches and destinations; click an amount to open its GRs. The Month / Date filter does not apply; other slicers do.</div></div></div><div class="hy-ctl" data-ctl></div><div data-kpi></div><div class="table-scroll" data-wrap style="max-height:680px"></div><div data-more></div>`;
+  const nb=$('nbd-yield'); if(nb&&nb.parentNode===sec) sec.insertBefore(p,nb); else sec.appendChild(p);
+  p.addEventListener('change',e=>{ const s=e.target.closest('[data-hy]'); if(!s) return; ST[s.dataset.hy]=s.value; ST.exp=new Set(); ST.show=200; draw(); });
+  p.addEventListener('input',e=>{ const s=e.target.closest('[data-hy-q]'); if(!s) return; ST.q=s.value; ST.show=200; clearTimeout(ST._t); ST._t=setTimeout(()=>{ draw(); const i=p.querySelector('[data-hy-q]'); if(i){ i.focus(); i.setSelectionRange(i.value.length,i.value.length); } },250); });
+  p.addEventListener('click',e=>{
+    const k=e.target.closest('[data-hy-k]'); if(k){ ST.trend=ST.trend===k.dataset.hyK?'ALL':k.dataset.hyK; ST.show=200; draw(); return; }
+    const t=e.target.closest('[data-hy-e]'); if(t){ e.stopPropagation(); const x=t.dataset.hyE; if(ST.exp.has(x)) [...ST.exp].filter(y=>y===x||y.startsWith(x+'␟')).forEach(y=>ST.exp.delete(y)); else ST.exp.add(x); draw(); return; }
+    const m=e.target.closest('[data-hy-more]'); if(m){ ST.show+=200; draw(); return; }
+    const d=e.target.closest('td[data-hy-f]'); if(d&&window.openDirectGr){ let f={}, ms=null; try{ f=JSON.parse(d.dataset.hyF); ms=JSON.parse(d.dataset.hyM); }catch(_){} window.openDirectGr(f,ms,'Half-Yearly Business'); }
+  });
+  return p;
+}
+const node=()=>({h:{},cc:0,kids:null});
+function draw(){
+  const p=panel(); if(!p||!window.App||!App.rows||!App.rows.length) return;
+  const wrap=p.querySelector('[data-wrap]'), kEl=p.querySelector('[data-kpi]'), more=p.querySelector('[data-more]');
+  /* months in the loaded data (all rows) and the latest GR date */
+  const DM=new Set(); let lastD=null;
+  for(const r of App.rows){ if(!r.monthKey) continue; DM.add(mi(r.monthKey)); if(r.grdt&&(!lastD||r.grdt>lastD)) lastD=r.grdt; }
+  const now=new Date(), curM=now.getFullYear()*12+now.getMonth();
+  const done=id=>hMonths(id).filter(i=>DM.has(i)&&i<curM);       /* completed months of a half in the data */
+  const has=id=>hMonths(id).some(i=>DM.has(i));
+  const opts=[...new Set([...DM].map(halfOf))].filter(id=>done(id).length).sort((a,b)=>b-a);
+  if(!opts.length){ wrap.innerHTML='<div class="empty-state"><h2>No completed month in the loaded data yet.</h2></div>'; kEl.innerHTML=''; more.innerHTML=''; return; }
+  let cur=+ST.cmp; if(!opts.includes(cur)){ cur=opts[0]; ST.cmp=String(cur); }
+  const prev=cur-1, fyC=Math.floor(cur/2), cols=[(fyC-1)*2,(fyC-1)*2+1,fyC*2,fyC*2+1];
+  const curDone=new Set(done(cur)), nC=curDone.size, nP=done(prev).length;
+  const party=ST.party, lvl=+ST.lvl||3;
+  const opt=(arr,v)=>arr.map(x=>`<option value="${x[0]}" ${String(v)===String(x[0])?'selected':''}>${esc(x[1])}</option>`).join('');
+  p.querySelector('[data-ctl]').innerHTML=`<label>Party <select data-hy="party">${opt(PARTY,party)}</select></label>
+    <label>Hierarchy Levels <select data-hy="lvl">${opt(LVL,ST.lvl)}</select></label>
+    <label>Compare <select data-hy="cmp">${opt(opts.map(id=>[id,hLab(id)+' vs '+hLab(id-1)]),cur)}</select></label>
+    <label>Trend <select data-hy="trend">${opt(TR,ST.trend)}</select></label>
+    <label>Sort <select data-hy="sort">${opt(SORT,ST.sort)}</select></label>
+    <label>Search <input data-hy-q type="search" placeholder="Party name" value="${esc(ST.q)}"></label>`;
+  /* rows: every slicer except Month / Date */
+  const fr=typeof filterRowsCached==='function'?filterRowsCached({...App.filters,globalMonth:'',dateFrom:null,dateTo:null}):App.rows;
+  const want=new Set(cols.concat([prev]));
+  const P=new Map();
+  const add=(n,h,tv,cc)=>{ n.h[h]=(n.h[h]||0)+tv; if(cc) n.cc+=tv; };
+  for(const r of fr){ if(!r.monthKey) continue; const i=mi(r.monthKey), h=halfOf(i); if(!want.has(h)) continue;
+    const tv=r.total||0, cc=h===cur&&curDone.has(i);
+    const pk=pv(r,party); let a=P.get(pk); if(!a){ a=node(); a.kids=new Map(); P.set(pk,a); } add(a,h,tv,cc);
+    const bk=pv(r,'origin'); let b=a.kids.get(bk); if(!b){ b=node(); b.kids=new Map(); a.kids.set(bk,b); } add(b,h,tv,cc);
+    const dk=pv(r,'destname'); let d=b.kids.get(dk); if(!d){ d=node(); b.kids.set(dk,d); } add(d,h,tv,cc); }
+  const calc=n=>{ const pa=nP?(n.h[prev]||0)/nP:0, ca=nC?n.cc/nC:0;
+    const t=pa<=1e-9&&ca<=1e-9?'':pa<=1e-9?'nw':ca<=1e-9?'nb':Math.abs(ca-pa)<1e-9?'sm':ca>pa?'up':'dn';
+    n.pa=pa; n.ca=ca; n.t=t; n.d=ca-pa; return n; };
+  const all=[...P.entries()].map(([v,n])=>{ calc(n); n.v=v; return n; });
+  /* KPI: parties per trend + monthly change */
+  const K={up:[0,0],dn:[0,0],nw:[0,0],nb:[0,0]}; all.forEach(n=>{ if(K[n.t]){ K[n.t][0]++; K[n.t][1]+=n.d; } });
+  const kp=(k,l,cls)=>`<div class="hy-kpi ${cls}${ST.trend===k?' on':''}" data-hy-k="${k}" title="Click to show only these"><div class="v">${N(K[k][0])}</div><div class="l">${l}</div><div class="s ${K[k][1]>=0?'hy-up':'hy-dn'}">${K[k][1]>=0?'+':'−'}${L(Math.abs(K[k][1]))} Lacs / month</div></div>`;
+  kEl.innerHTML=`<div class="hy-kpis">${kp('up','▲ Uptrade '+PARTY.find(x=>x[0]===party)[1]+'s','up')}${kp('dn','▼ Downtrade','dn')}${kp('nw','New (no business in '+hLab(prev)+')','nw')}${kp('nb','No business yet in '+hLab(cur),'nb')}</div>`;
+  let list=all.filter(n=>n.t);
+  if(ST.trend!=='ALL') list=list.filter(n=>n.t===ST.trend);
+  const q=String(ST.q||'').trim().toUpperCase(); if(q) list=list.filter(n=>n.v.toUpperCase().includes(q));
+  const tot=n=>(n.h[prev]||0)+(n.h[cur]||0);
+  const srt=ST.sort==='drop'?(a,b)=>a.d-b.d:ST.sort==='rise'?(a,b)=>b.d-a.d:(a,b)=>tot(b)-tot(a);
+  list.sort(srt);
+  const mKeys=id=>hMonths(id).filter(i=>DM.has(i)).map(mk);
+  const runTxt=id=>{ if(!lastD) return hSpan(id); const li=lastD.getFullYear()*12+lastD.getMonth(); if(halfOf(li)!==id||li>=hMonths(id)[5]&&li<curM) return hSpan(id); return MN[hMonths(id)[0]%12]+'–'+lastD.getDate()+' '+MN[lastD.getMonth()]; };
+  const cell=(n,id,f)=>has(id)?(n.h[id]?`<td class="hy-d${id===cols[0]?' hy-gs':''}" data-hy-f="${esc(JSON.stringify(f))}" data-hy-m="${esc(JSON.stringify(mKeys(id)))}" title="Click to open these GRs">${id===cur||id===prev?'<b>'+L(n.h[id])+'</b>':L(n.h[id])}</td>`:`<td class="${id===cols[0]?'hy-gs':''}">–</td>`):`<td class="hy-dim${id===cols[0]?' hy-gs':''}" title="No data loaded for this half-year">–</td>`;
+  const tail=n=>{ const ch=n.pa>1e-9?n.d/n.pa*100:null;
+    return `<td class="hy-gs">${nP?(n.pa?L(n.pa):'–'):'<span class="hy-dim">–</span>'}</td><td>${n.ca?L(n.ca):'–'}</td><td class="${ch==null?'':ch>0?'hy-up':ch<0?'hy-dn':''}">${ch==null?'—':(ch>0?'+':'')+ch.toFixed(1)+'%'}</td><td>${n.t?`<span class="hy-tg ${n.t}">${TXT[n.t]}</span>`:''}</td>`; };
+  const cnt=(m,w)=>m.size===1?esc([...m.keys()][0]):N(m.size)+' '+w;
+  let body='';
+  const shown=list.slice(0,ST.show);
+  for(const n of shown){ const f0={[party]:n.v}, k0=n.v;
+    const dests=new Map(); n.kids.forEach(b=>b.kids.forEach((d,dk)=>dests.set(dk,1)));
+    const o0=lvl>1&&ST.exp.has(k0);
+    body+=`<tr class="hy-l0"><td class="hier" title="${esc(n.v)}">${lvl>1?`<span class="hy-tb" data-hy-e="${esc(k0)}">${o0?'−':'+'}</span>`:''}${esc(n.v)}</td><td class="hier">${cnt(n.kids,'branches')}</td><td class="hier">${cnt(dests,'destinations')}</td>${cols.map(id=>cell(n,id,f0)).join('')}${tail(n)}</tr>`;
+    if(!o0) continue;
+    const bs=[...n.kids.entries()].map(([v,b])=>{ calc(b); b.v=v; return b; }).sort(srt);
+    for(const b of bs){ const f1={...f0,origin:b.v}, k1=k0+'␟'+b.v, o1=lvl>2&&ST.exp.has(k1);
+      body+=`<tr class="hy-l1"><td class="hier"><span style="display:inline-block;width:20px"></span>${lvl>2?`<span class="hy-tb" data-hy-e="${esc(k1)}">${o1?'−':'+'}</span>`:''}${esc(b.v)}</td><td class="hier">${esc(b.v)}</td><td class="hier">${cnt(b.kids,'destinations')}</td>${cols.map(id=>cell(b,id,f1)).join('')}${tail(b)}</tr>`;
+      if(!o1) continue;
+      const ds=[...b.kids.entries()].map(([v,d])=>{ calc(d); d.v=v; return d; }).sort(srt);
+      for(const d of ds) body+=`<tr class="hy-l2"><td class="hier"><span style="display:inline-block;width:64px"></span>${esc(d.v)}</td><td class="hier">${esc(b.v)}</td><td class="hier">${esc(d.v)}</td>${cols.map(id=>cell(d,id,{...f1,destname:d.v})).join('')}${tail(d)}</tr>`; } }
+  /* grand total of the listed parties */
+  const T=node(); const tIds=[...new Set(cols.concat([prev]))]; list.forEach(n=>{ tIds.forEach(id=>{ if(n.h[id]) T.h[id]=(T.h[id]||0)+n.h[id]; }); T.cc+=n.cc; }); calc(T);
+  const u='<span class="unit-head">Lacs</span>', pl=PARTY.find(x=>x[0]===party)[1];
+  const hh=id=>`<th class="${id===cur?'hy-c':id===prev?'hy-p':''}${id===cols[0]?' hy-gs':''}">${hLab(id)}<br><span style="font-weight:600;text-transform:none">${id===cur?runTxt(id):hSpan(id)}</span>${u}</th>`;
+  wrap.innerHTML=list.length?`<table class="yield-table hy-table"><thead><tr><th class="hier">${esc(pl)}</th><th class="hier">Branch</th><th class="hier">Destination</th>${cols.map(hh).join('')}<th class="hy-t hy-gs">Avg / month<br>${esc(hLab(prev))} (${nP} mo)${u}</th><th class="hy-t">Avg / month<br>${esc(hLab(cur))} (${nC} mo)${u}</th><th class="hy-t">Change %</th><th class="hy-t">Trend</th></tr></thead>
+    <tbody>${body}</tbody><tfoot><tr><td class="hier">TOTAL (${N(list.length)} ${esc(pl)}s)</td><td class="hier"></td><td class="hier"></td>${cols.map(id=>has(id)?`<td${id===cols[0]?' class="hy-gs"':''}>${T.h[id]?L(T.h[id]):'–'}</td>`:`<td class="hy-dim${id===cols[0]?' hy-gs':''}">–</td>`).join('')}${tail(T)}</tr></tfoot></table>`
+    :'<div class="empty-state"><h2>No parties for the selected Trend / Search.</h2></div>';
+  more.innerHTML=`<div class="panel-sub" style="margin-top:6px">Avg / month uses completed months only: ${esc(hLab(cur))} has ${nC} completed month${nC===1?'':'s'} in the data (${[...curDone].sort((a,b)=>a-b).map(i=>MN[i%12]+'-'+String(Math.floor(i/12)).slice(2)).join(', ')||'none'}); the running month is in the half-year total but not in the average. "–" in a half-year column = no data loaded for that half-year yet.${list.length>ST.show?` Showing ${N(ST.show)} of ${N(list.length)} parties. <button type="button" class="btn btn-sm btn-outline" data-hy-more>Show 200 more</button>`:''}</div>`;
+}
+window.renderHalfYear=function(){ try{ draw(); }catch(e){ console.error('Half-Yearly Business',e); } };
 })();
 </script>
 <script id="proModeJs">
