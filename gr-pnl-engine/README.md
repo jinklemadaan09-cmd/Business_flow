@@ -20,6 +20,10 @@ The dashboard is not affected: it reads the engine JSON, which still holds every
    GR NO is in a verified archive. Rows not found in an archive stay.
 
 Long runs stop at 4.5 minutes and continue on their own a minute later.
+The archive never holds the engine's lock while it writes, so **Refresh now** and the hourly engine
+refresh are never blocked by it. While the engine is still reading new or changed files, the archive
+waits and tries again in 5 minutes. The first **Run archive now** (or Setup) installs the nightly 2 AM run;
+from then on every finished half-year is archived without a click.
 
 ## Tabs it adds to the engine sheet
 | Tab | What |
