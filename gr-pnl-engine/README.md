@@ -33,7 +33,7 @@ waits and tries again in 5 minutes. The first **Run archive now** (or Setup) ins
 from then on every finished half-year is archived without a click.
 
 ## Copy in Cloudflare R2 (for the dashboard website)
-`R2.gs`: when R2 keys are saved, every verified half-year JSON is also copied to a private Cloudflare R2
+`R2.gs`: when R2 keys are saved, every verified half-year JSON of an ended financial year (FY25-26 and older today; the running FY never) is copied to a private Cloudflare R2
 bucket at the end of each archive run (`archive/GR_MASTER_<period>.json.gz` + `archive/index.json`).
 The dashboard website reads it for **+ Load last year**. A failed upload is mailed and retried next run;
 the Drive archive is never touched by it. Setup and the website side: README of the Dashboard repo.
