@@ -133,19 +133,24 @@ function GRA_run_(dry, fromMenu) {
 
     var master = GRA_readMaster_(ss, s);
     var halves = GRA_groupHalves_(master, s);
+    // Memory: the full master (all months x all columns) is the biggest thing in this run. Each half-year
+    // now holds its own rows, so the full list is let go here, and each half-year's rows as soon as it is done.
+    master.rows = null;
     var done = true;
     for (var i = 0; i < halves.length; i++) {
       var h = halves[i];
       if (!h.complete) continue;
       var fp = GRA_fingerprint_(master.headers, h.rows, s);
       var old = GRA_storedFp_(h.key);
-      if (old && old.hash === fp.hash) continue;
-      if (dry) { notes.push(h.label + ': ' + (old ? 'data changed, will be rebuilt' : 'archive will be created') + ' (' + h.rows.length + ' rows)'); continue; }
+      if (old && old.hash === fp.hash) { h.rows = null; continue; }
+      if (dry) { notes.push(h.label + ': ' + (old ? 'data changed, will be rebuilt' : 'archive will be created') + ' (' + h.rows.length + ' rows)'); h.rows = null; continue; }
       var res = GRA_buildHalf_(ss, s, master, h, fp, old, t0);
+      h.rows = null;
       if (res === 'timeout') { done = false; break; }
       if (res === 'superseded') { notes.push(h.label + ': finished by another run, nothing written twice'); continue; }
       notes.push(res);
     }
+    halves = null; master = null; h = null;   // the mirror trim and the self-check below need none of it
 
     if (done) {
       GRA_clearContinue_();
@@ -295,11 +300,12 @@ function GRA_groupHalves_(master, s) {
     var iso = GRA_iso_(r[di]);
     if (!iso) return;
     var h = GRA_halfOf_(iso);
-    (by[h.key] = by[h.key] || { key: h.key, label: h.label, start: h.start, end: h.end, rows: [] }).rows.push(r);
+    var b = by[h.key] || (by[h.key] = { key: h.key, label: h.label, start: h.start, end: h.end, rows: [], count: 0, complete: h.end < today });
+    b.count++;
+    if (b.complete) b.rows.push(r);   // the running half-year is never archived, so its rows are not kept here
   });
   return Object.keys(by).sort().map(function (k) {
     var h = by[k];
-    h.complete = h.end < today;
     h.rows.sort(function (a, b) {
       var x = GRA_iso_(a[di]), y = GRA_iso_(b[di]);
       if (x !== y) return x < y ? -1 : 1;
@@ -621,12 +627,25 @@ function GRA_archivedHalves_(ss) {
   return out;
 }
 
+/**
+ * GR NOs of one archived half-year. Read from the KEY column of the verified archive sheet(s) only,
+ * not from the JSON copy: opening the whole JSON (every row x every column) for each half-year
+ * ran Apps Script out of memory.
+ */
 function GRA_archivedKeys_(ss, hk) {
-  var ref = GRA_registry_(ss).filter(function (x) { return x.key === hk && x.status === 'CURRENT' && x.part === 'JSON'; })[0];
-  if (!ref) return null;
-  var d = JSON.parse(Utilities.ungzip(DriveApp.getFileById(ref.id).getBlob().setContentType('application/x-gzip')).getDataAsString());
-  var ki = GRA_col_(d.headers, GRA_settings_(ss).KEY_COLUMN), set = {};
-  d.rows.forEach(function (r) { set[GRA_norm_(r[ki])] = 1; });
+  var all = GRA_registry_(ss).filter(function (x) { return x.key === hk && x.status === 'CURRENT'; });
+  if (!all.some(function (x) { return x.part === 'JSON'; })) return null;   // not finished / verified yet
+  var parts = all.filter(function (x) { return x.part !== 'JSON'; });
+  if (!parts.length) return null;
+  var keyName = GRA_settings_(ss).KEY_COLUMN, set = {};
+  for (var p = 0; p < parts.length; p++) {
+    var sh = SpreadsheetApp.openById(parts[p].id).getSheets()[0], n = sh.getLastRow() - 1;
+    if (n < 1) continue;
+    var ki = GRA_col_(sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(String), keyName);
+    if (ki < 0) return null;
+    var v = sh.getRange(2, ki + 1, n, 1).getValues();
+    for (var r = 0; r < n; r++) set[GRA_norm_(v[r][0])] = 1;
+  }
   return set;
 }
 
