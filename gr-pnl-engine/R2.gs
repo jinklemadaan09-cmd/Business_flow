@@ -156,6 +156,37 @@ function R2_writeIndex_(c, current) {
   R2_put_(c, R2_PREFIX + 'index.json', Utilities.newBlob(body, 'application/json'));
 }
 
+/* ------------------------------------------------------------------ website first load */
+
+/**
+ * For Cache.gs writeMasterSnapshot_: a test "this row is left out of the website's first load", or null.
+ * A row is left out only when its month is before (current FY start - DASHBOARD_MONTHS_BEFORE_FY months)
+ * AND its half-year is in R2 with the same data the archive verified (hash). Everything else stays in.
+ */
+function GRA_dashboardDrop_(headers) {
+  if (!R2_cfg_()) return null;
+  var p = PropertiesService.getScriptProperties(), set = {}, halves = [];
+  p.getKeys().forEach(function (k) {
+    if (k.indexOf('GRA_R2_') !== 0 || k === 'GRA_R2_INDEX') return;
+    var key = k.slice(7), meta = JSON.parse(p.getProperty(k) || 'null'), fp = GRA_storedFp_(key);
+    if (meta && fp && meta.hash === fp.hash && R2_closedFy_(key)) { set[key] = 1; halves.push(key); }
+  });
+  if (!halves.length) return null;
+  var s = GRA_settings_(GRA_engineSs_()), di = GRA_col_(headers, s.DATE_COLUMN);
+  if (di < 0) return null;
+  var back = Math.max(0, Number(s.DASHBOARD_MONTHS_BEFORE_FY) || 7);
+  var now = new Date(), fy = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+  var from = Utilities.formatDate(new Date(fy, 3 - back, 1), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  var memo = {};
+  var fn = function (row) {
+    var v = row[di], c = memo[v];
+    if (c === undefined) { var iso = GRA_iso_(v); c = memo[v] = !!(iso && iso < from && set[GRA_halfOf_(iso).key]); }
+    return c;
+  };
+  fn.from = from; fn.halves = halves.sort();
+  return fn;
+}
+
 /* ------------------------------------------------------------------ S3 API (Signature V4) */
 
 function R2_missing_() {

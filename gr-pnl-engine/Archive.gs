@@ -44,7 +44,8 @@ var GRA_DEFAULTS = [
   ['URGENT_PCT', '85', 'Send an URGENT mail when the sheet is this % full (cells)'],
   ['ALERT_EMAILS', '', 'Who gets the mails (comma separated). Blank = script owner.'],
   ['RUN_HOUR', '2', 'Hour of the daily run (0-23). After changing it, run GRA_setup again.'],
-  ['ARCHIVE_MAX_CELLS', '9000000', 'Max cells in one archive sheet; above this a Part 2 is created']
+  ['ARCHIVE_MAX_CELLS', '9000000', 'Max cells in one archive sheet; above this a Part 2 is created'],
+  ['DASHBOARD_MONTHS_BEFORE_FY', '7', 'Website first load: months before the current FY that always come from the engine (NBD gap + 1). Older months that are in Cloudflare R2 load on "+ Load last year".']
 ];
 
 /* ------------------------------------------------------------------ entry points */

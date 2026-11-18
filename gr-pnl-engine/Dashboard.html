@@ -9227,7 +9227,7 @@ const DB_NAME = 'grpnl_live_v1', STORE = 'kv', SNAP_KEY = 'master';
 
 const L = {
   buildId:null, version:0, headers:[], keyColumn:'', dateColumns:[], sourceNames:[],
-  rows:new Map(), syncing:false, lastSync:null, error:null, timer:null,
+  rows:new Map(), syncing:false, lastSync:null, error:null, timer:null, view:'full', viewAsked:'',
   hasDiscount:false, rowCount:0
 };
 
@@ -9266,7 +9266,7 @@ async function idbDel(k){ try{ const db=await idb(); return new Promise(res=>{ c
 
 async function saveSnapshot(){
   try{
-    await idbPut(SNAP_KEY, { buildId:L.buildId, version:L.version, headers:L.headers, keyColumn:L.keyColumn,
+    await idbPut(SNAP_KEY, { buildId:L.buildId, version:L.version, view:L.view, viewAsked:L.viewAsked, recentFrom:L.recentFrom||'', headers:L.headers, keyColumn:L.keyColumn,
       dateColumns:L.dateColumns, sourceNames:L.sourceNames, rows:[...L.rows.values()], savedAt:Date.now() });
   }catch(e){ console.warn('Live: could not save local copy', e); }
 }
@@ -9274,7 +9274,7 @@ async function loadSnapshot(){
   try{
     const s = await idbGet(SNAP_KEY);
     if (!s || !s.rows || !s.headers) return false;
-    L.buildId=s.buildId; L.version=s.version; L.headers=s.headers; L.keyColumn=s.keyColumn; L.dateColumns=s.dateColumns||[]; L.sourceNames=s.sourceNames||[];
+    L.buildId=s.buildId; L.version=s.version; L.view=s.view||'full'; L.viewAsked=s.viewAsked||'full'; L.recentFrom=s.recentFrom||''; L.headers=s.headers; L.keyColumn=s.keyColumn; L.dateColumns=s.dateColumns||[]; L.sourceNames=s.sourceNames||[];
     const k = L.headers.indexOf(L.keyColumn);
     L.rows = new Map(s.rows.map(r=>[String(r[k]), r]));
     L.lastSync = s.savedAt ? new Date(s.savedAt) : null;
@@ -9345,15 +9345,17 @@ async function fullLoad(head, attempt){
   /* parts download 6 at a time (one by one was the slow part of a full sync) */
   const parts = new Array(head.parts); let next = 0, done = 0;
   setStatus(`Live: downloading 0/${head.parts}…`);
-  const worker = async ()=>{ while (next < head.parts){ const i = next++; parts[i] = (await api({ part:i, build:head.buildId })).rows; done++; setStatus(`Live: downloading ${done}/${head.parts}…`); } };
+  const view = head.view==='recent' ? { view:'recent' } : {};
+  const worker = async ()=>{ while (next < head.parts){ const i = next++; parts[i] = (await api(Object.assign({ part:i, build:head.buildId }, view))).rows; done++; setStatus(`Live: downloading ${done}/${head.parts}…`); } };
   try{ await Promise.all(Array.from({length:Math.min(window.GR_API_URL?3:6, head.parts)}, worker)); }
   catch(e){
-    if (e.code==='STALE_BUILD' && !attempt) return fullLoad(await api({}), 1); // engine rebuilt mid-download
+    if (e.code==='STALE_BUILD' && !attempt) return fullLoad(await api(headParams()), 1); // engine rebuilt mid-download
     throw e;
   }
   const rows = [];
   for (const p of parts) for (const r of p) rows.push(r);
   L.buildId=head.buildId; L.version=head.version; L.headers=head.headers; L.keyColumn=head.keyColumn; L.dateColumns=head.dateColumns||[]; L.sourceNames=head.sourceNames||[];
+  L.view = head.view||'full'; L.viewAsked = ARC_ON ? 'recent' : 'full'; L.recentFrom = head.recentFrom||'';
   const k = L.headers.indexOf(L.keyColumn);
   L.rows = new Map(rows.map(r=>[String(r[k]), r]));
   return true;
@@ -9371,23 +9373,25 @@ function applyDelta(d){
 }
 
 /* ---------------- sync ---------------- */
+/* website: first load without the months that are in Cloudflare R2 (they come on "+ Load last year") */
+function headParams(){ return ARC_ON ? { view:'recent' } : {}; }
 async function sync(manual){
   if (!configured()){ setStatus('Live: not set up'); if (manual) setupDialog(); return; }
   if (L.syncing) return;
   L.syncing = true; L.error = null; setStatus('Live: syncing…');
   try{
     let changed = false;
-    if (L.buildId && L.version){
-      const d = await api({ since:L.version, build:L.buildId });
+    if (L.buildId && L.version && L.viewAsked===(ARC_ON ? 'recent' : 'full')){   /* a copy saved before the website asked for the light first load gets one full load */
+      const d = await api(Object.assign({ since:L.version, build:L.buildId }, headParams()));
       if (d.mode==='delta'){
         const n = applyDelta(d);
-        if (n===null) changed = await fullLoad(await api({}));
+        if (n===null) changed = await fullLoad(await api(headParams()));
         else changed = n>0;
       } else {
         changed = await fullLoad(d);
       }
     } else {
-      changed = await fullLoad(await api({}));
+      changed = await fullLoad(await api(headParams()));
     }
     L.lastSync = new Date();
     /* show the data first, then keep the local copy (saving 2+ lakh GRs takes a few seconds and must never hold the screen) */
@@ -9500,17 +9504,23 @@ function arcWanted(di){
   for (const r of L.rows.values()){ const d = parseGrDate(r[di]); if (d){ const k = arcHalf(d); count[k] = (count[k]||0)+1; } }
   return Object.keys(ix).filter(k=>ix[k].end>=from && !ARC.have[k] && (count[k]||0) < (+ix[k].rows||0)).sort();
 }
+/* the engine left out months that the dashboard needs even without "+ Load last year" (NBD gap set above 6) */
+function arcNeedEarly(){
+  if (L.view!=='recent' || !L.recentFrom) return false;
+  const m = /^(\d{4})-(\d{2})/.exec(L.recentFrom); if (!m) return false;
+  return GRYear.cutoff() < (+m[1])*12 + (+m[2]-1);
+}
 function arcAfterApply(di){
   if (!ARC_ON || typeof parseGrDate!=='function') return;
   ARC.di = di;
   if (!ARC.asked){   /* once per page: is there anything in R2 to offer? */
     ARC.asked = true;
     arcGet('index.json').then(r=>r.json()).then(j=>{ ARC.index = j; GRYear.S.arcAvail = arcWanted(ARC.di).length; GRYear.pill();
-      if (GRYear.S.full && GRYear.S.arcAvail) arcLoad(); })
+      if ((GRYear.S.full || arcNeedEarly()) && GRYear.S.arcAvail) arcLoad(); })
       .catch(e=>{ ARC.error = String(e && e.message || e); console.warn('Archive (R2):', ARC.error); });
     return;
   }
-  if (GRYear.S.full && ARC.index && !ARC.loading && arcWanted(di).length) arcLoad();
+  if ((GRYear.S.full || arcNeedEarly()) && ARC.index && !ARC.loading && arcWanted(di).length) arcLoad();
 }
 function arcLoad(){
   if (ARC.loading) return ARC.loading;
@@ -9564,7 +9574,10 @@ function applyToDashboard(force){
     const hd = L.headers.map(h=>String(h||'').trim());
     const dcol = (App.mapping && App.mapping.grdt && hd.includes(App.mapping.grdt)) ? App.mapping.grdt : (smartMap(hd).mapping.grdt || '');
     const di = dcol ? hd.indexOf(dcol) : -1;
-    if (GRYear.S.full && ARC.rows.size) for (const [k, r] of ARC.rows) if (!L.rows.has(k)) liveRows.push(r);   /* R2 archive: only GRs the engine no longer sends */
+    if (ARC.rows.size){   /* R2 archive: only GRs the engine no longer sends, older months first like the engine order (the trim below still hides months before the cut until "+ Load last year") */
+      const old = []; for (const [k, r] of ARC.rows) if (!L.rows.has(k)) old.push(r);
+      if (old.length) liveRows = old.concat(liveRows);
+    }
     liveRows = GRYear.trim(liveRows, di);
     GRYear.S.reapply = ()=>applyToDashboard(true);
     arcAfterApply(di);
