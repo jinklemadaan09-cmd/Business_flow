@@ -961,6 +961,11 @@ window.GRYear = (function(){
     </div>
   </div>
   <div id="defLockedContent" style="display:none;">
+  <div class="panel" id="mnPanel" style="border-left:3px solid var(--blue);">
+    <h2>Name Display — Merged or Original Names</h2>
+    <div class="panel-sub">One switch for the whole dashboard: Customer, Consignor and Consignee on every page, table, slicer, chart and download. It only changes how names are shown on this computer. Saved merges in Name Groups are never deleted, and totals stay the same.</div>
+    <label class="mn-sw"><input type="checkbox" id="mnToggle" checked><span class="mn-tog"><i></i></span><span class="mn-lab"><b>Merged names</b><span id="mnHint">ON · one group name for all spellings</span></span><span class="mn-state" id="mnState">ON</span></label>
+  </div>
   <div class="panel" id="defIntroPanel"><h2>Calculation Controls</h2><div class="panel-sub">Formula definitions and sign conventions have been moved to the dedicated <b>Data Quality</b> report. This page retains editable calculation controls and the version log.</div></div>
   <div class="panel">
     <h2>Metric Definitions &amp; Calculation Controls</h2>
@@ -17976,6 +17981,47 @@ try{ renderActivePage=window.renderActivePage; }catch(e){}
 setTimeout(()=>{ const pg=document.querySelector('.tab.active')?.getAttribute('data-page'); if(pg==='yield'||pg==='mom') render(pg); },0);
 })();
 </script>
+<style id="mergedNamesCss">
+.mn-sw{display:inline-flex;align-items:center;gap:12px;margin-top:12px;padding:10px 14px;border:1px solid var(--border);border-radius:8px;cursor:pointer;user-select:none}
+.mn-sw input{position:absolute;opacity:0;pointer-events:none}
+.mn-tog{width:48px;height:26px;border-radius:13px;background:#b8c1cc;position:relative;flex-shrink:0;transition:background .15s}
+.mn-tog i{position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.3);transition:left .15s}
+.mn-sw input:checked+.mn-tog{background:var(--green)}
+.mn-sw input:checked+.mn-tog i{left:25px}
+.mn-lab b{display:block;font-size:13px;color:var(--navy)}.mn-lab span{font-size:11.5px;color:var(--muted)}
+.mn-state{font-weight:700;font-size:12px;padding:3px 9px;border-radius:5px;background:#eef1f5;color:#556}
+.mn-state.on{background:var(--green-bg);color:var(--green)}
+#mnBanner{display:none;background:var(--amber-bg);color:#6b4a06;font-size:12px;padding:6px 20px;border-bottom:1px solid #f0dcb0}
+#mnBanner a{color:var(--blue);font-weight:600;cursor:pointer;text-decoration:underline}
+</style>
+<script id="mergedNamesJs">
+/* Merged names ON / OFF (Metric Definitions). OFF shows Customer / Consignor / Consignee exactly as on the GR.
+   Only a display choice kept in this browser; Name Groups decisions are not touched. */
+(function(){
+  const KEY='grpnl_names_unmerged_v1';
+  function off(){ if (window.GRNamesUnmerged===undefined){ try{ window.GRNamesUnmerged=localStorage.getItem(KEY)==='1'; }catch(e){ window.GRNamesUnmerged=false; } } return !!window.GRNamesUnmerged; }
+  function paint(){
+    const o=off(), t=document.getElementById('mnToggle'), st=document.getElementById('mnState'), h=document.getElementById('mnHint');
+    if (t) t.checked=!o;
+    if (st){ st.textContent=o?'OFF':'ON'; st.classList.toggle('on',!o); }
+    if (h) h.textContent=o?'OFF · original names exactly as on the GR':'ON · one group name for all spellings';
+    let b=document.getElementById('mnBanner');
+    if (!b){ const hd=document.getElementById('topHeader'); if (!hd) return; b=document.createElement('div'); b.id='mnBanner'; b.innerHTML='Showing original (unmerged) Customer / Consignor / Consignee names · <a>change in Metric Definitions</a>'; hd.insertAdjacentElement('afterend',b);
+      b.querySelector('a').addEventListener('click',()=>{ const tab=document.querySelector('.tab[data-page="def"]'); if (tab) tab.click(); }); }
+    b.style.display=o?'block':'none';
+  }
+  function set(merged){
+    window.GRNamesUnmerged=!merged;
+    try{ merged?localStorage.removeItem(KEY):localStorage.setItem(KEY,'1'); }catch(e){}
+    /* names picked in the Customer / CNGR / CNSGNE slicers belong to the other view: clear them */
+    try{ if (typeof App!=='undefined'&&App.filters) ['cngr','cnge','customer'].forEach(k=>{ if (Array.isArray(App.filters[k])) App.filters[k]=[]; }); }catch(e){}
+    paint();
+    if (typeof window.NameGroupsReapply==='function') window.NameGroupsReapply();
+  }
+  document.addEventListener('change',e=>{ if (e.target&&e.target.id==='mnToggle') set(e.target.checked); });
+  if (document.readyState==='loading') document.addEventListener('DOMContentLoaded',paint); else paint();
+})();
+</script>
 <style id="nameGroupsCss">
 #ngSection .ng-dl{display:flex;gap:6px;flex-wrap:wrap}
 .tab .ng-badge{display:inline-block;min-width:18px;margin-left:6px;padding:0 6px;border-radius:999px;background:var(--red);color:#fff;font-size:11px;font-weight:700;line-height:18px;text-align:center}
@@ -18143,6 +18189,8 @@ function computePan(rows){
   NG.pan={byName,of};
 }
 function groupOf(type,raw){
+  if (window.GRNamesUnmerged===undefined){ try{ window.GRNamesUnmerged=localStorage.getItem('grpnl_names_unmerged_v1')==='1'; }catch(e){ window.GRNamesUnmerged=false; } }
+  if (window.GRNamesUnmerged) return raw;   /* Metric Definitions → Merged names OFF: show the name as on the GR, merges stay saved */
   const d=NG.dec.get(decKey(type,raw));
   if (d) return d.status==='APPROVED'&&d.group ? d.group : raw;
   if (type==='Consignor'&&NG.pan.of.has(raw)) return NG.pan.of.get(raw);
@@ -18184,6 +18232,7 @@ function applyAll(rerender){
   }
   refresh();
 }
+window.NameGroupsReapply=()=>applyAll(true);
 
 /* ---------------- pending: new spellings that look like an existing group ---------------- */
 function buildStats(){
