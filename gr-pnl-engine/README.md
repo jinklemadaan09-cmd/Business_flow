@@ -32,6 +32,13 @@ refresh are never blocked by it. While the engine is still reading new or change
 waits and tries again in 5 minutes. The first **Run archive now** (or Setup) installs the nightly 2 AM run;
 from then on every finished half-year is archived without a click.
 
+## Copy in Cloudflare R2 (for the dashboard website)
+`R2.gs`: when R2 keys are saved, every verified half-year JSON is also copied to a private Cloudflare R2
+bucket at the end of each archive run (`archive/GR_MASTER_<period>.json.gz` + `archive/index.json`).
+The dashboard website reads it for **+ Load last year**. A failed upload is mailed and retried next run;
+the Drive archive is never touched by it. Setup and the website side: README of the Dashboard repo.
+Menu: **Archive (6 months) > Cloudflare R2: save keys / test connection / upload archive now**.
+
 ## Tabs it adds to the engine sheet
 | Tab | What |
 |---|---|
