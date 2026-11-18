@@ -10397,11 +10397,12 @@ function readTable(table){
       ci+=cspan;
     });
   });
-  const nCols=Math.max(0,...cells.map(c=>c.c+c.cs));
+  let nCols=0; for(const c of cells) if(c.c+c.cs>nCols) nCols=c.c+c.cs;   /* loop, not spread: big tables */
   const colW=new Array(nCols).fill(0);
   cells.forEach(c=>{ if(c.cs===1) colW[c.c]=Math.max(colW[c.c],c.w); });
   for(let i=0;i<nCols;i++) if(!colW[i]) colW[i]=70;
-  const rowH=rows.map((_,i)=>Math.max(18,Math.min(48,...cells.filter(c=>c.r===i&&c.rs===1).map(c=>c.h).concat([24]))));
+  const minH=new Array(rows.length).fill(24); for(const c of cells) if(c.rs===1&&c.h<minH[c.r]) minH[c.r]=c.h;
+  const rowH=minH.map(h=>Math.max(18,Math.min(48,h)));
   return {cells,merges,nCols,nRows:rows.length,headRows,colW,rowH};
 }
 function headingFor(table,container){
@@ -10581,8 +10582,23 @@ function buildPdf(data){
 function fileName(t){ const d=new Date(); const p=n=>String(n).padStart(2,'0'); return (t||'GR_PnL').replace(/[^A-Za-z0-9]+/g,'_').replace(/^_|_$/g,'').slice(0,60)+'_'+d.getFullYear()+p(d.getMonth()+1)+p(d.getDate()); }
 function saveBlob(blob,name){ const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name; document.body.appendChild(a); a.click(); setTimeout(()=>{URL.revokeObjectURL(a.href); a.remove();},1500); }
 
+/* tables that show only part of their rows on screen: draw every row while the download is collected */
+const FULL=[
+  {sel:'#hy-yield', all:()=>window.__hyDrawNow&&window.__hyDrawNow(), back:()=>window.__hyDrawNow&&window.__hyDrawNow()},
+  {sel:'#nbd-yield', all:()=>window.__nbdDrawNow&&window.__nbdDrawNow('yield'), back:()=>window.__nbdDrawNow&&window.__nbdDrawNow('yield')},
+  {sel:'#nbd-mom', all:()=>window.__nbdDrawNow&&window.__nbdDrawNow('mom'), back:()=>window.__nbdDrawNow&&window.__nbdDrawNow('mom')},
+  {sel:'#yieldDayWeekPanel', all:()=>{ FULL._yw=!!App.yieldDayWeek.showAll; App.yieldDayWeek.showAll=true; window.renderYieldDayWeekTable(); }, back:()=>{ App.yieldDayWeek.showAll=FULL._yw; window.renderYieldDayWeekTable(); }},
+  {sel:'#laneBDPanel', all:()=>{ FULL._lb=!!App.v7Lane.showAll; App.v7Lane.showAll=true; window.__renderLanes(); }, back:()=>{ App.v7Lane.showAll=FULL._lb; window.__renderLanes(); }}
+];
+function collectFull(set){
+  const h=set.holder, hs=h&&h.matches?FULL.filter(x=>h.matches(x.sel)||h.querySelector(x.sel)):[];
+  if(!hs.length) return collect(set);
+  window.__xmFullExport=true;
+  try{ hs.forEach(x=>{ try{ x.all(); }catch(e){ console.warn('xm full',e); } }); return collect(set); }
+  finally{ window.__xmFullExport=false; hs.forEach(x=>{ try{ x.back(); }catch(e){} }); }
+}
 function runExport(set,fmt){
-  let data=null; try{ data=collect(set); }catch(e){ console.warn('xm collect',e); }
+  let data=null; try{ data=collectFull(set); }catch(e){ console.warn('xm collect',e); }
   if (!data){ const ob=fmt==='excel'?set.xl:(set.pdf||set.xl); if(ob) ob.click(); else say('This table has no data yet',2500); return; }   // full-data export (e.g. GR Drill, all pages)
   data.sheet=data.title;
   try{
@@ -10592,7 +10608,7 @@ function runExport(set,fmt){
     say('Downloaded ✓');
   }catch(e){ console.error(e); say('Download failed: '+e.message,4000); }
 }
-window.__xmExport={collect,buildXlsx,buildPdf,numCell,enhance,openMenu,zip,saveBlob,fileName,say,metaLines};
+window.__xmExport={collect,collectFull,buildXlsx,buildPdf,numCell,enhance,openMenu,zip,saveBlob,fileName,say,metaLines};
 })();
 </script>
 
@@ -11287,6 +11303,7 @@ function donutCardDelta(kind,scope,cur,prev,prevLabel){
   let i=0;
   return html.replace('<td>Share</td></tr>',`<td>Share</td><td>Δ vs ${esc(prevLabel)}</td></tr>`).replace(/(<td>[\d.\-]+%<\/td>)(<\/tr>)/g,(m0,c1,c2)=>{const d=ds[i++];if(d==null)return m0;const good=kind==='cost'?d<=0:d>=0;const z=Math.abs(d)<0.005;return `${c1}<td style="font-weight:700;color:${z?'#5b6b80':good?'#147a45':'#b42318'}">${z?'0.00':(d>0?'+':'')+d.toFixed(2)}</td>${c2}`;});
 }
+window.__renderLanes=()=>renderLanes();
 function renderLanes(){
   if(!ensureLanePanels()) return;
   const rows=getFilteredRows();
@@ -18945,14 +18962,14 @@ function showLost(pg,spec,quiet){
   const list=lostIn(lostList(st,ms),spec.f,null);
   const where=Object.keys(spec.f||{}).map(k=>spec.f[k]).join(' › ')||'All';
   const mon=[...new Set(ms)].sort((a,b)=>a-b).map(x=>mLab(mk(x))); const monTxt=mon.length>3?mon[0]+' – '+mon[mon.length-1]:mon.join(', ');
-  const sc=st.scope!=='pan'?[st.scope,scopeLbl(st)]:null, MAX=1000;
+  const sc=st.scope!=='pan'?[st.scope,scopeLbl(st)]:null, MAX=window.__xmFullExport?Infinity:1000;
   let b=''; list.slice(0,MAX).forEach(x=>{ const r=x.rep;
     b+=`<tr><td class="hier nbd-d" data-nbd-f="${fz({[st.party]:x.party})}" title="Click to open this party's GRs">${esc(x.party)}</td>${sc?`<td>${esc(pv(r,sc[0]))}</td>`:''}<td>${esc(pv(r,'originzone'))}</td><td>${esc(pv(r,'origin'))}</td><td>${esc(pv(r,'destname'))}</td><td>${esc(mLab(mk(x.last)))}</td><td>${esc(mLab(mk(x.lm)))}</td><td>${dl-x.last}</td><td>${N(x.n)}</td><td>${L_(x.t)}</td><td><b>${L_(x.avg)}</b></td><td style="text-align:center!important"><span class="nbd-tag l">Lost</span></td></tr>`; });
   const u='<span class="unit-head">Lacs</span>';
   box.innerHTML=`<div class="nbd-lost"><div class="nbd-lost-h">Lost ${esc(partyLbl(st))}s · ${esc(where)} · ${esc(monTxt)} <span class="nbd-badge">${N(list.length)} parties · ${L_(lostSum(list))} Lacs / month</span><button type="button" class="btn btn-sm btn-outline" data-nbd-lost-x>Close</button></div>
     <div class="panel-sub" style="margin-bottom:6px">No business for more than ${g} months, counted by month. Months without business are counted up to ${esc(mLab(mk(dl)))} (latest loaded month). Click a party to open its GRs.</div>
     <div class="table-scroll" style="max-height:420px"><table class="yield-table nbd-table"><thead><tr><th class="hier">${esc(partyLbl(st))}</th>${sc?`<th>${esc(sc[1])}</th>`:''}<th>Origin Zone</th><th>Last Branch</th><th>Main Destination</th><th>Last Business Month</th><th>Lost In</th><th>Months Without Business</th><th>GRs (last ${g} months)</th><th>Freight (last ${g} months)${u}</th><th class="nbd-hl">Freight lost / month${u}</th><th>Status</th></tr></thead><tbody>${b||'<tr><td colspan="12">No Lost parties.</td></tr>'}</tbody></table></div>
-    ${list.length>MAX?`<div class="panel-sub" style="margin-top:6px">Showing the first ${N(MAX)} of ${N(list.length)} (largest freight lost first).</div>`:''}</div>`;
+    ${list.length>MAX?`<div class="hy-more">Showing the first ${N(MAX)} of ${N(list.length)} (largest freight lost first).</div>`:''}</div>`;
   if(!quiet) box.scrollIntoView({block:'nearest',behavior:'smooth'});
 }
 /* metrics for the NBD table: tick in "Metrics" (default Freight + GRs) */
@@ -19122,7 +19139,7 @@ function renderYield_(){
   const PF=PARTY.map(x=>x[0]).concat(['grno']);
   const lv=st.levels.filter(f=>!PF.includes(f));
   const defs=lv.map(f=>[f,hLbl(f)]).concat([[st.party,partyLbl(st)]]), L=defs.length;
-  const out=[]; let cap=false; const MAXR=3000;
+  const out=[]; let cap=false; const MAXR=window.__xmFullExport?Infinity:3000;
   const walk=(rs,d,path)=>{ const gs=groups(rs,defs[d][0]);
     for(const x of gs){ if(out.length>=MAXR){ cap=true; return; } const pth=path.concat([x.v]);
       if(d<L-1){ walk(x.rs,d+1,pth); out.push({path:pth,d,a:x.a,sub:true}); } else out.push({path:pth,d,a:x.a}); } };
@@ -19154,7 +19171,7 @@ function renderYield_(){
     +COLS.map((c,i)=>`<th class="${i?'':'nbd-gs'}">${esc(c[1])}${c[0]==='n'||c[0]==='w'?'':u}</th>`).join('')+xm.map(x=>`<th class="nbd-ha">${esc(x[1])}${x[0]==='avg'?u:''}</th>`).join('');
   wrap.innerHTML=`<table class="yield-table nbd-table" data-lv="${L}" style="min-width:${Math.max(1100,L*150+520+COLS.length*110+xm.length*110)}px"><thead><tr>${head}</tr></thead>
     <tbody>${body}</tbody><tfoot><tr><td class="hier">GRAND TOTAL</td>${'<td class="hier"></td>'.repeat(L-1)}<td></td><td></td><td></td>${numCells(T,{})}</tr></tfoot></table>
-    ${cap?`<div class="panel-sub" style="margin-top:6px">Showing the first ${N(MAXR)} rows (largest freight first). Use the slicers or Hierarchy Levels to narrow down.</div>`:''}`;
+    ${cap?`<div class="hy-more">Showing the first ${N(MAXR)} rows (largest freight first). Excel / PDF download has every row.</div>`:''}`;
 }
 
 function renderMom(){
@@ -19203,6 +19220,7 @@ function render(pg){ try{ if(!App.rows||!App.rows.length) return; if(pg==='yield
 function drawNbd(pg,now){ const p0=panelFor(pg); if(!now&&p0&&window.GRLazy&&GRLazy.defer(p0,()=>{ try{ drawNbd(pg,true); }catch(e){ console.error('NBD',e); } })){ toEnd(p0); return; }
   if(pg==='yield') renderYield(); else renderMom(); if(ST[pg]&&ST[pg].lost) showLost(pg,ST[pg].lost,true); const p=$('nbd-'+pg); if(p){ toEnd(p); requestAnimationFrame(()=>fixHead(p.querySelector('[data-wrap]'))); } }
 window.renderNbd=render;
+window.__nbdDrawNow=pg=>drawNbd(pg,true);
 function after(){ const k=document.querySelector('.tab.active')?.dataset.page; if(k==='yield'||k==='mom') render(k); }
 /* safety net: if the panel is missing on an open Yield / MoM page (e.g. a render path that skips the page hook), draw it */
 setInterval(()=>{ try{ const k=document.querySelector('.tab.active')?.dataset.page; if((k==='yield'||k==='mom') && App.rows && App.rows.length){ if(!$('nbd-'+k)||(k==='yield'&&!$('hy-yield'))) render(k); else toEnd($('nbd-'+k)); } }catch(e){} },2000);
@@ -19230,6 +19248,7 @@ document.addEventListener('click',e=>{ const t=e.target.closest&&e.target.closes
 .hy-tb{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border:1px solid #bfd0e3;border-radius:4px;background:#eef4fb;color:#0b2545;font-weight:900;cursor:pointer;margin-right:6px;font-size:11px}
 </style>
 <style>.hy-table td.hy-am{text-align:center!important;font-weight:800}.hy-table th.hy-amh{background:#1a7f42!important;text-align:center!important}</style>
+<style>.hy-more{display:flex;align-items:center;gap:8px;justify-content:center;padding:10px 0 2px;font-size:12px;color:#41536a;font-weight:600}</style>
 <script id="halfYearJs">
 /* ======================================================================
    Half-Yearly Business (Yield Analysis): Total Freight per half-year for each party,
@@ -19273,6 +19292,7 @@ function panel(){
     const t=e.target.closest('[data-hy-e]'); if(t){ e.stopPropagation(); const x=t.dataset.hyE; if(ST.exp.has(x)) [...ST.exp].filter(y=>y===x||y.startsWith(x+'␟')).forEach(y=>ST.exp.delete(y)); else ST.exp.add(x); draw(); return; }
     if(e.target.closest('[data-hy-clr]')){ ST.q=''; ST.trend='ALL'; ST.show=200; draw(); return; }
     const m=e.target.closest('[data-hy-more]'); if(m){ ST.show+=200; draw(); return; }
+    if(e.target.closest('[data-hy-more-all]')){ ST.show=1e9; draw(); return; }
     const d=e.target.closest('td[data-hy-f]'); if(d&&window.openDirectGr){ let f={}, ms=null; try{ f=JSON.parse(d.dataset.hyF); ms=JSON.parse(d.dataset.hyM); }catch(_){} window.openDirectGr(f,ms,'Half-Yearly Business'); }
   });
   return p;
@@ -19302,7 +19322,7 @@ function draw(){
     <label>Compare <select data-hy="cmp">${opt(opts.map(id=>[id,hLab(id)+' vs '+hLab(id-1)]),cur)}</select></label>
     <label>Trend <select data-hy="trend">${opt(TR,ST.trend)}</select></label>
     <label>Sort <select data-hy="sort">${opt(SORT,ST.sort)}</select></label>
-    <label>Search <input data-hy-q type="search" name="hy-party-search" autocomplete="off" data-lpignore="true" data-form-type="other" placeholder="Party name or any spelling" value="${esc(/@/.test(ST.q||'')?'':ST.q)}"></label>`;
+    <label>Search <input data-hy-q type="search" name="hy-q-${Date.now()%1e6}" autocomplete="off" autocorrect="off" spellcheck="false" readonly onfocus="this.removeAttribute('readonly')" data-lpignore="true" data-1p-ignore="true" data-form-type="other" placeholder="Party name or any spelling" value="${esc(/@/.test(ST.q||'')?'':ST.q)}"></label>`;
   /* rows: every slicer except Month / Date */
   const P=window.GRSpeed?GRSpeed.memo('hy2',[party,cur,prev,cols.join(','),curM],build_):build_();
   function build_(){
@@ -19324,11 +19344,14 @@ function draw(){
     const pa=ap?sp/ap:0, ca=ac?sc/ac:0; n.ap=ap; n.ac=ac;
     const t=pa<=1e-9&&ca<=1e-9?'':pa<=1e-9?'nw':ca<=1e-9?'nb':flat(pa,ca)?'sm':ca>pa?'up':'dn';
     n.pa=pa; n.ca=ca; n.t=t; n.d=ca-pa; return n; };
-  const all=[...P.entries()].map(([v,n])=>{ calc(n); n.v=v; return n; });
+  const byBr=lvl>=2;   /* Branch picked: one row per party + branch, never merged across branches */
+  const all=byBr?[...P.entries()].flatMap(([v,n])=>[...n.kids.entries()].map(([bv,b])=>{ calc(b); b.v=v; b.br=bv; b.raw=n.raw; return b; }))
+               :[...P.entries()].map(([v,n])=>{ calc(n); n.v=v; return n; });
+  const rowW=byBr?PARTY.find(x=>x[0]===party)[1]+' + Branch rows':PARTY.find(x=>x[0]===party)[1]+'s';
   /* KPI: parties per trend + monthly change */
   const K={up:[0,0],dn:[0,0],nw:[0,0],nb:[0,0]}; all.forEach(n=>{ if(K[n.t]){ K[n.t][0]++; K[n.t][1]+=n.d; } });
   const kp=(k,l,cls)=>`<div class="hy-kpi ${cls}${ST.trend===k?' on':''}" data-hy-k="${k}" title="Click to show only these"><div class="v">${N(K[k][0])}</div><div class="l">${l}</div><div class="s ${K[k][1]>=0?'hy-up':'hy-dn'}">${K[k][1]>=0?'+':'−'}${L(Math.abs(K[k][1]))} Lacs / month</div></div>`;
-  kEl.innerHTML=`<div class="hy-kpis">${kp('up','▲ Uptrade '+PARTY.find(x=>x[0]===party)[1]+'s','up')}${kp('dn','▼ Downtrade','dn')}${kp('nw','New (no business in '+hLab(prev)+')','nw')}${kp('nb','No business yet in '+hLab(cur),'nb')}</div>`;
+  kEl.innerHTML=`<div class="hy-kpis">${kp('up','▲ Uptrade '+rowW,'up')}${kp('dn','▼ Downtrade','dn')}${kp('nw','New (no business in '+hLab(prev)+')','nw')}${kp('nb','No business yet in '+hLab(cur),'nb')}</div>`;
   let list=all.filter(n=>n.t);
   if(ST.trend!=='ALL') list=list.filter(n=>n.t===ST.trend);
   const q=String(ST.q||'').trim().toUpperCase(); if(q&&!/@/.test(q)) list=list.filter(n=>n.v.toUpperCase().includes(q)||[...(n.raw||[])].some(x=>x.includes(q)));
@@ -19342,29 +19365,32 @@ function draw(){
     return `<td class="hy-gs">${nP?(n.pa?L(n.pa):'–'):'<span class="hy-dim">–</span>'}</td><td>${n.ca?L(n.ca):'–'}</td><td class="${ch==null?'':ch>0?'hy-up':ch<0?'hy-dn':''}">${ch==null?'—':(ch>0?'+':'')+ch.toFixed(1)+'%'}</td><td>${n.t?`<span class="hy-tg ${n.t}">${TXT[n.t]}</span>`:''}</td><td class="hy-gs hy-am">${nP?n.ap:'–'}</td><td class="hy-am">${n.ac}</td>`; };
   const cnt=(m,w)=>m.size===1?esc([...m.keys()][0]):N(m.size)+' '+w;
   let body='';
-  const shown=list.slice(0,ST.show);
-  for(const n of shown){ const f0={[party]:n.v}, k0=n.v;
-    const dests=new Map(); n.kids.forEach(b=>b.kids.forEach((d,dk)=>dests.set(dk,1)));
-    const o0=lvl>1&&ST.exp.has(k0);
-    body+=`<tr class="hy-l0"><td class="hier" title="${esc(n.v)}">${lvl>1?`<span class="hy-tb" data-hy-e="${esc(k0)}">${o0?'−':'+'}</span>`:''}${esc(n.v)}</td><td class="hier">${cnt(n.kids,'branches')}</td><td class="hier">${cnt(dests,'destinations')}</td>${cols.map(id=>cell(n,id,f0)).join('')}${tail(n)}</tr>`;
-    if(!o0) continue;
-    const bs=[...n.kids.entries()].map(([v,b])=>{ calc(b); b.v=v; return b; }).sort(srt);
-    for(const b of bs){ const f1={...f0,origin:b.v}, k1=k0+'␟'+b.v, o1=lvl>2&&ST.exp.has(k1);
-      body+=`<tr class="hy-l1"><td class="hier"><span style="display:inline-block;width:20px"></span>${lvl>2?`<span class="hy-tb" data-hy-e="${esc(k1)}">${o1?'−':'+'}</span>`:''}${esc(b.v)}</td><td class="hier">${esc(b.v)}</td><td class="hier">${cnt(b.kids,'destinations')}</td>${cols.map(id=>cell(b,id,f1)).join('')}${tail(b)}</tr>`;
+  const full=!!window.__xmFullExport;   /* download: every row, every destination */
+  const shown=full?list:list.slice(0,ST.show);
+  if(byBr){
+    for(const b of shown){ const f1={[party]:b.v,origin:b.br}, k1=b.v+'␟'+b.br, o1=lvl>2&&(full||ST.exp.has(k1));
+      body+=`<tr class="hy-l0"><td class="hier" title="${esc(b.v)}">${lvl>2?`<span class="hy-tb" data-hy-e="${esc(k1)}">${o1?'−':'+'}</span>`:''}${esc(b.v)}</td><td class="hier">${esc(b.br)}</td><td class="hier">${cnt(b.kids,'destinations')}</td>${cols.map(id=>cell(b,id,f1)).join('')}${tail(b)}</tr>`;
       if(!o1) continue;
       const ds=[...b.kids.entries()].map(([v,d])=>{ calc(d); d.v=v; return d; }).sort(srt);
-      for(const d of ds) body+=`<tr class="hy-l2"><td class="hier"><span style="display:inline-block;width:64px"></span>${esc(d.v)}</td><td class="hier">${esc(b.v)}</td><td class="hier">${esc(d.v)}</td>${cols.map(id=>cell(d,id,{...f1,destname:d.v})).join('')}${tail(d)}</tr>`; } }
+      for(const d of ds) body+=`<tr class="hy-l2"><td class="hier"><span style="display:inline-block;width:44px"></span>${esc(b.v)}</td><td class="hier">${esc(b.br)}</td><td class="hier">${esc(d.v)}</td>${cols.map(id=>cell(d,id,{...f1,destname:d.v})).join('')}${tail(d)}</tr>`; }
+  } else for(const n of shown){ const f0={[party]:n.v};
+    const dests=new Map(); n.kids.forEach(b=>b.kids.forEach((d,dk)=>dests.set(dk,1)));
+    body+=`<tr class="hy-l0"><td class="hier" title="${esc(n.v)}">${esc(n.v)}</td><td class="hier">${cnt(n.kids,'branches')}</td><td class="hier">${cnt(dests,'destinations')}</td>${cols.map(id=>cell(n,id,f0)).join('')}${tail(n)}</tr>`; }
   /* grand total of the listed parties */
   const T=node(); const tIds=[...new Set(cols.concat([prev]))]; list.forEach(n=>{ tIds.forEach(id=>{ if(n.h[id]) T.h[id]=(T.h[id]||0)+n.h[id]; }); T.cc+=n.cc; for(const i in n.mm) T.mm[i]=(T.mm[i]||0)+n.mm[i]; }); calc(T);
   const u='<span class="unit-head">Lacs</span>', pl=PARTY.find(x=>x[0]===party)[1];
   const hh=id=>`<th class="${id===cur?'hy-c':id===prev?'hy-p':''}${id===cols[0]?' hy-gs':''}">${hLab(id)}<br><span style="font-weight:600;text-transform:none">${id===cur?runTxt(id):hSpan(id)}</span>${u}</th>`;
   wrap.innerHTML=list.length?`<table class="yield-table hy-table"><thead><tr><th class="hier">${esc(pl)}</th><th class="hier">Branch</th><th class="hier">Destination</th>${cols.map(hh).join('')}<th class="hy-t hy-gs">Avg / month<br>${esc(hLab(prev))}${u}</th><th class="hy-t">Avg / month<br>${esc(hLab(cur))}${u}</th><th class="hy-t">Change %</th><th class="hy-t">Trend</th><th class="hy-t hy-amh hy-gs">Active months<br>${esc(hLab(prev))}</th><th class="hy-t hy-amh">Active months<br>${esc(hLab(cur))}</th></tr></thead>
-    <tbody>${body}</tbody><tfoot><tr><td class="hier">TOTAL (${N(list.length)} ${esc(pl)}s)</td><td class="hier"></td><td class="hier"></td>${cols.map(id=>has(id)?`<td${id===cols[0]?' class="hy-gs"':''}>${T.h[id]?L(T.h[id]):'–'}</td>`:`<td class="hy-dim${id===cols[0]?' hy-gs':''}">–</td>`).join('')}${tail(T)}</tr></tfoot></table>`
+    <tbody>${body}</tbody><tfoot><tr><td class="hier">TOTAL (${N(list.length)} ${esc(rowW)})</td><td class="hier"></td><td class="hier"></td>${cols.map(id=>has(id)?`<td${id===cols[0]?' class="hy-gs"':''}>${T.h[id]?L(T.h[id]):'–'}</td>`:`<td class="hy-dim${id===cols[0]?' hy-gs':''}">–</td>`).join('')}${tail(T)}</tr></tfoot></table>`
     :`<div class="empty-state"><h2>No parties for the selected Trend / Search.</h2>${ST.q||ST.trend!=='ALL'?'<button type="button" class="btn btn-sm btn-outline" data-hy-clr>Clear search and Trend</button>':''}</div>`;
-  more.innerHTML=`<div class="panel-sub" style="margin-top:6px">Avg / month = business ÷ active months (completed months with business): ${esc(hLab(cur))} has ${nC} completed month${nC===1?'':'s'} in the data (${[...curDone].sort((a,b)=>a-b).map(i=>MN[i%12]+'-'+String(Math.floor(i/12)).slice(2)).join(', ')||'none'}); the running month is in the half-year total but not in the average. "–" in a half-year column = no data loaded for that half-year yet.${list.length>ST.show?` Showing ${N(ST.show)} of ${N(list.length)} parties. <button type="button" class="btn btn-sm btn-outline" data-hy-more>Show 200 more</button>`:''}</div>`;
+  more.innerHTML=`<div class="panel-sub" style="margin-top:6px">Avg / month = business ÷ active months (completed months with business): ${esc(hLab(cur))} has ${nC} completed month${nC===1?'':'s'} in the data (${[...curDone].sort((a,b)=>a-b).map(i=>MN[i%12]+'-'+String(Math.floor(i/12)).slice(2)).join(', ')||'none'}); the running month is in the half-year total but not in the average. "–" in a half-year column = no data loaded for that half-year yet.</div>${!full&&list.length>ST.show?`<div class="hy-more">Showing ${N(ST.show)} of ${N(list.length)} rows · <button type="button" class="btn btn-sm btn-outline" data-hy-more>Show 200 more</button> <button type="button" class="btn btn-sm btn-outline" data-hy-more-all>Show all</button></div>`:''}`;
   if(window.GRYear&&!has(cols[0])) GRYear.note(more,'');
 }
 window.renderHalfYear=function(){ try{ draw(); }catch(e){ console.error('Half-Yearly Business',e); } };
+window.__hyDrawNow=()=>draw(undefined,true);
+/* a browser can still drop a saved email into the box: clear it */
+const unfill=()=>{ const i=document.querySelector('#hy-yield [data-hy-q]'); if(i&&/@/.test(i.value)){ i.value=''; } };
+[400,1200,3000].forEach(t=>setTimeout(unfill,t)); document.addEventListener('animationstart',unfill,true); setInterval(unfill,2000);
 })();
 </script>
 
