@@ -448,9 +448,27 @@ window.GRLazy = (function(){
       pend.set(el, fn); el.classList.add('lazy-wait'); io.observe(el);
       return true;
     },
-    pending(){ return pend.size; }
+    /* same for a group of tables drawn together: drawn now if any of them is near the screen, else when the first one comes near */
+    deferAll(els, fn){
+      els = (els||[]).filter(Boolean); if (!io || !els.length) return false;
+      const drop = ()=>els.forEach(e=>{ if (pend.has(e)){ pend.delete(e); io.unobserve(e); e.classList.remove('lazy-wait'); } });
+      if (els.some(near)){ drop(); return false; }
+      const once = ()=>{ drop(); fn(); };
+      els.forEach(e=>{ pend.set(e, once); e.classList.add('lazy-wait'); io.observe(e); });
+      return true;
+    },
+    /* draw now if el is near the screen, else when it comes near (el = the table's panel) */
+    run(el, fn){ const p = el && el.closest ? (el.closest('.panel')||el) : null; if (!p || !this.defer(p, ()=>{ try{ fn(); }catch(x){ console.error('Lazy draw', x); } })) fn(); },
+    pending(){ return pend.size; },
+    /* draw everything that is waiting (used before a download / print, so files never miss a table) */
+    flush(){ const fns=new Set(pend.values()); pend.forEach((f,e)=>{ io.unobserve(e); e.classList.remove('lazy-wait'); }); pend.clear(); fns.forEach(f=>{ try{ f(); }catch(x){ console.error('Lazy draw', x); } }); }
   };
 })();
+/* a download / export / print click draws the waiting tables first (capture phase = before the button's own handler) */
+document.addEventListener('click', e=>{
+  const b = e.target && e.target.closest && e.target.closest('button,a,[role="menuitem"],[data-xm],.xm-item,li');
+  if (b && window.GRLazy && GRLazy.pending() && /excel|xlsx|pdf|ppt|download|export|print|⬇/i.test((b.textContent||'')+' '+(b.title||'')+' '+(b.id||''))) GRLazy.flush();
+}, true);
 window.GRSpeed = (function(){
   const C = new Map();
   const fsig = ()=>{ try{ return typeof filterSig_==='function' ? filterSig_({...App.filters,globalMonth:'',dateFrom:null,dateTo:null}) : JSON.stringify(App.filters); }catch(e){ return String(Math.random()); } };
@@ -8667,7 +8685,7 @@ table.datatable tbody tr:hover .sticky-hier{background:#edf5fc!important;}
   function hierarchyStrip(panel,wrapId,getText){if(!panel||panel.querySelector('.v29-hierarchy-strip'))return;const wrap=document.getElementById(wrapId);if(!wrap)return;const d=document.createElement('div');d.className='v29-hierarchy-strip';d.innerHTML='HIERARCHY: <span class="value">'+esc(getText())+'</span>';wrap.parentNode.insertBefore(d,wrap);}
   function enhance(){document.querySelectorAll('.panel').forEach(titleDownloads);hierarchyStrip(document.getElementById('momPanel'),'momCombinedWrap',()=>hierarchyName(App.momHierarchyLevels||[]));hierarchyStrip(document.getElementById('yieldDayWeekPanel'),'yieldDayWeekWrap',()=>hierarchyName(App.yieldHierarchyLevels||[]));document.querySelectorAll('.table-scroll table').forEach(t=>{try{v29SmartFilters(t);}catch(_){}});}
 
-  const _oldMom=renderMomPage;renderMomPage=function(){_oldMom();insertWeekly();renderWeeklyHier();renderWeekly();insertLoadTypeMom();renderLoadTypeMom();enhance();};window.renderMomPage=renderMomPage;
+  const _oldMom=renderMomPage;renderMomPage=function(){_oldMom();insertWeekly();renderWeeklyHier();if(window.GRLazy)GRLazy.run(document.getElementById('momWeeklyWrap'),renderWeekly);else renderWeekly();insertLoadTypeMom();if(window.GRLazy)GRLazy.run(document.getElementById('momLoadTypeWrap'),renderLoadTypeMom);else renderLoadTypeMom();enhance();};window.renderMomPage=renderMomPage;
   window.addEventListener('load',()=>{
     insertWeekly();insertLoadTypeMom();enhance();
     document.getElementById('momCombinedWrap')?.addEventListener('click',e=>{if(e.target.closest('[data-v12mom]'))setTimeout(renderWeekly,0);});
@@ -16277,7 +16295,7 @@ RCX.render=function(){
   document.querySelectorAll('#rcxPanel a.rcx-cr').forEach(x=>x.onclick=()=>{ RCX.crumb[x.dataset.w]=RCX.crumb[x.dataset.w].slice(0,+x.dataset.i); RCX.render(); });
 
   renderComponents(A);
-  renderActions(A);
+  { const ap=$('rcxActPanel'); if(!(ap&&window.GRLazy&&GRLazy.defer(ap,()=>{ try{ if(LAST===A) renderActions(A); else RCX.render(); }catch(e){ console.error('RCX actions',e); } }))) renderActions(A); }
 };
 
 function wire(which, paths, A){
@@ -17086,7 +17104,7 @@ function grBadge(){ const pg=$('pagerGr'); if(!pg) return; const m=(pg.textConte
   b.textContent=m?Number(m[1].replace(/,/g,'')).toLocaleString('en-IN')+' GRs':''; b.style.display=m?'':'none'; }
 (function(){ const pg=document.getElementById('pagerGr'); if(pg) new MutationObserver(grBadge).observe(pg,{childList:true,subtree:true,characterData:true}); })();
 function afterRender(){ try{ const k=document.querySelector('.tab.active')?.dataset.page;
-  if(k==='mom'){ renderMomExtra(); renderGrtMom(); }
+  if(k==='mom'){ const L=window.GRLazy; if(L){ L.run($('momx'),renderMomExtra); L.run($('grtMom'),renderGrtMom); } else { renderMomExtra(); renderGrtMom(); } }
   if(k==='yield') renderGrtYield();
   if(k==='gr') grBadge(); }catch(e){ console.error('v33 extras',e); } }
 window.__v33After=afterRender;
@@ -17677,9 +17695,11 @@ function m4(all){
   put(p,`Total Freight (₹ Cr) · ${PRODUCTS.find(x=>x[0]===ST.m4p)[1]}`,ctl,h+'</table>');
 }
 
-function render(){
+function render(now){
   const pg=document.querySelector('.tab.active')?.getAttribute('data-page');
   if((pg!=='mom'&&pg!=='yield')||!App.rows||!App.rows.length) return;
+  /* drawn when one of these tables is on (or near) the screen */
+  if(now!==true&&window.GRLazy&&GRLazy.deferAll([...document.querySelectorAll('#page-'+pg+' .mrm-panel')],()=>render(true))) return;
   try{
     const all=noMonthFilter(), anchor=anchorMonth(all,pg);
     if(pg==='mom'){ m1(all,anchor); m2(all,anchor); m3(all); y3m(all); m4(all); }
