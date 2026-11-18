@@ -2,7 +2,7 @@
  * Cloudflare R2: a copy of every verified half-year archive, for the dashboard website.
  *
  * Archive.gs builds each finished half-year (Drive sheet + gzip JSON, verified). At the end of every
- * archive run, GRA_r2Sync_ sends each CURRENT gzip JSON that R2 does not have yet (or has an older
+ * archive run, GRA_r2Sync_ sends each CURRENT gzip JSON of an ended financial year that R2 does not have yet (or has an older
  * version of) to the R2 bucket, plus a small index:
  *     archive/GR_MASTER_FY25-26_H1.json.gz
  *     archive/index.json      { updatedAt, periods: { FY25-26_H1: { label, start, end, rows, hash, bytes, at } } }
@@ -80,15 +80,15 @@ function R2_uploadNow() {
 
 /**
  * Called at the end of every finished archive run (Archive.gs GRA_run_). Uploads each CURRENT half-year
- * JSON whose R2 copy is missing or older, then rewrites archive/index.json. Returns a line for the log.
+ * JSON of an ended financial year (R2_closedFy_) whose R2 copy is missing or older, then rewrites archive/index.json. Returns a line for the log.
  * Never throws: a failed upload is logged and mailed, the Drive archive is not touched.
  */
 function GRA_r2Sync_(ss, s, t0, force) {
   var c = R2_cfg_();
   if (!c) return '';
   var p = PropertiesService.getScriptProperties(), sent = [], failed = [], waiting = 0, current = {};
-  GRA_registry_(ss).forEach(function (x) { if (x.status === 'CURRENT' && x.part === 'JSON') current[x.key] = x; });
-  var keys = Object.keys(current).sort().reverse();   // newest half-years first: those are the ones the dashboard asks for
+  GRA_registry_(ss).forEach(function (x) { if (x.status === 'CURRENT' && x.part === 'JSON' && R2_closedFy_(x.key)) current[x.key] = x; });
+  var keys = Object.keys(current).sort();   // oldest first (FY25-26 H1, H2, ...); the running FY is not sent
   for (var i = 0; i < keys.length; i++) {
     var key = keys[i], fp = GRA_storedFp_(key);
     if (!fp) continue;
@@ -109,8 +109,9 @@ function GRA_r2Sync_(ss, s, t0, force) {
     }
   }
   var out = [];
-  if (sent.length || force) {
-    try { R2_writeIndex_(c, current); } catch (e) { failed.push('index.json (' + String(e && e.message || e).slice(0, 200) + ')'); }
+  var listed = keys.join(',');   // the index is also rewritten when the list of periods changes (e.g. a FY moved out)
+  if (sent.length || force || p.getProperty('GRA_R2_INDEX') !== listed) {
+    try { R2_writeIndex_(c, current); p.setProperty('GRA_R2_INDEX', listed); } catch (e) { failed.push('index.json (' + String(e && e.message || e).slice(0, 200) + ')'); }
   }
   if (sent.length) out.push('R2: copied ' + sent.join(', '));
   if (waiting) { out.push('R2: ' + waiting + ' half-year(s) left, continues in 1 min'); GRA_scheduleContinue_(1); }
@@ -123,6 +124,17 @@ function GRA_r2Sync_(ss, s, t0, force) {
   }
   if (!out.length && force) out.push('R2 already has every archived half-year (' + keys.length + ').');
   return out.join(' | ');
+}
+
+/**
+ * Only half-years of a financial year that has ended go to R2 (FY25-26 and older today). The running FY
+ * still changes and the dashboard gets it from the engine; its half-years go to R2 after 31 March.
+ */
+function R2_closedFy_(periodKey) {
+  var m = String(periodKey).match(/^FY(\d\d)-/);
+  if (!m) return false;
+  var now = new Date(), fy = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+  return 2000 + Number(m[1]) < fy;
 }
 
 function R2_fileKey_(periodKey) { return R2_PREFIX + 'GR_MASTER_' + periodKey + '.json.gz'; }
