@@ -7,6 +7,8 @@
  *    Type      Consignor / Consignee / Customer
  *    Status    APPROVED (Spelling is shown as Group) or SEPARATE (kept as its own company)
  *              or REVOKED (an earlier merge was undone: the spelling is pending again; kept for history)
+ *              REVOKED keeps the group it left in Group: the dashboard shows it in a To decide card with that
+ *              group and does not club it by Unique ID on its own. Approving it again simply overwrites the row.
  *
  * Consignor spellings with the same PAN (master column CONSIGNOR UNIQUE ID) are clubbed by the dashboard
  * itself, with no row here. A row always wins over the PAN, so an old merge must be revoked first.
