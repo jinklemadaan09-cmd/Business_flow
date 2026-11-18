@@ -10891,7 +10891,8 @@ function pwtAmPicker(lbl){
   };
   pop.onclick=e=>e.stopPropagation();
 }
-function renderPWT(){
+function renderPWT(){ return window.TM?TM.run('pwt',renderPWT_):renderPWT_(); }
+function renderPWT_(){
   ywSelect();
   const wrap=$(PWT_ID); if(!wrap) return;
   hierStrip(wrap);
@@ -11313,7 +11314,8 @@ function yltPeriods(months,mode){
   P.forEach(p=>{ if(mode==='week') p.head=`${p.label.replace(/^W/,'Wk')} · ${MN[+p.mk.slice(5)-1]}`; else if(mode==='day') p.head=`${p.from} ${MN[+p.mk.slice(5)-1]}`; else p.head=p.label; });
   return {P,key};
 }
-function renderYLT(){
+function renderYLT(){ return window.TM?TM.run('ylt',renderYLT_):renderYLT_(); }
+function renderYLT_(){
   const wrap=ensureYLT(); if(!wrap) return;
   const ch=$('yltChart'), mode=App.yltMode;
   document.querySelectorAll('#yltView [data-v]').forEach(x=>x.classList.toggle('active',x.dataset.v===mode));
@@ -11463,7 +11465,8 @@ function zlHierOpts(){
     btn.innerHTML=esc(sel.length?sel.map(zlName).join(' › '):(key==='rows'?'Grand Total only':'Total only'))+' <span>▾</span>';
   });
 }
-function renderZL(){
+function renderZL(){ window.__renderZL=renderZL; return window.TM?TM.run('zl',renderZL_):renderZL_(); }
+function renderZL_(){
   const wrap=ensureZL(); if(!wrap) return;
   const S=App.zl;
   document.querySelectorAll('#zlPeriod [data-v]').forEach(x=>x.classList.toggle('active',x.dataset.v===S.period));
@@ -14999,6 +15002,103 @@ if(typeof _rap==='function'){
 window.__tillDate = { range, banner };
 })();
 </script>
+<style id="tmCss">
+#xmMenu .tm-sec{border-top:1px solid #e6ebf0;margin-top:4px;padding:2px 0 2px}
+#xmMenu .tm-h{font-size:9.5px;font-weight:800;color:#0a3159;letter-spacing:.05em;text-transform:uppercase;padding:8px 9px 3px}
+#xmMenu .tm-note{font-size:10px;color:#66758a;padding:0 9px 3px;line-height:1.3}
+#xmMenu .tm-sec label{display:flex;gap:7px;align-items:center;padding:4px 9px;font-size:12px;color:#182536;cursor:pointer;border-radius:6px}
+#xmMenu .tm-sec label:hover{background:#f1f6fb}
+#xmMenu .tm-sec input{appearance:auto!important;width:13px!important;height:13px!important;margin:0;flex:none}
+#xmMenu .tm-sec label b.d{color:#1a7f42}
+#xmMenu .tm-grid{display:grid;grid-template-columns:1fr 1fr}
+#xmMenu .tm-grid label{font-size:11.5px;padding:3px 9px}
+#xmMenu .tm-act{display:flex;gap:6px;padding:6px 6px 2px;border-top:1px solid #e6ebf0;margin-top:4px}
+#xmMenu .tm-act span{flex:1;text-align:center;height:26px;line-height:26px;border:1px solid #c7d3df;border-radius:6px;background:#fff;color:#0a5f9e;font-size:11px;font-weight:700;cursor:pointer}
+#xmMenu .tm-act span.ap{background:#0a3159;border-color:#0a3159;color:#fff}
+#xmMenu.tm-wide{width:270px!important}
+</style>
+<script id="tableMonthsJs">
+(function(){
+'use strict';
+/* =====================================================================
+   TABLE MONTHS — some tables pick their own months from the ⋯ menu and
+   ignore the top Month filter. Nothing picked = Last 6 months.
+   Other top filters (zone, branch, customer, load type, dates) still apply.
+   ===================================================================== */
+const LS='grpnl_tblmonths_v1';
+const TABLES={
+  pwt:{sel:'#yieldDayWeekPanel',narrow:()=>(App.yieldDayWeek||{}).mode==='day',redraw:()=>window.renderYieldDayWeekTable&&window.renderYieldDayWeekTable()},
+  ylt:{sel:'#yieldLoadTypePanel',narrow:()=>App.yltMode==='day',redraw:()=>window.renderYieldLoadType&&window.renderYieldLoadType()},
+  y3:{sel:'#mrmY3y',redraw:()=>{ const s=document.querySelector('#mrmY3y select[data-mrm]'); if(s) s.dispatchEvent(new Event('change',{bubbles:true})); }},
+  nbd:{sel:'#nbd-yield',redraw:()=>window.renderNbd&&window.renderNbd('yield')},
+  trend:{sel:'#page-trend',redraw:()=>window.renderTrendV33&&window.renderTrendV33()},
+  zl:{sel:'#zlPanel',redraw:()=>window.__renderZL&&window.__renderZL()}
+};
+let cfg={}; try{ cfg=JSON.parse(localStorage.getItem(LS)||'{}')||{}; }catch(e){ cfg={}; }
+const save=()=>{ try{ localStorage.setItem(LS,JSON.stringify(cfg)); }catch(e){} };
+const MODES=[['l6','Last 6 months'],['l3','Last 3 months'],['l12','Last 12 months'],['fy','This FY till date'],['top','Same as top Month filter']];
+const allM=()=>(App.months||[]).map(m=>m.key).filter(Boolean).sort();
+const mLab=k=>{ const m=(App.months||[]).find(x=>x.key===k); return m?m.label:k; };
+const fyOf=k=>{ const y=+k.slice(0,4), m=+k.slice(5); return m>=4?y:y-1; };
+const fyLab=y=>`FY ${y}-${String(y+1).slice(2)}`;
+function mode(key){ const c=cfg[key]; return c&&c.mode?c.mode:'l6'; }
+function months(key){
+  const md=mode(key), a=allM(); if(!a.length||md==='top') return null;
+  if(md==='pick'){ const have=new Set(a), s=((cfg[key]||{}).months||[]).filter(k=>have.has(k)).sort(); if(s.length) return s; return a.slice(-6); }
+  if(md==='l3') return a.slice(-3);
+  if(md==='l12') return a.slice(-12);
+  if(md==='fy'){ const fy=fyOf(a[a.length-1]); return a.filter(k=>fyOf(k)===fy); }
+  return a.slice(-6);
+}
+function modeLabel(key){ const md=mode(key); if(md==='pick'){ const s=months(key)||[]; return s.length===1?mLab(s[0]):s.length+' months picked'; } return (MODES.find(x=>x[0]===md)||MODES[0])[1]; }
+/* run a table's render with its own months in place of the top Month filter */
+function run(key,fn){
+  let ms=months(key); if(!ms) return fn();
+  /* Daily view: only the latest of the table's months, so it stays readable and fast */
+  const t=TABLES[key]; if(t&&t.narrow&&t.narrow()) ms=ms.slice(-1);
+  const f=App.filters, gm=f.globalMonths, g=f.globalMonth;
+  f.globalMonths=ms.slice(); f.globalMonth=ms.length===1?ms[0]:'';
+  try{ return fn(); } finally { f.globalMonths=gm; f.globalMonth=g; }
+}
+function set(key,c){ if(c) cfg[key]=c; else delete cfg[key]; save(); const t=TABLES[key]; try{ t&&t.redraw(); }catch(e){ console.error('Table months',e); } }
+window.TM={run,months,mode,modeLabel,explicit:key=>!!cfg[key],reset:key=>{ if(cfg[key]){ delete cfg[key]; save(); } }};
+
+/* MoM Trends: its own Period chips take over again once clicked */
+document.addEventListener('click',e=>{ if(e.target.closest&&e.target.closest('#page-trend .tr-seg[data-k="period"] button')) window.TM.reset('trend'); },true);
+
+/* ---------------- ⋯ menu section ---------------- */
+function keyOf(btn){ for(const k in TABLES){ if(btn.closest(TABLES[k].sel)) return k; } return null; }
+function section(key,menu){
+  const md=mode(key), cur=new Set(months(key)||[]), a=allM().slice().reverse();
+  const fys=[]; a.forEach(k=>{ const y=fyOf(k); let g=fys.find(x=>x.y===y); if(!g){ g={y,ms:[]}; fys.push(g); } g.ms.push(k); });
+  const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const d=document.createElement('div'); d.className='tm-sec';
+  d.innerHTML=`<div class="tm-h">Table months</div><div class="tm-note">Nothing picked = <b>Last 6 months</b>. The top Month filter doesn't change this table.</div>`
+   +MODES.map(([v,l])=>`<label><input type="radio" name="tmq" value="${v}" ${md===v?'checked':''}> <span>${l}${v==='l6'?' <b class="d">(default)</b>':''}</span></label>`).join('')
+   +fys.map((g,i)=>`<div class="tm-h">${i===0?'Or pick months · ':''}${fyLab(g.y)}</div><div class="tm-grid">${g.ms.map(k=>`<label><input type="checkbox" value="${k}" ${md==='pick'&&cur.has(k)?'checked':''}> <span>${esc(mLab(k))}</span></label>`).join('')}</div>`).join('')
+   +`<div class="tm-act"><span data-tm="clear">Clear → Last 6</span><span class="ap" data-tm="apply">Apply</span></div>`;
+  const close=()=>{ menu.classList.remove('tm-wide'); document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'})); };
+  d.addEventListener('click',e=>e.stopPropagation());
+  d.querySelectorAll('input[type=radio]').forEach(r=>r.onchange=()=>{ close(); set(key,r.value==='l6'?null:{mode:r.value}); });
+  d.querySelector('[data-tm="clear"]').onclick=()=>{ close(); set(key,null); };
+  d.querySelector('[data-tm="apply"]').onclick=()=>{ const v=[...d.querySelectorAll('input[type=checkbox]:checked')].map(x=>x.value); close(); set(key,v.length?{mode:'pick',months:v}:null); };
+  return d;
+}
+(window.__xmExtra=window.__xmExtra||[]).push(btn=>{
+  const key=keyOf(btn); if(!key||!(App.months||[]).length) return [];
+  setTimeout(()=>{
+    const menu=document.getElementById('xmMenu'); if(!menu||!menu.classList.contains('open')||menu.querySelector('.tm-sec')) return;
+    menu.classList.add('tm-wide'); menu.appendChild(section(key,menu));
+    const r=btn.getBoundingClientRect(), mw=menu.offsetWidth, mh=menu.offsetHeight;
+    let left=Math.max(8,Math.min(r.right-mw,innerWidth-mw-8)), top=r.bottom+4;
+    if(top+mh>innerHeight-8) top=Math.max(8,innerHeight-mh-8);
+    menu.style.left=left+'px'; menu.style.top=top+'px';
+  },0);
+  return [];
+});
+})();
+</script>
+
 <style id="rtCss">
 .rt-panel .rt-bar{display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap}
 .rt-sel{position:relative}
@@ -16738,7 +16838,8 @@ function ensure(){
   content.style.display=''; const e=$('emptyTrend'); if(e) e.style.display='none';
   return p;
 }
-function render(){
+function render(){ return window.TM?TM.run('trend',render_):render_(); }
+function render_(){
   if(!App.rows||!App.rows.length) return; const p=ensure(); if(!p) return;
   const rows=baseRows(), have=new Set(rows.map(r=>r.monthKey)), dataMonths=[...have].filter(Boolean).sort();
   if(!dataMonths.length){ p.innerHTML='<div class="tr-empty">No records for the selected filters.</div>'; return; }
@@ -16746,7 +16847,8 @@ function render(){
   /* ONE period for every chart on the page: Last 3 / 6 / 12 months or FY till date, ending at the anchor month */
   const last6=[]; if(S.period==='fytd'){ const y=+anchor.slice(0,4), m=+anchor.slice(5), st=(m>=4?y:y-1)+'-04'; for(let k=st;k<=anchor;k=addM(k,1)) if(have.has(k)) last6.push(k); }
   else { const n=+S.period||6; for(let i=n-1;i>=0;i--){ const k=addM(anchor,-i); if(have.has(k)) last6.push(k); } }
-  const PLAB={'3':'Last 3 months','6':'Last 6 months','12':'Last 12 months','fytd':'FY till date'}[S.period]||'Last 6 months';
+  const __tx=window.TM&&TM.explicit('trend')&&TM.months('trend'); if(__tx){ last6.length=0; __tx.filter(k=>have.has(k)).forEach(k=>last6.push(k)); }
+  const PLAB=__tx?TM.modeLabel('trend'):({'3':'Last 3 months','6':'Last 6 months','12':'Last 12 months','fytd':'FY till date'}[S.period]||'Last 6 months');
   const pick=last6, perTxt=(last6.length?mSh(last6[0])+' – '+mSh(last6[last6.length-1]):'')+' ('+last6.length+' month'+(last6.length===1?'':'s')+')', pickLab=perTxt;
   const capOf=k=>{ try{ const c=momEffectiveMaxDay(k); return c<dim(k)?c:0; }catch(e){ return 0; } };
   const part=last6.map(k=>capOf(k)?('till '+capOf(k)+' '+MN[+k.slice(5)-1]):'');
@@ -17485,17 +17587,19 @@ function y3(all,anchor){
   const p=panel('yield','mrmY3y','Booking Zone × Destination Zone'); if(!p) return;
   const k=ST.y3m, M=MEAS[k], pm=(App.baseMonth&&App.baseMonth!==anchor)?App.baseMonth:prevMonth(anchor);
   const ctl=lab('Measure',sel('y3m',Object.keys(MEAS).map(x=>[x,MEAS[x].l+(MEAS[x].u?' ('+MEAS[x].u+')':'')]),k))+lab('Product',sel('y3p',PRODUCTS,ST.y3p));
-  const rows=all.filter(r=>inProd(r,ST.y3p)), cur=rows.filter(r=>r.monthKey===anchor), prv=rows.filter(r=>r.monthKey===pm);
-  if(!cur.length) return put(p,mlab(anchor),ctl,empty);
+  const rows=all.filter(r=>inProd(r,ST.y3p)), __t=window.TM?TM.months('y3'):null, __c=new Set(__t||[anchor]), __p=new Set(); { let k=(__t||[anchor])[0]; for(let i=0;i<__c.size;i++){ k=prevMonth(k); __p.add(k); } } if(!__t) { __p.clear(); __p.add(pm); }
+  const __rl=ks=>{ ks=[...ks].sort(); return ks.length===1?mlab(ks[0]):mlab(ks[0])+' – '+mlab(ks[ks.length-1]); }, __cL=__rl(__c), __pL=__rl(__p);
+  const cur=rows.filter(r=>__c.has(r.monthKey)), prv=rows.filter(r=>__p.has(r.monthKey));
+  if(!cur.length) return put(p,__cL,ctl,empty);
   const O=zoneOrder(cur), D=destOrder(cur), dz=r=>(r.destzone||'').toUpperCase();
   const cell=(rs)=>M.f(A(rs)), G=M.f(A(cur));
-  let h=`<table class="mrm-table"><tr><th class="l">Booking Zone</th>${D.map(d=>`<th title="${esc(d)}">${esc(short(d))}</th>`).join('')}<th>Grand Total</th>${M.add?'<th>Share %</th>':''}<th>Variance % vs ${mlab(pm)}</th></tr>`;
+  let h=`<table class="mrm-table"><tr><th class="l">Booking Zone</th>${D.map(d=>`<th title="${esc(d)}">${esc(short(d))}</th>`).join('')}<th>Grand Total</th>${M.add?'<th>Share %</th>':''}<th>Variance % vs ${__pL}</th></tr>`;
   O.forEach(o=>{ const ro=cur.filter(r=>r.originzone===o), po=prv.filter(r=>r.originzone===o), v=cell(ro);
     h+=`<tr><td class="l">${esc(o)}</td>${D.map(d=>{ const rs=ro.filter(r=>dz(r)===d); return rs.length?`<td${gr(rs,short(d))}>${fv(k,cell(rs))}</td>`:'<td class="na">—</td>'; }).join('')}
-      <td${gr(ro)}><b>${fv(k,v)}</b></td>${M.add?`<td>${n2(sd(v,G)*100,1)}%</td>`:''}<td${gr(po.concat(ro),mlab(pm)+' + '+mlab(anchor))}>${chg(k,cell(po),v)}</td></tr>`; });
-  h+=`<tr class="mrm-tot"><td class="l">GRAND TOTAL</td>${D.map(d=>{ const rs=cur.filter(r=>dz(r)===d); return `<td${gr(rs,short(d))}>${fv(k,cell(rs))}</td>`; }).join('')}<td${gr(cur)}>${fv(k,G)}</td>${M.add?'<td>100%</td>':''}<td${gr(prv.concat(cur),mlab(pm)+' + '+mlab(anchor))}>${chg(k,cell(prv),G)}</td></tr>`;
+      <td${gr(ro)}><b>${fv(k,v)}</b></td>${M.add?`<td>${n2(sd(v,G)*100,1)}%</td>`:''}<td${gr(po.concat(ro),__pL+' + '+__cL)}>${chg(k,cell(po),v)}</td></tr>`; });
+  h+=`<tr class="mrm-tot"><td class="l">GRAND TOTAL</td>${D.map(d=>{ const rs=cur.filter(r=>dz(r)===d); return `<td${gr(rs,short(d))}>${fv(k,cell(rs))}</td>`; }).join('')}<td${gr(cur)}>${fv(k,G)}</td>${M.add?'<td>100%</td>':''}<td${gr(prv.concat(cur),__pL+' + '+__cL)}>${chg(k,cell(prv),G)}</td></tr>`;
   if(M.add) h+=`<tr class="mrm-share"><td class="l">Share %</td>${D.map(d=>`<td>${n2(sd(cell(cur.filter(r=>dz(r)===d)),G)*100,1)}%</td>`).join('')}<td>100%</td><td></td><td></td></tr>`;
-  put(p,`${mlab(anchor)} · ${M.l}${M.u?' ('+M.u+')':''}`,ctl,h+'</table>');
+  put(p,`${__cL} · ${M.l}${M.u?' ('+M.u+')':''}`,ctl,h+'</table>');
 }
 /* MoM version: base vs comparison month for every cell */
 function y3m(all){
@@ -18799,7 +18903,8 @@ function fixHead(wrap){ const t=wrap&&wrap.querySelector('table'); if(!t||!t.tHe
   if(t.tFoot) [...t.tFoot.rows].forEach(r=>[...r.cells].slice(0,L).forEach((c,i)=>set(c,i,16,'#eaf0f8')));
 }
 
-function renderYield(){
+function renderYield(){ return window.TM?TM.run('nbd',renderYield_):renderYield_(); }
+function renderYield_(){
   const p=panelFor('yield'); if(!p) return; const st=ST.yield; st.levels=st.levels||[]; st.exp=st.exp||new Set(); st.tag=st.tag||'ALL';
   if(!Array.isArray(st.sumLv)||!st.sumLv.length) st.sumLv=['originzone'];
   metOf(st);
@@ -18838,7 +18943,8 @@ function renderYield(){
   /* ---- 3. Month on Month (below the by-party table): all months, ignores the Month / Date filter; levels before Month ---- */
   { const PF0=PARTY.map(x=>x[0]).concat(['grno']);
     const mlv=(st.mLv||[]).filter(f=>!PF0.includes(f)).map(f=>[f,hLbl(f)]), ML=mlv.length;
-    const mrs=(typeof filterRowsCached==='function'?filterRowsCached({...App.filters,globalMonth:'',dateFrom:null,dateTo:null}):all).filter(r=>r.monthKey);
+    const __tm=window.TM&&TM.months('nbd')?new Set(TM.months('nbd')):null;
+    const mrs=(typeof filterRowsCached==='function'?filterRowsCached({...App.filters,globalMonth:'',dateFrom:null,dateTo:null}):all).filter(r=>r.monthKey&&(!__tm||__tm.has(r.monthKey)));
     const T2=tagRows(mrs,st,'yield').TG;
     const MMS=[...new Set(mrs.map(r=>mi(r.monthKey)))], MLST=lostList(st,MMS);
     const mg=(a,f,m,G)=>{ const b=a[G[0]], gf=Object.assign({},f,G[4]);
@@ -18977,6 +19083,7 @@ document.addEventListener('click',e=>{ const t=e.target.closest&&e.target.closes
 .hy-up{color:#1a7f42;font-weight:800}.hy-dn{color:#c0392b;font-weight:800}.hy-dim{color:#9aa8b8}
 .hy-tb{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border:1px solid #bfd0e3;border-radius:4px;background:#eef4fb;color:#0b2545;font-weight:900;cursor:pointer;margin-right:6px;font-size:11px}
 </style>
+<style>.hy-table td.hy-am{text-align:center!important;font-weight:800}.hy-table th.hy-amh{background:#1a7f42!important;text-align:center!important}</style>
 <script id="halfYearJs">
 /* ======================================================================
    Half-Yearly Business (Yield Analysis): Total Freight per half-year for each party,
@@ -19024,7 +19131,7 @@ function panel(){
   });
   return p;
 }
-const node=()=>({h:{},cc:0,kids:null});
+const node=()=>({h:{},cc:0,kids:null,mm:{}});   /* mm: business per month index (for active months) */
 /* equal to the shown precision (₹0.01 Lacs) or under 0.05 % apart = Flat, not Uptrade / Downtrade */
 const flat=(pa,ca)=>Math.abs(ca-pa)<500||Math.abs(ca-pa)/pa*100<0.05;
 function draw(){
@@ -19051,21 +19158,24 @@ function draw(){
     <label>Sort <select data-hy="sort">${opt(SORT,ST.sort)}</select></label>
     <label>Search <input data-hy-q type="search" name="hy-party-search" autocomplete="off" data-lpignore="true" data-form-type="other" placeholder="Party name or any spelling" value="${esc(/@/.test(ST.q||'')?'':ST.q)}"></label>`;
   /* rows: every slicer except Month / Date */
-  const P=window.GRSpeed?GRSpeed.memo('hy',[party,cur,prev,cols.join(','),curM],build_):build_();
+  const P=window.GRSpeed?GRSpeed.memo('hy2',[party,cur,prev,cols.join(','),curM],build_):build_();
   function build_(){
   const fr=typeof filterRowsCached==='function'?filterRowsCached({...App.filters,globalMonth:'',dateFrom:null,dateTo:null}):App.rows;
   const want=new Set(cols.concat([prev]));
   const P=new Map();
-  const add=(n,h,tv,cc)=>{ n.h[h]=(n.h[h]||0)+tv; if(cc) n.cc+=tv; };
+  const add=(n,h,tv,cc,i)=>{ n.h[h]=(n.h[h]||0)+tv; if(cc) n.cc+=tv; if(h===cur||h===prev) n.mm[i]=(n.mm[i]||0)+tv; };
   for(const r of fr){ if(!r.monthKey) continue; const i=mi(r.monthKey), h=halfOf(i); if(!want.has(h)) continue;
     const tv=r.total||0, cc=h===cur&&curDone.has(i);
-    const pk=pv(r,party); let a=P.get(pk); if(!a){ a=node(); a.kids=new Map(); a.raw=new Set(); P.set(pk,a); } add(a,h,tv,cc);
+    const pk=pv(r,party); let a=P.get(pk); if(!a){ a=node(); a.kids=new Map(); a.raw=new Set(); P.set(pk,a); } add(a,h,tv,cc,i);
     const rw=r[party+'Raw']; if(rw!=null&&rw!=='') a.raw.add(String(rw).toUpperCase());
-    const bk=pv(r,'origin'); let b=a.kids.get(bk); if(!b){ b=node(); b.kids=new Map(); a.kids.set(bk,b); } add(b,h,tv,cc);
-    const dk=pv(r,'destname'); let d=b.kids.get(dk); if(!d){ d=node(); b.kids.set(dk,d); } add(d,h,tv,cc); }
+    const bk=pv(r,'origin'); let b=a.kids.get(bk); if(!b){ b=node(); b.kids=new Map(); a.kids.set(bk,b); } add(b,h,tv,cc,i);
+    const dk=pv(r,'destname'); let d=b.kids.get(dk); if(!d){ d=node(); b.kids.set(dk,d); } add(d,h,tv,cc,i); }
   return P;
   }
-  const calc=n=>{ const pa=nP?(n.h[prev]||0)/nP:0, ca=nC?n.cc/nC:0;
+  const prevDone=done(prev);
+  /* average = business ÷ months the party gave business (completed months only) */
+  const calc=n=>{ let sp=0,ap=0,sc=0,ac=0; for(const i of prevDone){ const v=n.mm[i]||0; if(v>1e-9){ sp+=v; ap++; } } for(const i of curDone){ const v=n.mm[i]||0; if(v>1e-9){ sc+=v; ac++; } }
+    const pa=ap?sp/ap:0, ca=ac?sc/ac:0; n.ap=ap; n.ac=ac;
     const t=pa<=1e-9&&ca<=1e-9?'':pa<=1e-9?'nw':ca<=1e-9?'nb':flat(pa,ca)?'sm':ca>pa?'up':'dn';
     n.pa=pa; n.ca=ca; n.t=t; n.d=ca-pa; return n; };
   const all=[...P.entries()].map(([v,n])=>{ calc(n); n.v=v; return n; });
@@ -19083,7 +19193,7 @@ function draw(){
   const runTxt=id=>{ if(!lastD) return hSpan(id); const li=lastD.getFullYear()*12+lastD.getMonth(); if(halfOf(li)!==id||li>=hMonths(id)[5]&&li<curM) return hSpan(id); return MN[hMonths(id)[0]%12]+'–'+lastD.getDate()+' '+MN[lastD.getMonth()]; };
   const cell=(n,id,f)=>has(id)?(n.h[id]?`<td class="hy-d${id===cols[0]?' hy-gs':''}" data-hy-f="${esc(JSON.stringify(f))}" data-hy-m="${esc(JSON.stringify(mKeys(id)))}" title="Click to open these GRs">${id===cur||id===prev?'<b>'+L(n.h[id])+'</b>':L(n.h[id])}</td>`:`<td class="${id===cols[0]?'hy-gs':''}">–</td>`):`<td class="hy-dim${id===cols[0]?' hy-gs':''}" title="No data loaded for this half-year">–</td>`;
   const tail=n=>{ const ch=n.pa>1e-9?(n.t==='sm'?0:n.d/n.pa*100):null;
-    return `<td class="hy-gs">${nP?(n.pa?L(n.pa):'–'):'<span class="hy-dim">–</span>'}</td><td>${n.ca?L(n.ca):'–'}</td><td class="${ch==null?'':ch>0?'hy-up':ch<0?'hy-dn':''}">${ch==null?'—':(ch>0?'+':'')+ch.toFixed(1)+'%'}</td><td>${n.t?`<span class="hy-tg ${n.t}">${TXT[n.t]}</span>`:''}</td>`; };
+    return `<td class="hy-gs">${nP?(n.pa?L(n.pa):'–'):'<span class="hy-dim">–</span>'}</td><td>${n.ca?L(n.ca):'–'}</td><td class="${ch==null?'':ch>0?'hy-up':ch<0?'hy-dn':''}">${ch==null?'—':(ch>0?'+':'')+ch.toFixed(1)+'%'}</td><td>${n.t?`<span class="hy-tg ${n.t}">${TXT[n.t]}</span>`:''}</td><td class="hy-gs hy-am">${nP?n.ap:'–'}</td><td class="hy-am">${n.ac}</td>`; };
   const cnt=(m,w)=>m.size===1?esc([...m.keys()][0]):N(m.size)+' '+w;
   let body='';
   const shown=list.slice(0,ST.show);
@@ -19099,13 +19209,13 @@ function draw(){
       const ds=[...b.kids.entries()].map(([v,d])=>{ calc(d); d.v=v; return d; }).sort(srt);
       for(const d of ds) body+=`<tr class="hy-l2"><td class="hier"><span style="display:inline-block;width:64px"></span>${esc(d.v)}</td><td class="hier">${esc(b.v)}</td><td class="hier">${esc(d.v)}</td>${cols.map(id=>cell(d,id,{...f1,destname:d.v})).join('')}${tail(d)}</tr>`; } }
   /* grand total of the listed parties */
-  const T=node(); const tIds=[...new Set(cols.concat([prev]))]; list.forEach(n=>{ tIds.forEach(id=>{ if(n.h[id]) T.h[id]=(T.h[id]||0)+n.h[id]; }); T.cc+=n.cc; }); calc(T);
+  const T=node(); const tIds=[...new Set(cols.concat([prev]))]; list.forEach(n=>{ tIds.forEach(id=>{ if(n.h[id]) T.h[id]=(T.h[id]||0)+n.h[id]; }); T.cc+=n.cc; for(const i in n.mm) T.mm[i]=(T.mm[i]||0)+n.mm[i]; }); calc(T);
   const u='<span class="unit-head">Lacs</span>', pl=PARTY.find(x=>x[0]===party)[1];
   const hh=id=>`<th class="${id===cur?'hy-c':id===prev?'hy-p':''}${id===cols[0]?' hy-gs':''}">${hLab(id)}<br><span style="font-weight:600;text-transform:none">${id===cur?runTxt(id):hSpan(id)}</span>${u}</th>`;
-  wrap.innerHTML=list.length?`<table class="yield-table hy-table"><thead><tr><th class="hier">${esc(pl)}</th><th class="hier">Branch</th><th class="hier">Destination</th>${cols.map(hh).join('')}<th class="hy-t hy-gs">Avg / month<br>${esc(hLab(prev))} (${nP} mo)${u}</th><th class="hy-t">Avg / month<br>${esc(hLab(cur))} (${nC} mo)${u}</th><th class="hy-t">Change %</th><th class="hy-t">Trend</th></tr></thead>
+  wrap.innerHTML=list.length?`<table class="yield-table hy-table"><thead><tr><th class="hier">${esc(pl)}</th><th class="hier">Branch</th><th class="hier">Destination</th>${cols.map(hh).join('')}<th class="hy-t hy-gs">Avg / month<br>${esc(hLab(prev))}${u}</th><th class="hy-t">Avg / month<br>${esc(hLab(cur))}${u}</th><th class="hy-t">Change %</th><th class="hy-t">Trend</th><th class="hy-t hy-amh hy-gs">Active months<br>${esc(hLab(prev))}</th><th class="hy-t hy-amh">Active months<br>${esc(hLab(cur))}</th></tr></thead>
     <tbody>${body}</tbody><tfoot><tr><td class="hier">TOTAL (${N(list.length)} ${esc(pl)}s)</td><td class="hier"></td><td class="hier"></td>${cols.map(id=>has(id)?`<td${id===cols[0]?' class="hy-gs"':''}>${T.h[id]?L(T.h[id]):'–'}</td>`:`<td class="hy-dim${id===cols[0]?' hy-gs':''}">–</td>`).join('')}${tail(T)}</tr></tfoot></table>`
     :`<div class="empty-state"><h2>No parties for the selected Trend / Search.</h2>${ST.q||ST.trend!=='ALL'?'<button type="button" class="btn btn-sm btn-outline" data-hy-clr>Clear search and Trend</button>':''}</div>`;
-  more.innerHTML=`<div class="panel-sub" style="margin-top:6px">Avg / month uses completed months only: ${esc(hLab(cur))} has ${nC} completed month${nC===1?'':'s'} in the data (${[...curDone].sort((a,b)=>a-b).map(i=>MN[i%12]+'-'+String(Math.floor(i/12)).slice(2)).join(', ')||'none'}); the running month is in the half-year total but not in the average. "–" in a half-year column = no data loaded for that half-year yet.${list.length>ST.show?` Showing ${N(ST.show)} of ${N(list.length)} parties. <button type="button" class="btn btn-sm btn-outline" data-hy-more>Show 200 more</button>`:''}</div>`;
+  more.innerHTML=`<div class="panel-sub" style="margin-top:6px">Avg / month = business ÷ active months (completed months with business): ${esc(hLab(cur))} has ${nC} completed month${nC===1?'':'s'} in the data (${[...curDone].sort((a,b)=>a-b).map(i=>MN[i%12]+'-'+String(Math.floor(i/12)).slice(2)).join(', ')||'none'}); the running month is in the half-year total but not in the average. "–" in a half-year column = no data loaded for that half-year yet.${list.length>ST.show?` Showing ${N(ST.show)} of ${N(list.length)} parties. <button type="button" class="btn btn-sm btn-outline" data-hy-more>Show 200 more</button>`:''}</div>`;
   if(window.GRYear&&!has(cols[0])) GRYear.note(more,'');
 }
 window.renderHalfYear=function(){ try{ draw(); }catch(e){ console.error('Half-Yearly Business',e); } };
