@@ -483,7 +483,7 @@ window.GRSpeed = (function(){
 })();
 window.GRYear = (function(){
   const KEY = 'grpnl_full_year', MN = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  const S = { full:false, from:null, halfFrom:null, hidden:0, total:0, oldest:null, reapply:null, busy:false };
+  const S = { full:false, from:null, halfFrom:null, hidden:0, total:0, oldest:null, reapply:null, busy:false, arcBusy:false, arcAvail:0, arcMsg:'' };
   try{ S.full = sessionStorage.getItem(KEY)==='1'; }catch(e){}
   const lab = i=>MN[i%12]+'-'+String(Math.floor(i/12)).slice(2);
   /* first month kept: start of the current financial year minus (NBD gap + 1) months */
@@ -511,17 +511,17 @@ window.GRYear = (function(){
   function pill(){
     const meta = document.querySelector('#topHeader .hx-meta'); if (!meta) return;
     let el = document.getElementById('yrPill');
-    const canLoad = S.hidden>0, canTrim = S.full && S.oldest!=null && S.oldest<cutoff();
+    const canLoad = S.hidden>0 || (!S.full && S.arcAvail>0), canTrim = S.full && S.oldest!=null && S.oldest<cutoff();
     if (!canLoad && !canTrim){ if (el) el.remove(); return; }
     if (!el){ el = document.createElement('i'); el.id = 'yrPill'; el.className = 'yr-pill'; meta.appendChild(el);
       el.addEventListener('click', e=>{ if (e.target.closest('button')) toggle(); }); }
     el.classList.toggle('full', !canLoad);
     el.innerHTML = canLoad
-      ? `<span title="${S.hidden.toLocaleString('en-IN')} older GRs are not loaded, so the dashboard stays fast">From ${lab(S.from)}</span><button type="button">${S.busy?'Loading…':'+ Load last year'}</button>`
-      : `<span>All data (${lab(S.oldest)} onward)</span><button type="button" title="Show only the current FY + the months NBD needs (faster)">${S.busy?'…':'Recent only'}</button>`;
+      ? `<span title="${S.hidden ? S.hidden.toLocaleString('en-IN')+' older GRs are not loaded, so the dashboard stays fast' : 'Last year is kept in the archive (Cloudflare R2) and loads on click'}">From ${lab(S.from!=null ? S.from : cutoff())}</span><button type="button">${(S.busy||S.arcBusy)?'Loading…':'+ Load last year'}</button>`
+      : `<span${S.arcMsg?` title="${S.arcMsg.replace(/"/g,'&quot;')}"`:''}>${S.arcMsg?'⚠ ':''}All data (${lab(S.oldest)} onward)</span><button type="button" title="Show only the current FY + the months NBD needs (faster)">${(S.busy||S.arcBusy)?'Loading…':'Recent only'}</button>`;
   }
   function toggle(){
-    if (S.busy || !S.reapply) return;
+    if (S.busy || S.arcBusy || !S.reapply) return;
     S.full = !S.full; try{ sessionStorage.setItem(KEY, S.full?'1':'0'); }catch(e){}
     S.busy = true; pill();
     setTimeout(()=>{ try{ S.reapply(); }catch(e){ console.error('Load last year', e); } S.busy = false; pill(); }, 30);
@@ -9477,6 +9477,83 @@ function smartMap(headers){
   return { mapping, missing };
 }
 
+/* ---------------- last year from the archive in Cloudflare R2 (website only) ----------------
+   The engine archives every finished half-year (Archive.gs) and copies it to R2 (R2.gs). The website
+   function /archive/... serves it after checking the sign-in. "+ Load last year" adds the GRs of the
+   last financial year that the engine data no longer has. A half-year is downloaded once and kept in
+   this browser (IndexedDB) until the archive is rebuilt. On the Apps Script link nothing changes. */
+const ARC = { index:null, asked:false, rows:new Map(), have:{}, loading:null, error:'', di:-1 };
+const ARC_ON = !!window.GR_API_URL && CAN_GUNZIP;
+function arcHalf(d){ const y=d.getFullYear(), m=d.getMonth(), fy=m>=3?y:y-1;
+  return 'FY'+String(fy).slice(2)+'-'+String(fy+1).slice(2)+'_H'+((m>=3&&m<=8)?1:2); }
+async function arcGet(name){
+  const session = (window.GRAuth && GRAuth.active()) ? await GRAuth.ready() : '';
+  const r = await fetch('/archive/'+name, { cache:'no-store', headers:{ 'X-GR-Session': session||'' } });
+  if (!r.ok){ let e='HTTP '+r.status; try{ e=(await r.json()).error||e; }catch(x){} if (e==='LOGIN_REQUIRED' && window.GRAuth) GRAuth.expired(); throw new Error(e); }
+  return r;
+}
+/* half-years of the last FY (and the current one) that R2 has with more GRs than the loaded data */
+function arcWanted(di){
+  const ix = ARC.index && ARC.index.periods; if (!ix || di<0) return [];
+  const now = new Date(), fy = now.getMonth()>=3 ? now.getFullYear() : now.getFullYear()-1;
+  const from = (fy-1)+'-04-01', count = {};
+  for (const r of L.rows.values()){ const d = parseGrDate(r[di]); if (d){ const k = arcHalf(d); count[k] = (count[k]||0)+1; } }
+  return Object.keys(ix).filter(k=>ix[k].end>=from && !ARC.have[k] && (count[k]||0) < (+ix[k].rows||0)).sort();
+}
+function arcAfterApply(di){
+  if (!ARC_ON || typeof parseGrDate!=='function') return;
+  ARC.di = di;
+  if (!ARC.asked){   /* once per page: is there anything in R2 to offer? */
+    ARC.asked = true;
+    arcGet('index.json').then(r=>r.json()).then(j=>{ ARC.index = j; GRYear.S.arcAvail = arcWanted(ARC.di).length; GRYear.pill();
+      if (GRYear.S.full && GRYear.S.arcAvail) arcLoad(); })
+      .catch(e=>{ ARC.error = String(e && e.message || e); console.warn('Archive (R2):', ARC.error); });
+    return;
+  }
+  if (GRYear.S.full && ARC.index && !ARC.loading && arcWanted(di).length) arcLoad();
+}
+function arcLoad(){
+  if (ARC.loading) return ARC.loading;
+  const want = arcWanted(ARC.di); if (!want.length) return Promise.resolve();
+  GRYear.S.arcBusy = true; GRYear.S.arcMsg = ''; GRYear.pill();
+  ARC.loading = (async ()=>{
+    let done = 0, added = 0, fail = [];
+    const hd = L.headers.map(h=>String(h||'').trim()), ki = hd.indexOf(String(L.keyColumn||'').trim());
+    for (const k of want){
+      const meta = ARC.index.periods[k];
+      setStatus(`Archive: loading ${meta.label||k} (${done+1}/${want.length})…`);
+      try{
+        let got = null;
+        try{ const c = await idbGet('grarc_'+k); if (c && c.hash===meta.hash) got = c; }catch(e){}
+        if (!got){
+          const buf = new Uint8Array(await (await arcGet('GR_MASTER_'+k+'.json.gz')).arrayBuffer());
+          const txt = (buf[0]===0x1f && buf[1]===0x8b)
+            ? await new Response(new Blob([buf]).stream().pipeThrough(new DecompressionStream('gzip'))).text()
+            : new TextDecoder().decode(buf);
+          const j = JSON.parse(txt);
+          got = { hash: meta.hash, headers: j.headers, rows: j.rows };
+          idbPut('grarc_'+k, got).catch(()=>{});
+        }
+        /* same column order as the engine data now (columns added later stay blank) */
+        const map = hd.map(h=>(got.headers||[]).map(x=>String(x||'').trim()).indexOf(h));
+        const aki = map[ki];
+        if (ki<0 || aki<0) throw new Error('key column '+L.keyColumn+' not in the archive');
+        for (const src of got.rows){
+          const key = String(src[aki]); if (L.rows.has(key) || ARC.rows.has(key)) continue;
+          ARC.rows.set(key, map.map(i=>i<0 ? '' : (src[i]===undefined ? null : src[i]))); added++;
+        }
+        ARC.have[k] = true;
+      }catch(e){ fail.push((meta.label||k)+': '+(e && e.message || e)); console.warn('Archive (R2)', k, e); }
+      done++;
+    }
+    GRYear.S.arcAvail = arcWanted(ARC.di).length;
+    GRYear.S.arcMsg = fail.length ? 'Archive not loaded: '+fail.join('; ') : '';
+    GRYear.S.arcBusy = false; ARC.loading = null;
+    if (added) applyToDashboard(true); else { setStatus(); GRYear.pill(); }
+  })();
+  return ARC.loading;
+}
+
 /* ---------------- push data into the dashboard ---------------- */
 function applyToDashboard(force){
   if (!L.rows.size) return;
@@ -9486,8 +9563,11 @@ function applyToDashboard(force){
   if (window.GRYear){   /* default: current FY + the months NBD needs; "+ Load last year" adds the rest */
     const hd = L.headers.map(h=>String(h||'').trim());
     const dcol = (App.mapping && App.mapping.grdt && hd.includes(App.mapping.grdt)) ? App.mapping.grdt : (smartMap(hd).mapping.grdt || '');
-    liveRows = GRYear.trim(liveRows, dcol ? hd.indexOf(dcol) : -1);
+    const di = dcol ? hd.indexOf(dcol) : -1;
+    if (GRYear.S.full && ARC.rows.size) for (const [k, r] of ARC.rows) if (!L.rows.has(k)) liveRows.push(r);   /* R2 archive: only GRs the engine no longer sends */
+    liveRows = GRYear.trim(liveRows, di);
     GRYear.S.reapply = ()=>applyToDashboard(true);
+    arcAfterApply(di);
   }
   const aoa = [L.headers.slice()].concat(liveRows);
   const label = 'Live · Google Drive master';

@@ -12,6 +12,8 @@
  *     data changes (a month file replaced, a new join, a new column). Each rebuild is compared with the
  *     previous version and a summary goes to ARCHIVE_CHANGES and by mail. The previous version is kept in
  *     GR_ARCHIVE/old for KEEP_OLD_DAYS days.
+ *     When Cloudflare R2 keys are saved (R2.gs), every verified half-year JSON is also copied to the R2
+ *     bucket at the end of the run, for the dashboard website's "+ Load last year".
  *  3. Mirror trim: rows older than KEEP_MONTHS leave the DASHBOARD_MASTER mirror tab, but only rows whose
  *     GR NO is present in a verified archive. Nothing is removed without a checked copy.
  *
@@ -101,7 +103,11 @@ function GRA_menu_(ui) {
     .addItem('Setup (nightly trigger)', 'GRA_setup')
     .addSeparator()
     .addItem('Open archive folder', 'GRA_openFolder')
-    .addItem('Archive status (optional, it checks itself)', 'GRA_checkFiles');
+    .addItem('Archive status (optional, it checks itself)', 'GRA_checkFiles')
+    .addSeparator()
+    .addItem('Cloudflare R2: save keys', 'R2_saveKeys')
+    .addItem('Cloudflare R2: test connection', 'R2_test')
+    .addItem('Cloudflare R2: upload archive now', 'R2_uploadNow');
 }
 
 /* ------------------------------------------------------------------ main run */
@@ -162,6 +168,10 @@ function GRA_run_(dry, fromMenu) {
         if (heal.rebuild.length) { GRA_scheduleContinue_(1); result.building = true; notes.push('Rebuilding: ' + heal.rebuild.join(', ')); }
         else GRA_statusMail_(s, heal);
         if (heal.fixes.length) notes.push('Fixed: ' + heal.fixes.join('; '));
+        if (!heal.rebuild.length && typeof GRA_r2Sync_ === 'function') {   // R2.gs: copy for the website (only when keys are saved)
+          var r2 = GRA_r2Sync_(ss, s, t0, false);
+          if (r2) notes.push(r2);
+        }
       }
     } else {
       GRA_scheduleContinue_(GRA_engineBusy_() ? 5 : 1);
