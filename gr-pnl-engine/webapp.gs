@@ -126,7 +126,8 @@ function apiCore_(p) {
     parts: partIds.length,
     view: recent ? 'recent' : 'full',
     recentFrom: recent ? state.recentInfo.from : '',
-    r2Halves: recent ? state.recentInfo.halves : []
+    r2Halves: recent ? state.recentInfo.halves : [],
+    frozen: state.frozenHalves || {}   // half-years this data leaves out: the website reads them from Cloudflare R2
   });
 }
 

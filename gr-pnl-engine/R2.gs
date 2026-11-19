@@ -1,13 +1,20 @@
 /**
  * Cloudflare R2: a copy of every verified half-year archive, for the dashboard website.
  *
- * Archive.gs builds each finished half-year (Drive sheet + gzip JSON, verified). At the end of every
- * archive run, GRA_r2Sync_ sends each CURRENT gzip JSON of an ended financial year that R2 does not have yet (or has an older
- * version of) to the R2 bucket, plus a small index:
+ * Archive.gs builds each finished half-year (Drive sheet + gzip JSON, verified). R2 is written only from the menu
+ * (Archive > Cloudflare R2: move ready half-years now): GRA_r2Sync_ sends each CURRENT gzip JSON of a half-year that
+ * ended FREEZE_AFTER_DAYS (45) days ago or more and that R2 does not have yet (or has an older version of), plus a small index:
  *     archive/GR_MASTER_FY25-26_H1.json.gz
  *     archive/index.json      { updatedAt, periods: { FY25-26_H1: { label, start, end, rows, hash, bytes, at } } }
- * The website (Cloudflare Pages, function /archive/...) reads them from the same bucket when someone
- * clicks "+ Load last year". The bucket is never public: the website checks the sign-in first.
+ * The website (Cloudflare Pages, function /archive/...) reads them from the same bucket. The bucket is never
+ * public: the website checks the sign-in first.
+ *
+ * Freeze (FREEZE_ON = YES in ARCHIVE_SETTINGS), done by the same menu item right after the upload: a half-year that
+ * is archived, verified and in R2 with the same data leaves the engine. The engine stops reading its rows (and the
+ * source files that hold only those months), so every refresh works on the running months only. The website reads
+ * the frozen half-years from R2 by itself. The nightly archive run never writes R2: it mails once when a half-year
+ * is ready to move. A source file that changes rows of a frozen half-year is not applied; a mail says so, and the
+ * owner takes that half-year back (menu), lets the refresh + archive run, and moves it again.
  *
  * Keys live in Script Properties only (never in the code or the repo):
  *   R2_ACCOUNT_ID, R2_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY
@@ -66,13 +73,25 @@ function R2_test() {
   return msg;
 }
 
-/** Menu: sends every archived half-year that R2 does not have yet. Long lists continue by themselves. */
+/**
+ * Menu (the only way R2 is written): sends every ready half-year (ended FREEZE_AFTER_DAYS days ago, archived and
+ * verified) that R2 does not have yet or has an older version of, then freezes the ones R2 now has with the same data.
+ */
 function R2_uploadNow() {
   var ss = GRA_engineSs_(), s = GRA_settings_(ss), t0 = Date.now(), text;
+  if (GRA_engineBusy_()) { GRA_dialog_('Cloudflare R2', 'The engine refresh is still working. Try again in a few minutes.', ''); return; }
   var lock = LockService.getDocumentLock() || LockService.getScriptLock();
-  if (!lock.tryLock(30000)) { GRA_dialog_('Cloudflare R2', 'An archive run is going. It copies to R2 by itself at its end.', ''); return; }
-  try { text = GRA_r2Sync_(ss, s, t0, true) || 'R2 keys are not saved yet.'; }
-  finally { lock.releaseLock(); }
+  if (!lock.tryLock(30000)) { GRA_dialog_('Cloudflare R2', 'An archive run is going. Try again when it has finished (see ARCHIVE_LOG).', ''); return; }
+  try {
+    var heal = GRA_heal_(ss, s);
+    if (heal.rebuild.length) text = 'The archive is rebuilding ' + heal.rebuild.join(', ') + ' first. Try again after the next archive run.';
+    else {
+      text = GRA_r2Sync_(ss, s, t0, true) || 'R2 keys are not saved yet.';
+      var fr = GRA_freeze_(ss, s, heal);
+      text += fr ? '\n\n' + fr + '\nThe engine rebuilds without these months in about 1 minute.' : '';
+    }
+    GRA_log_(ss, 'R2 MOVE', text.replace(/\n+/g, ' | '), Math.round((Date.now() - t0) / 1000) + ' s');
+  } finally { lock.releaseLock(); }
   GRA_dialog_('Cloudflare R2', text, '');
 }
 
@@ -80,15 +99,15 @@ function R2_uploadNow() {
 
 /**
  * Called at the end of every finished archive run (Archive.gs GRA_run_). Uploads each CURRENT half-year
- * JSON of an ended financial year (R2_closedFy_) whose R2 copy is missing or older, then rewrites archive/index.json. Returns a line for the log.
+ * JSON of a half-year that is ready for R2 (R2_readyHalf_) whose R2 copy is missing or older, then rewrites archive/index.json. Returns a line for the log.
  * Never throws: a failed upload is logged and mailed, the Drive archive is not touched.
  */
 function GRA_r2Sync_(ss, s, t0, force) {
   var c = R2_cfg_();
   if (!c) return '';
   var p = PropertiesService.getScriptProperties(), sent = [], failed = [], waiting = 0, current = {};
-  GRA_registry_(ss).forEach(function (x) { if (x.status === 'CURRENT' && x.part === 'JSON' && R2_closedFy_(x.key)) current[x.key] = x; });
-  var keys = Object.keys(current).sort();   // oldest first (FY25-26 H1, H2, ...); the running FY is not sent
+  GRA_registry_(ss).forEach(function (x) { if (x.status === 'CURRENT' && x.part === 'JSON' && R2_readyHalf_(x.key, s)) current[x.key] = x; });
+  var keys = Object.keys(current).sort();   // oldest first (FY25-26 H1, H2, FY26-27 H1, ...); the running half-year is not sent
   for (var i = 0; i < keys.length; i++) {
     var key = keys[i], fp = GRA_storedFp_(key);
     if (!fp) continue;
@@ -127,14 +146,16 @@ function GRA_r2Sync_(ss, s, t0, force) {
 }
 
 /**
- * Only half-years of a financial year that has ended go to R2 (FY25-26 and older today). The running FY
- * still changes and the dashboard gets it from the engine; its half-years go to R2 after 31 March.
+ * A half-year goes to R2 (and may leave the engine) once it ended FREEZE_AFTER_DAYS days ago (default 45), so the
+ * late corrections of its last month come in first. On 19 Nov 2026: FY25-26 H1, H2 and FY26-27 H1 (ended 30 Sep).
  */
-function R2_closedFy_(periodKey) {
-  var m = String(periodKey).match(/^FY(\d\d)-/);
-  if (!m) return false;
-  var now = new Date(), fy = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
-  return 2000 + Number(m[1]) < fy;
+function R2_readyHalf_(periodKey, s) {
+  if (!/^FY\d\d-\d\d_H[12]$/.test(String(periodKey))) return false;
+  var end = GRA_halfOf_(GRA_labelStart_(periodKey)).end.split('-').map(Number);
+  var days = Number((s || {}).FREEZE_AFTER_DAYS);
+  if (!(days >= 0)) days = 45;
+  var ready = Utilities.formatDate(new Date(end[0], end[1] - 1, end[2] + days), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  return GRA_todayIso_() >= ready;
 }
 
 function R2_fileKey_(periodKey) { return R2_PREFIX + 'GR_MASTER_' + periodKey + '.json.gz'; }
@@ -166,13 +187,14 @@ function R2_writeIndex_(c, current) {
 function GRA_dashboardDrop_(headers) {
   if (!R2_cfg_()) return null;
   var p = PropertiesService.getScriptProperties(), set = {}, halves = [];
+  var s = GRA_settings_(GRA_engineSs_());
   p.getKeys().forEach(function (k) {
     if (k.indexOf('GRA_R2_') !== 0 || k === 'GRA_R2_INDEX') return;
     var key = k.slice(7), meta = JSON.parse(p.getProperty(k) || 'null'), fp = GRA_storedFp_(key);
-    if (meta && fp && meta.hash === fp.hash && R2_closedFy_(key)) { set[key] = 1; halves.push(key); }
+    if (meta && fp && meta.hash === fp.hash && R2_readyHalf_(key, s)) { set[key] = 1; halves.push(key); }
   });
   if (!halves.length) return null;
-  var s = GRA_settings_(GRA_engineSs_()), di = GRA_col_(headers, s.DATE_COLUMN);
+  var di = GRA_col_(headers, s.DATE_COLUMN);
   if (di < 0) return null;
   var back = Math.max(0, Number(s.DASHBOARD_MONTHS_BEFORE_FY) || 7);
   var now = new Date(), fy = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
@@ -185,6 +207,187 @@ function GRA_dashboardDrop_(headers) {
   };
   fn.from = from; fn.halves = halves.sort();
   return fn;
+}
+
+/* ------------------------------------------------------------------ freeze: old half-years leave the engine */
+
+var FRZ_PROP = 'ENGINE_FROZEN';           // { FY26-27_H1: { start, end, rows, hash, at } }  read by the engine (Main.gs)
+var FRZ_BLOCK_PROP = 'ENGINE_FREEZE_BLOCKED';   // { key: { hash, why, at } }  not frozen again until its data changes
+
+function engineFrozen_() {
+  try { return JSON.parse(PropertiesService.getScriptProperties().getProperty(FRZ_PROP) || '{}') || {}; } catch (e) { return {}; }
+}
+function engineSetFrozen_(fz) {
+  var p = PropertiesService.getScriptProperties();
+  if (Object.keys(fz).length) p.setProperty(FRZ_PROP, JSON.stringify(fz)); else p.deleteProperty(FRZ_PROP);
+}
+function engineFrozenSig_(fz) { return Object.keys(fz || {}).sort().join(','); }
+
+/** Test for one value of the date column: the frozen half-year it falls in, or ''. Undated rows are never frozen. */
+function engineFrozenTest_(fz) {
+  var memo = {};
+  return function (v) {
+    var k = v instanceof Date ? GRA_iso_(v) : String(v == null ? '' : v);
+    var hit = memo[k];
+    if (hit === undefined) {
+      var iso = GRA_iso_(v);
+      hit = memo[k] = iso ? (fz[GRA_halfOf_(iso).key] ? GRA_halfOf_(iso).key : '') : '';
+    }
+    return hit;
+  };
+}
+
+/** Half-years a source file holds ('' = rows without a date): saved with the file in the engine manifest. */
+function engineHalvesOf_(values) {
+  var seen = {}, memo = {};
+  for (var i = 0; i < values.length; i++) {
+    var v = values[i], k = v instanceof Date ? GRA_iso_(v) : String(v == null ? '' : v);
+    if (memo[k]) continue;
+    memo[k] = 1;
+    var iso = GRA_iso_(v);
+    seen[iso ? GRA_halfOf_(iso).key : ''] = 1;
+  }
+  return Object.keys(seen).sort();
+}
+
+/** True when every row of the file is in a frozen half-year (the engine does not need to read it). */
+function engineFileFrozen_(halves, fz) {
+  return !!(halves && halves.length) && halves.every(function (k) { return k && fz[k]; });
+}
+
+/** Date column the freeze looks at (the archive's DATE_COLUMN, GR DT). */
+function engineFreezeColumn_() {
+  try { return GRA_settings_(GRA_engineSs_()).DATE_COLUMN || 'GR DT'; } catch (e) { return 'GR DT'; }
+}
+
+/**
+ * Called at the end of a clean archive run, after the R2 copy (Archive.gs GRA_run_). Freezes each half-year that:
+ * ended FREEZE_AFTER_DAYS days ago, is archived and verified (heal OK, same row count), is in R2 with the same
+ * data (hash) and listed in archive/index.json, and was not blocked by a failed check for this same data.
+ * The engine then rebuilds without those months (in about 1 minute) and checks the row count.
+ */
+function GRA_freeze_(ss, s, heal) {
+  if (String(s.FREEZE_ON || 'NO').toUpperCase() !== 'YES') return '';
+  var c = R2_cfg_();
+  if (!c) return '';
+  var p = PropertiesService.getScriptProperties(), fz = engineFrozen_(), added = [];
+  var blocked = JSON.parse(p.getProperty(FRZ_BLOCK_PROP) || '{}') || {};
+  var listed = String(p.getProperty('GRA_R2_INDEX') || '').split(',');
+  (heal.periods || []).forEach(function (x) {
+    var key = x.key;
+    if (!x.ok || fz[key] || !R2_readyHalf_(key, s) || listed.indexOf(key) < 0) return;
+    var fp = GRA_storedFp_(key), meta = JSON.parse(p.getProperty('GRA_R2_' + key) || 'null');
+    if (!fp || !meta || meta.hash !== fp.hash || fp.rows !== x.rows) return;
+    if (blocked[key] && blocked[key].hash === fp.hash) return;
+    try { if (!R2_exists_(c, R2_fileKey_(key))) return; } catch (e) { return; }
+    var h = GRA_halfOf_(GRA_labelStart_(key));
+    fz[key] = { start: h.start, end: h.end, rows: fp.rows, hash: fp.hash, at: new Date().toISOString() };
+    added.push(key);
+  });
+  if (!added.length) return '';
+  engineSetFrozen_(fz);
+  if (typeof scheduleContinuation_ === 'function') scheduleContinuation_();   // the engine rebuilds without these months
+  GRA_mail_(s, 'GR engine: ' + added.join(', ') + ' now read from Cloudflare R2',
+    '<p>These half-years are archived, verified and in Cloudflare R2 with the same data:</p><ul>' +
+    added.map(function (k) { return '<li>' + GRA_esc_(GRA_labelOf_(k)) + ': ' + GRA_fmt_(fz[k].rows) + ' GRs</li>'; }).join('') +
+    '</ul><p>The engine stops reading them (less memory on every refresh). The website loads them from R2 by itself. ' +
+    'If a source file later changes rows of these months, it is not applied and you get a mail. To apply it: ' +
+    'Archive &gt; Frozen half-years: take one back into the engine, wait for the refresh and the archive run, then ' +
+    'Cloudflare R2: move ready half-years now.</p>');
+  return 'Frozen (engine stops reading, website reads R2): ' + added.join(', ');
+}
+
+/**
+ * Engine side (Main.gs), after a run that only changed the frozen list: the master must have lost exactly the
+ * rows the archive counted for the newly frozen half-years. If not, they are taken back and not frozen again
+ * until their data changes. Returns a note or ''.
+ */
+function engineFreezeCheck_(before, after, newly, fz) {
+  var want = before;
+  newly.forEach(function (k) { want -= Number(fz[k] && fz[k].rows) || 0; });
+  if (after === want) return '';
+  var p = PropertiesService.getScriptProperties(), blocked = JSON.parse(p.getProperty(FRZ_BLOCK_PROP) || '{}') || {};
+  var why = 'master ' + before + ' -> ' + after + ' GRs, expected ' + want;
+  newly.forEach(function (k) { blocked[k] = { hash: fz[k].hash, why: why, at: new Date().toISOString() }; delete fz[k]; });
+  p.setProperty(FRZ_BLOCK_PROP, JSON.stringify(blocked));
+  engineSetFrozen_(fz);
+  try {
+    GRA_mail_(GRA_settings_(GRA_engineSs_()), 'GR engine: freeze undone for ' + newly.join(', '),
+      '<p>The engine check did not match (' + GRA_esc_(why) + '), so these half-years were taken back into the engine. ' +
+      'Nothing is lost. They are frozen again only after their data changes.</p>');
+  } catch (e) {}
+  return 'Freeze check failed (' + why + '): ' + newly.join(', ') + ' taken back';
+}
+
+/** Nightly archive run: one mail per half-year that is ready to move to R2 (nothing is uploaded). */
+function GRA_freezeRemind_(ss, s, heal) {
+  if (String(s.FREEZE_ON || 'NO').toUpperCase() !== 'YES' || !R2_cfg_()) return '';
+  var p = PropertiesService.getScriptProperties(), fz = engineFrozen_(), ready = [];
+  (heal.periods || []).forEach(function (x) {
+    if (!x.ok || fz[x.key] || !R2_readyHalf_(x.key, s)) return;
+    var fp = GRA_storedFp_(x.key);
+    if (!fp || p.getProperty('GRA_FRZ_REMIND_' + x.key) === fp.hash) return;
+    p.setProperty('GRA_FRZ_REMIND_' + x.key, fp.hash);
+    ready.push(x.key);
+  });
+  if (!ready.length) return '';
+  GRA_mail_(s, 'GR Archive: ' + ready.join(', ') + ' ready to move to Cloudflare R2',
+    '<p>These half-years ended ' + GRA_esc_(s.FREEZE_AFTER_DAYS) + '+ days ago and their archive is verified:</p><ul>' +
+    ready.map(function (k) { return '<li>' + GRA_esc_(GRA_labelOf_(k)) + '</li>'; }).join('') + '</ul>' +
+    '<p>When you are ready: engine sheet &gt; GR PNL Engine &gt; Archive (6 months) &gt; ' +
+    '<b>Cloudflare R2: move ready half-years now</b>. It uploads them, then the engine stops reading them ' +
+    '(the website reads them from R2). Nothing happens until you click.</p>');
+  return 'Ready for R2 (mail sent, waiting for the menu): ' + ready.join(', ');
+}
+
+/** Engine (Main.gs): a new / changed source file has rows of frozen half-years. Not applied; one mail. */
+function engineFrozenTouched_(touched) {
+  var keys = Object.keys(touched).sort();
+  var text = 'Not applied (half-year is frozen in R2): ' + keys.map(function (k) { return k + ' (' + touched[k] + ')'; }).join(', ');
+  try {
+    GRA_mail_(GRA_settings_(GRA_engineSs_()), 'GR engine: changed file for a frozen half-year (' + keys.join(', ') + ')',
+      '<p>These files were added or changed, but they have rows of a half-year that is frozen (kept in Cloudflare R2):</p><ul>' +
+      keys.map(function (k) { return '<li>' + GRA_esc_(GRA_labelOf_(k)) + ': ' + GRA_esc_(touched[k]) + '</li>'; }).join('') +
+      '</ul><p>Those rows are <b>not</b> applied; the dashboard keeps the R2 data. To apply the change: Archive (6 months) &gt; ' +
+      '<b>Frozen half-years: take one back into the engine</b>, wait for the refresh and the archive run (or Run archive now), ' +
+      'then <b>Cloudflare R2: move ready half-years now</b>. If the change was not meant for those months, do nothing.</p>');
+  } catch (e) {}
+  return text;
+}
+
+/** Menu: take one frozen half-year back into the engine (to apply a changed file, then move it to R2 again). */
+function GRA_unfreezeOne() {
+  var ui = SpreadsheetApp.getUi(), fz = engineFrozen_(), keys = Object.keys(fz).sort();
+  if (!keys.length) { GRA_dialog_('Frozen half-years', 'Nothing is frozen.', ''); return; }
+  var r = ui.prompt('Take one half-year back into the engine', 'Frozen now: ' + keys.join(', ') +
+    '\n\nType the one to take back (for example ' + keys[keys.length - 1] + ').', ui.ButtonSet.OK_CANCEL);
+  if (r.getSelectedButton() !== ui.Button.OK) return;
+  var key = String(r.getResponseText() || '').trim().toUpperCase();
+  if (!fz[key]) { GRA_dialog_('Frozen half-years', key + ' is not frozen. Frozen: ' + keys.join(', '), ''); return; }
+  delete fz[key];
+  engineSetFrozen_(fz);
+  scheduleContinuation_();
+  GRA_dialog_('Frozen half-years', key + ' comes back into the engine in about 1 minute (with any changed files). ' +
+    'After the archive run (nightly, or Run archive now), use "Cloudflare R2: move ready half-years now" to send it to R2 again.', '');
+}
+
+/** Menu: what is frozen, and a way to take everything back into the engine. */
+function GRA_freezeStatus() {
+  var fz = engineFrozen_(), keys = Object.keys(fz).sort();
+  var blocked = JSON.parse(PropertiesService.getScriptProperties().getProperty(FRZ_BLOCK_PROP) || '{}') || {};
+  var t = keys.length ? keys.map(function (k) { return GRA_labelOf_(k) + ': ' + GRA_fmt_(fz[k].rows) + ' GRs, frozen ' + String(fz[k].at).slice(0, 10); }).join('\n')
+                      : 'Nothing is frozen. The engine reads every month.';
+  var b = Object.keys(blocked);
+  if (b.length) t += '\n\nNot frozen after a failed check: ' + b.map(function (k) { return k + ' (' + blocked[k].why + ')'; }).join('; ');
+  GRA_dialog_('Frozen half-years (read from Cloudflare R2)', t, '');
+}
+function GRA_unfreezeAll() {
+  var ui = SpreadsheetApp.getUi();
+  if (ui.alert('Take every frozen half-year back into the engine?', 'The next refresh reads them again (more memory). ' +
+      'They are frozen again only when you use "Cloudflare R2: move ready half-years now".', ui.ButtonSet.OK_CANCEL) !== ui.Button.OK) return;
+  engineSetFrozen_({});
+  scheduleContinuation_();
+  GRA_dialog_('Frozen half-years', 'Done. The engine takes them back in about 1 minute.', '');
 }
 
 /* ------------------------------------------------------------------ S3 API (Signature V4) */

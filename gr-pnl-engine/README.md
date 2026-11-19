@@ -33,11 +33,29 @@ waits and tries again in 5 minutes. The first **Run archive now** (or Setup) ins
 from then on every finished half-year is archived without a click.
 
 ## Copy in Cloudflare R2 (for the dashboard website)
-`R2.gs`: when R2 keys are saved, every verified half-year JSON of an ended financial year (FY25-26 and older today; the running FY never) is copied to a private Cloudflare R2
-bucket at the end of each archive run (`archive/GR_MASTER_<period>.json.gz` + `archive/index.json`).
-The dashboard website reads it for **+ Load last year**. A failed upload is mailed and retried next run;
-the Drive archive is never touched by it. Setup and the website side: README of the Dashboard repo.
-Menu: **Archive (6 months) > Cloudflare R2: save keys / test connection / upload archive now**.
+`R2.gs`: when R2 keys are saved, every verified half-year JSON that ended 45+ days ago (FY25-26 H1, H2 and FY26-27 H1 today) can be copied to a private Cloudflare R2
+bucket (`archive/GR_MASTER_<period>.json.gz` + `archive/index.json`), only from the menu. The dashboard website reads it.
+A failed upload is mailed; the Drive archive is never touched by it. Setup and the website side: README of the Dashboard repo.
+Menu: **Archive (6 months) > Cloudflare R2: save keys / test connection / move ready half-years now (upload + freeze)**,
+**Frozen half-years: status / take one back / take all back**.
+
+**Old half-years leave the engine (freeze, manual).** R2 is never written by the nightly run. When a
+half-year ended `FREEZE_AFTER_DAYS` (45) days ago and its archive is verified, the archive mails once:
+"ready to move to Cloudflare R2". The owner then clicks **Archive (6 months) → Cloudflare R2: move ready
+half-years now (upload + freeze)**. It uploads every ready half-year R2 does not have with the same data,
+then freezes the ones R2 now has (archive verified, same hash, listed in `index.json`):
+- the engine stops reading their GRs and the source files that hold only those months, and rebuilds
+  without them (about 1 minute; it checks that exactly the archived row count left, else takes them back);
+- the website's first load is only the running half-year; the header shows
+  **⚠ FY25-26 H1, FY25-26 H2, FY26-27 H1 not loaded [Load]**. Until Load is clicked, NBD, Uptrade /
+  Downtrade, MoM and trends that use those months are incomplete. After Load the dashboard has the same
+  GRs and the same numbers as before the freeze (tested). Each half-year is downloaded once per browser
+  (IndexedDB) and read from there later.
+- a new / changed source file with rows of a frozen half-year is **not applied**; a mail names it. To
+  apply it: **Frozen half-years: take one back into the engine**, let the refresh and the archive run,
+  then **move ready half-years now** again. **Frozen half-years: status** shows what is frozen.
+- `FREEZE_ON = NO` in `ARCHIVE_SETTINGS` turns it off. The Apps Script link (no R2) shows only the
+  months the engine still has.
 
 ## Tabs it adds to the engine sheet
 | Tab | What |

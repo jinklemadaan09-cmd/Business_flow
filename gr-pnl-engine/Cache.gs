@@ -87,6 +87,8 @@ function newState_() {
     masterParts: [],              // file ids of dashboard_master_part_N.json
     recentParts: null,            // the tail of masterParts without the months kept in Cloudflare R2 (website first load)
     recentInfo: null,             // { version, from, halves, dropped } for recentParts
+    frozenSig: '',                // R2.gs: half-years left out of this master (read from Cloudflare R2), e.g. "FY25-26_H1,FY25-26_H2"
+    frozenHalves: {},             // { FY25-26_H1: { start, end } } for the website
     headers: [],
     keyColumn: '',
     dateColumns: [],
@@ -124,7 +126,7 @@ function saveState_(state) {
    for 5 minutes and dropped whenever the engine saves a new state. */
 var API_STATE_KEY_ = 'api_state_v1';
 var API_STATE_FIELDS_ = ['buildId', 'version', 'headers', 'keyColumn', 'dateColumns', 'sourceNames',
-                         'rowCount', 'masterParts', 'deltaFloor', 'deltas', 'recentParts', 'recentInfo'];
+                         'rowCount', 'masterParts', 'deltaFloor', 'deltas', 'recentParts', 'recentInfo', 'frozenHalves'];
 function loadApiState_() {
   var cache = CacheService.getScriptCache();
   try { var hit = cache.get(API_STATE_KEY_); if (hit) return JSON.parse(hit); } catch (e) { /* ignore */ }
@@ -153,8 +155,10 @@ function readFileCacheKeys_(cacheId, keyCol) {
  * A source's current dataset, rebuilt from its per-file caches (oldest file
  * first, then deduped). If filterKeys is given, only those keys are loaded —
  * keeps memory low for incremental runs.
+ * freeze (R2.gs, base source only): { frozen, column } → a file whose rows are all in frozen half-years is
+ * not read; a file read for the first time with it gets its list of half-years saved in the manifest.
  */
-function loadSourceDataset_(state, sourceCode, keyCol, dateCol, filterKeys, maxCol) {
+function loadSourceDataset_(state, sourceCode, keyCol, dateCol, filterKeys, maxCol, freeze) {
   var man = state.sources[sourceCode];
   if (!man) return [];
 
@@ -164,8 +168,13 @@ function loadSourceDataset_(state, sourceCode, keyCol, dateCol, filterKeys, maxC
 
   var records = [];
   files.forEach(function (m) {
+    if (freeze && engineFileFrozen_(m.halves, freeze.frozen)) return;
     var data = readJsonFile_(m.cacheId);
     var kIdx = data.cols.indexOf(keyCol);
+    if (freeze && !m.halves) {
+      var fIdx = data.cols.indexOf(freeze.column);
+      if (fIdx >= 0) m.halves = engineHalvesOf_(data.rows.map(function (r) { return r[fIdx]; }));
+    }
     data.rows.forEach(function (r) {
       if (filterKeys) {
         if (kIdx < 0) return;
