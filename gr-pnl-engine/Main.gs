@@ -347,6 +347,7 @@ function runIncrementalRefresh_() {
       notify_(wait);
       return wait;
     }
+    syncProcessLogWithManifest_(state);
     var idle = 'Master already up to date. ' + scanNotes.join(' | ') +
       (fileErrors ? ' | ' + fileErrors + ' file(s) in ERROR — see PROCESS_LOG.' : '');
     notify_(idle);
@@ -460,6 +461,7 @@ function runIncrementalRefresh_() {
   }
 
   setProcessLogStatuses_(cachedFileIds, 'PROCESSED');
+  syncProcessLogWithManifest_(state);
 
   /* ---------- 5. human-facing sheets (failure here never blocks the dashboard) ---------- */
   // After a full / big build the sheet is written by the next run (fresh memory, ~1 minute later).
