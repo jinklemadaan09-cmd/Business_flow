@@ -193,6 +193,14 @@ function runIncrementalRefresh_() {
   var scanNotes = [];
   var changedSources = {}; // sources with a new / changed / removed file this run
 
+  // R2.gs freeze: half-years that are archived and in Cloudflare R2 are not read or built here.
+  var frozen = typeof engineFrozen_ === 'function' ? engineFrozen_() : {};
+  var frozenBefore = state.frozenSig || '';
+  var freezeCol = Object.keys(frozen).length || frozenBefore ? engineFreezeColumn_() : '';
+  var touched = {};        // frozen half-year → file that has rows of it and was new / changed this run
+  var freezeSrc = '';      // only the base source (the GR rows) is frozen by file; lookups are filtered by GR
+  if (freezeCol) { try { freezeSrc = getBaseDatasetName_(sources); } catch (e) { freezeCol = ''; } }
+
   /* ---------- 1. read new / changed / removed files into the cache ---------- */
   sources.forEach(function (src) {
     if (stoppedEarly) return;
@@ -226,6 +234,10 @@ function runIncrementalRefresh_() {
     for (var i = 0; i < scan.pending.length; i++) {
       if (Date.now() - t0 > SETTINGS.MAX_FILE_PHASE_MS) { stoppedEarly = true; break; }
       var file = scan.pending[i];
+      var known = man.files[file.fileId];
+      // only the config changed and every row of the file is in a frozen half-year: not read again
+      if (known && code === freezeSrc && engineFileFrozen_(known.halves, frozen) &&
+          Number(known.lastUpdated) >= file.lastUpdated.getTime()) continue;
       var opened = null;
       try {
         opened = openAsSpreadsheet_(file);
@@ -255,6 +267,11 @@ function runIncrementalRefresh_() {
           cacheId: cacheId, fileName: file.fileName,
           lastUpdated: file.lastUpdated.getTime(), sig: sig, rows: recs.length
         };
+        if (freezeCol && code === freezeSrc && cols.indexOf(freezeCol) >= 0) {
+          var fh = engineHalvesOf_(recs.map(function (r) { return r[freezeCol]; }));
+          man.files[file.fileId].halves = fh;
+          fh.forEach(function (k) { if (k && frozen[k]) touched[k] = file.fileName; });
+        }
 
         var blankDate = dateCol ? recs.filter(function (r) { return !r[dateCol]; }).length : '';
         upsertProcessLog_({
@@ -285,6 +302,11 @@ function runIncrementalRefresh_() {
   });
 
   delete affected[''];
+  // A new / changed file has rows of a frozen half-year: those rows are NOT applied (the half-year stays as it is
+  // in R2). The owner gets a mail and decides: menu "take one back into the engine", then "move ready half-years now".
+  var back = Object.keys(touched);
+  if (back.length && typeof engineFrozenTouched_ === 'function') scanNotes.push(engineFrozenTouched_(touched));
+  var frozenSig = typeof engineFrozenSig_ === 'function' ? engineFrozenSig_(frozen) : '';
   state.pendingKeys = affected;
   saveState_(state); // manifest + pending keys persisted BEFORE building the master
 
@@ -302,7 +324,8 @@ function runIncrementalRefresh_() {
     JSON.stringify(state.headers) !== JSON.stringify(schema.headers) ||
     state.keyColumn !== keyField ||
     lookupSourceChanged_(changedSources, baseName, keyField, cfgCache) ||
-    state.joinDefaultsSig !== joinDefaultsSignature_(cfgCache);   // a Default_Value was added/changed
+    state.joinDefaultsSig !== joinDefaultsSignature_(cfgCache) ||  // a Default_Value was added/changed
+    frozenBefore !== frozenSig;                                     // half-years frozen / taken back
 
   // Ton/Lacs or Display_Format changed → only the sheet view needs rewriting, not the data.
   if (hasMaster_(state) && JSON.stringify(state.sourceNames) !== JSON.stringify(schema.sourceNames)) {
@@ -324,6 +347,7 @@ function runIncrementalRefresh_() {
       notify_(wait);
       return wait;
     }
+    syncProcessLogWithManifest_(state);
     var idle = 'Master already up to date. ' + scanNotes.join(' | ') +
       (fileErrors ? ' | ' + fileErrors + ' file(s) in ERROR — see PROCESS_LOG.' : '');
     notify_(idle);
@@ -346,7 +370,8 @@ function runIncrementalRefresh_() {
   var baseKc = sourceKeyCol_(baseName, baseSrc.Unique_Key, cfgCache);
   var baseRows = loadSourceDataset_(state, baseName, baseKc,
     resolveOutputColumnName_(baseName, baseSrc.Date_Column, cfgCache),
-    fullRecompute ? null : affected, sourceMaxCol_(baseSrc, cfgCache));
+    fullRecompute ? null : affected, sourceMaxCol_(baseSrc, cfgCache),
+    freezeCol ? { frozen: frozen, column: freezeCol } : null);
 
   // A lookup joined on the base key (GR NO → GR NO) can only match the GRs being built,
   // so only those GRs are loaded from it (e.g. DSR: 1.5 lakh rows → the GRs of this run).
@@ -367,6 +392,8 @@ function runIncrementalRefresh_() {
   /* ---------- 4. apply to master ---------- */
   var masterRows = fullRecompute ? new Map() : loadMasterRowsMap_(state);
   var keyIdx = schema.headers.indexOf(keyField);
+  var frzIdx = freezeCol ? schema.headers.indexOf(freezeCol) : -1;
+  var isFrozen = frzIdx >= 0 && frozenSig ? engineFrozenTest_(frozen) : null;
   var upserts = [];
   var present = {};
   var memo = {};
@@ -386,6 +413,7 @@ function runIncrementalRefresh_() {
       var k = normKey_(rec[keyField]);
       if (!k) continue;
       var row = schema.headers.map(function (h) { return cleanOut_(rec[h]); });
+      if (isFrozen && isFrozen(row[frzIdx])) continue;   // its half-year is read from R2
       row[keyIdx] = k;
       masterRows.set(k, row);
       if (!fullRecompute) { present[k] = true; upserts.push(row); }
@@ -411,6 +439,7 @@ function runIncrementalRefresh_() {
     appendDelta_(state, upserts, deletes, version);
   }
   var upsertCount = fullRecompute ? masterRows.size : upserts.length;
+  var rowsBefore = state.rowCount || 0;
   upserts = null;
   var allRows = Array.from(masterRows.values());
   masterRows = null;
@@ -419,9 +448,20 @@ function runIncrementalRefresh_() {
   state.pendingKeys = {};
   state.mirrorDirty = true;
   state.joinDefaultsSig = joinDefaultsSignature_(cfgCache);
+  state.frozenSig = frozenSig;
+  state.frozenHalves = {};
+  Object.keys(frozen).forEach(function (k) { state.frozenHalves[k] = { start: frozen[k].start, end: frozen[k].end }; });
   saveState_(state);
 
+  // A run that only froze more half-years must have dropped exactly their archived rows (R2.gs).
+  var newly = frozenSig.split(',').filter(function (k) { return k && frozenBefore.split(',').indexOf(k) < 0; });
+  if (newly.length && !cachedFileIds.length && !affectedCount && !bigChange && typeof engineFreezeCheck_ === 'function') {
+    var fc = engineFreezeCheck_(rowsBefore, state.rowCount, newly, frozen);
+    if (fc) { scanNotes.push(fc); state.frozenSig = '#check'; saveState_(state); scheduleContinuation_(); }
+  }
+
   setProcessLogStatuses_(cachedFileIds, 'PROCESSED');
+  syncProcessLogWithManifest_(state);
 
   /* ---------- 5. human-facing sheets (failure here never blocks the dashboard) ---------- */
   // After a full / big build the sheet is written by the next run (fresh memory, ~1 minute later).

@@ -78,12 +78,17 @@ function apiCore_(p) {
 
   if (p.mode === 'card') return cardApi_(state, plain);
 
+  /* view=recent (website): only the parts without the months that are in Cloudflare R2 (R2.gs, Cache.gs) */
+  var recent = String(p.view || '') === 'recent' && state.recentParts && state.recentParts.length &&
+               state.recentInfo && state.recentInfo.version === state.version;
+  var partIds = recent ? state.recentParts : state.masterParts;
+
   if (p.part !== undefined && p.part !== '') {
     var n = Number(p.part);
     if (build !== state.buildId) return JSON.stringify({ ok: false, error: 'STALE_BUILD', buildId: state.buildId });
-    if (!(n >= 0 && n < state.masterParts.length)) return JSON.stringify({ ok: false, error: 'Bad part number' });
-    if (plain) return readTextFile_(state.masterParts[n]);
-    var bytes = readFileBytes_(state.masterParts[n]);
+    if (!(n >= 0 && n < partIds.length)) return JSON.stringify({ ok: false, error: 'Bad part number' });
+    if (plain) return readTextFile_(partIds[n]);
+    var bytes = readFileBytes_(partIds[n]);
     if (p.sliceSize && isGzipBytes_(bytes)) {   // hosted website: big parts travel in slices (large web-app responses fail)
       var b64 = Utilities.base64Encode(bytes), size = Math.max(100000, Number(p.sliceSize) || 900000),
           cnt = Math.ceil(b64.length / size), i = Math.min(cnt - 1, Math.max(0, Number(p.slice) || 0));
@@ -118,7 +123,11 @@ function apiCore_(p) {
     dateColumns: state.dateColumns,
     sourceNames: state.sourceNames || [],
     rowCount: state.rowCount,
-    parts: state.masterParts.length
+    parts: partIds.length,
+    view: recent ? 'recent' : 'full',
+    recentFrom: recent ? state.recentInfo.from : '',
+    r2Halves: recent ? state.recentInfo.halves : [],
+    frozen: state.frozenHalves || {}   // half-years this data leaves out: the website reads them from Cloudflare R2
   });
 }
 

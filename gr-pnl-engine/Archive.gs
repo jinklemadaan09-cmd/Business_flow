@@ -44,7 +44,10 @@ var GRA_DEFAULTS = [
   ['URGENT_PCT', '85', 'Send an URGENT mail when the sheet is this % full (cells)'],
   ['ALERT_EMAILS', '', 'Who gets the mails (comma separated). Blank = script owner.'],
   ['RUN_HOUR', '2', 'Hour of the daily run (0-23). After changing it, run GRA_setup again.'],
-  ['ARCHIVE_MAX_CELLS', '9000000', 'Max cells in one archive sheet; above this a Part 2 is created']
+  ['ARCHIVE_MAX_CELLS', '9000000', 'Max cells in one archive sheet; above this a Part 2 is created'],
+  ['DASHBOARD_MONTHS_BEFORE_FY', '7', 'Website first load: months before the current FY that always come from the engine (NBD gap + 1). Older months that are in Cloudflare R2 load on "+ Load last year".'],
+  ['FREEZE_ON', 'YES', 'YES = a half-year that is archived, verified and in Cloudflare R2 with the same data leaves the engine (the engine stops reading it, so refreshes use less memory; the website reads it from R2). NO = the engine keeps every month.'],
+  ['FREEZE_AFTER_DAYS', '45', 'Days after a half-year ends before it goes to Cloudflare R2 and leaves the engine (late corrections come in this time).']
 ];
 
 /* ------------------------------------------------------------------ entry points */
@@ -107,7 +110,11 @@ function GRA_menu_(ui) {
     .addSeparator()
     .addItem('Cloudflare R2: save keys', 'R2_saveKeys')
     .addItem('Cloudflare R2: test connection', 'R2_test')
-    .addItem('Cloudflare R2: upload archive now', 'R2_uploadNow');
+    .addItem('Cloudflare R2: move ready half-years now (upload + freeze)', 'R2_uploadNow')
+    .addSeparator()
+    .addItem('Frozen half-years (read from R2): status', 'GRA_freezeStatus')
+    .addItem('Frozen half-years: take one back into the engine', 'GRA_unfreezeOne')
+    .addItem('Frozen half-years: take all back into the engine', 'GRA_unfreezeAll');
 }
 
 /* ------------------------------------------------------------------ main run */
@@ -168,9 +175,11 @@ function GRA_run_(dry, fromMenu) {
         if (heal.rebuild.length) { GRA_scheduleContinue_(1); result.building = true; notes.push('Rebuilding: ' + heal.rebuild.join(', ')); }
         else GRA_statusMail_(s, heal);
         if (heal.fixes.length) notes.push('Fixed: ' + heal.fixes.join('; '));
-        if (!heal.rebuild.length && typeof GRA_r2Sync_ === 'function') {   // R2.gs: copy for the website (only when keys are saved)
-          var r2 = GRA_r2Sync_(ss, s, t0, false);
-          if (r2) notes.push(r2);
+        // R2.gs: R2 is never written by this nightly run. A half-year that is ready (ended 45+ days ago, verified)
+        // gets one reminder mail; the owner moves it with the menu "Cloudflare R2: move ready half-years now".
+        if (!heal.rebuild.length && typeof GRA_freezeRemind_ === 'function') {
+          var rm = GRA_freezeRemind_(ss, s, heal);
+          if (rm) notes.push(rm);
         }
       }
     } else {
@@ -732,7 +741,14 @@ function GRA_heal_(ss, s) {
     });
     var fp = GRA_storedFp_(key), label = list.length ? list[0].label : GRA_labelOf_(key);
     var ok = !!fp && sheets.length > 0 && json.length === 1 && fp.rows === rows;
-    if (!ok) {
+    if (!ok && typeof engineFrozen_ === 'function' && engineFrozen_()[key]) {
+      // a frozen half-year is not in the engine data: take it back into the engine first, nothing is trashed now;
+      // the next run (after the engine refresh) rebuilds it from the engine data like any other period
+      var fzb = engineFrozen_(); delete fzb[key]; engineSetFrozen_(fzb);
+      if (typeof scheduleContinuation_ === 'function') scheduleContinuation_();
+      rebuild.push(key);
+      fixes.push(label + ': archive files incomplete, taken back into the engine to rebuild it');
+    } else if (!ok) {
       // broken or half-made period: clear it, the next run rebuilds it cleanly from the engine data
       keep.forEach(function (x) { try { x.file.setTrashed(true); } catch (e) {} sh.getRange(x.row, 8).setValue('REPLACED broken ' + stamp); });
       PropertiesService.getScriptProperties().deleteProperty('GRA_FP_' + key);

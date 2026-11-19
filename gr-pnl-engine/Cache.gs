@@ -85,6 +85,10 @@ function newState_() {
     version: 0,                   // ms timestamp of last master write
     deltaFloor: 0,                // clients older than this need a full reload
     masterParts: [],              // file ids of dashboard_master_part_N.json
+    recentParts: null,            // the tail of masterParts without the months kept in Cloudflare R2 (website first load)
+    recentInfo: null,             // { version, from, halves, dropped } for recentParts
+    frozenSig: '',                // R2.gs: half-years left out of this master (read from Cloudflare R2), e.g. "FY25-26_H1,FY25-26_H2"
+    frozenHalves: {},             // { FY25-26_H1: { start, end } } for the website
     headers: [],
     keyColumn: '',
     dateColumns: [],
@@ -122,7 +126,7 @@ function saveState_(state) {
    for 5 minutes and dropped whenever the engine saves a new state. */
 var API_STATE_KEY_ = 'api_state_v1';
 var API_STATE_FIELDS_ = ['buildId', 'version', 'headers', 'keyColumn', 'dateColumns', 'sourceNames',
-                         'rowCount', 'masterParts', 'deltaFloor', 'deltas'];
+                         'rowCount', 'masterParts', 'deltaFloor', 'deltas', 'recentParts', 'recentInfo', 'frozenHalves'];
 function loadApiState_() {
   var cache = CacheService.getScriptCache();
   try { var hit = cache.get(API_STATE_KEY_); if (hit) return JSON.parse(hit); } catch (e) { /* ignore */ }
@@ -151,8 +155,10 @@ function readFileCacheKeys_(cacheId, keyCol) {
  * A source's current dataset, rebuilt from its per-file caches (oldest file
  * first, then deduped). If filterKeys is given, only those keys are loaded —
  * keeps memory low for incremental runs.
+ * freeze (R2.gs, base source only): { frozen, column } → a file whose rows are all in frozen half-years is
+ * not read; a file read for the first time with it gets its list of half-years saved in the manifest.
  */
-function loadSourceDataset_(state, sourceCode, keyCol, dateCol, filterKeys, maxCol) {
+function loadSourceDataset_(state, sourceCode, keyCol, dateCol, filterKeys, maxCol, freeze) {
   var man = state.sources[sourceCode];
   if (!man) return [];
 
@@ -162,8 +168,13 @@ function loadSourceDataset_(state, sourceCode, keyCol, dateCol, filterKeys, maxC
 
   var records = [];
   files.forEach(function (m) {
+    if (freeze && engineFileFrozen_(m.halves, freeze.frozen)) return;
     var data = readJsonFile_(m.cacheId);
     var kIdx = data.cols.indexOf(keyCol);
+    if (freeze && !m.halves) {
+      var fIdx = data.cols.indexOf(freeze.column);
+      if (fIdx >= 0) m.halves = engineHalvesOf_(data.rows.map(function (r) { return r[fIdx]; }));
+    }
     data.rows.forEach(function (r) {
       if (filterKeys) {
         if (kIdx < 0) return;
@@ -212,19 +223,42 @@ function writeMasterSnapshot_(state, schema, keyColumn, rows, version) {
   state.sheetView = schema.sheetView;
   state.sourceNames = schema.sourceNames;
   var size = SETTINGS.MASTER_PART_ROWS;
-  var nParts = Math.max(1, Math.ceil(rows.length / size));
   var old = state.masterParts || [];
   var parts = [];
 
+  /* R2.gs: rows of the months that the website loads from Cloudflare R2 ("+ Load last year") go into
+     the first parts, every other row after them (same order as before inside each group). The website
+     downloads only the parts after them (recentParts); everything else still reads all parts.
+     Without R2 (or before an FY is in R2) nothing changes. No extra file is written. */
+  var drop = null;
+  try { drop = typeof GRA_dashboardDrop_ === 'function' ? GRA_dashboardDrop_(schema.headers) : null; } catch (e) { drop = null; }
+  var groups = [rows], nOld = 0;
+  if (drop) {
+    var oldRows = [], keep = [];
+    for (var i = 0; i < rows.length; i++) (drop(rows[i]) ? oldRows : keep).push(rows[i]);
+    if (oldRows.length && keep.length) groups = [oldRows, keep];
+    else drop = null;
+  }
+  var chunks = [];
+  groups.forEach(function (g, gi) {
+    for (var a = 0; a < g.length || (a === 0 && !g.length); a += size) {
+      chunks.push(g.slice(a, a + size));
+      if (gi === 0 && groups.length > 1) nOld++;
+      if (!g.length) break;
+    }
+  });
+  var nParts = chunks.length;
   for (var p = 0; p < nParts; p++) {
     parts.push(writeJsonFile_('dashboard_master_part_' + p + '.json',
       { ok: true, mode: 'part', buildId: state.buildId, version: version, part: p, parts: nParts,
-        rows: rows.slice(p * size, (p + 1) * size) },
+        rows: chunks[p] },
       old[p]));
   }
   for (var x = nParts; x < old.length; x++) trashFileQuiet_(old[x]);
 
   state.masterParts = parts;
+  state.recentParts = drop ? parts.slice(nOld) : null;
+  state.recentInfo = drop ? { version: version, from: drop.from, halves: drop.halves, dropped: groups[0].length } : null;
   state.version = version;
   state.headers = schema.headers;
   state.keyColumn = keyColumn;
