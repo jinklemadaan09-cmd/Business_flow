@@ -307,6 +307,9 @@ function runIncrementalRefresh_() {
   var back = Object.keys(touched);
   if (back.length && typeof engineFrozenTouched_ === 'function') scanNotes.push(engineFrozenTouched_(touched));
   var frozenSig = typeof engineFrozenSig_ === 'function' ? engineFrozenSig_(frozen) : '';
+  // half-years frozen since the last run: this run reads every file (no skip) and counts their GRs per half-year
+  var newly = frozenSig.split(',').filter(function (k) { return k && frozenBefore.split(',').indexOf(k) < 0; });
+  var frozenSeen = newly.length ? new Map() : null;   // GR → frozen half-year (one count per GR, like the archive)
   state.pendingKeys = affected;
   saveState_(state); // manifest + pending keys persisted BEFORE building the master
 
@@ -372,7 +375,7 @@ function runIncrementalRefresh_() {
   var baseRows = loadSourceDataset_(state, baseName, baseKc,
     resolveOutputColumnName_(baseName, baseSrc.Date_Column, cfgCache),
     fullRecompute ? null : affected, sourceMaxCol_(baseSrc, cfgCache),
-    freezeCol ? { frozen: frozen, column: freezeCol } : null);
+    freezeCol ? { frozen: frozen, column: freezeCol, noSkip: newly.length > 0 } : null);
 
   // A lookup joined on the base key (GR NO → GR NO) can only match the GRs being built,
   // so only those GRs are loaded from it (e.g. DSR: 1.5 lakh rows → the GRs of this run).
@@ -414,7 +417,8 @@ function runIncrementalRefresh_() {
       var k = normKey_(rec[keyField]);
       if (!k) continue;
       var row = schema.headers.map(function (h) { return cleanOut_(rec[h]); });
-      if (isFrozen && isFrozen(row[frzIdx])) continue;   // its half-year is read from R2
+      var fk = isFrozen ? isFrozen(row[frzIdx]) : '';
+      if (fk) { if (frozenSeen) frozenSeen.set(k, fk); continue; }   // its half-year is read from R2
       row[keyIdx] = k;
       masterRows.set(k, row);
       if (!fullRecompute) { present[k] = true; upserts.push(row); }
@@ -440,7 +444,6 @@ function runIncrementalRefresh_() {
     appendDelta_(state, upserts, deletes, version);
   }
   var upsertCount = fullRecompute ? masterRows.size : upserts.length;
-  var rowsBefore = state.rowCount || 0;
   upserts = null;
   var allRows = Array.from(masterRows.values());
   masterRows = null;
@@ -455,10 +458,13 @@ function runIncrementalRefresh_() {
   Object.keys(frozen).forEach(function (k) { state.frozenHalves[k] = { start: frozen[k].start, end: frozen[k].end }; });
   saveState_(state);
 
-  // A run that only froze more half-years must have dropped exactly their archived rows (R2.gs).
-  var newly = frozenSig.split(',').filter(function (k) { return k && frozenBefore.split(',').indexOf(k) < 0; });
-  if (newly.length && !cachedFileIds.length && !affectedCount && !bigChange && typeof engineFreezeCheck_ === 'function') {
-    var fc = engineFreezeCheck_(rowsBefore, state.rowCount, newly, frozen);
+  // Each newly frozen half-year must hold exactly the GRs its archive (and R2 copy) has. One that does not
+  // (its data changed after the archive was checked) comes back into the engine; the others stay frozen.
+  if (newly.length && fullRecompute && typeof engineFreezeCheck_ === 'function') {
+    var frozenCount = {};
+    frozenSeen.forEach(function (h) { frozenCount[h] = (frozenCount[h] || 0) + 1; });
+    frozenSeen = null;
+    var fc = engineFreezeCheck_(frozenCount, newly, frozen);
     // taken back: the next run (1 minute) rebuilds with them; the other frozen half-years stay frozen
     if (fc) { scanNotes.push(fc); state.frozenSig = engineFrozenSig_(frozen); state.forceFull = true;
       Object.keys(state.frozenHalves).forEach(function (k) { if (!frozen[k]) delete state.frozenHalves[k]; }); saveState_(state); scheduleContinuation_(); }

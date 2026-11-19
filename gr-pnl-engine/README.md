@@ -42,10 +42,12 @@ Menu: **Archive (6 months) > Cloudflare R2: save keys / test connection / move r
 **Old half-years leave the engine (freeze, manual).** R2 is never written by the nightly run. When a
 half-year ended `FREEZE_AFTER_DAYS` (45) days ago and its archive is verified, the archive mails once:
 "ready to move to Cloudflare R2". The owner then clicks **Archive (6 months) → Cloudflare R2: move ready
-half-years now (upload + freeze)**. It uploads every ready half-year R2 does not have with the same data,
-then freezes the ones R2 now has (archive verified, same hash, listed in `index.json`):
+half-years now (upload + freeze)**. It first runs the archive against the engine data of right now
+(a file changed after the nightly run is archived first), then uploads every ready half-year R2 does not
+have with the same data, then freezes the ones R2 now has (archive verified, same hash, in `index.json`):
 - the engine stops reading their GRs and the source files that hold only those months, and rebuilds
-  without them (about 1 minute; it checks that exactly the archived row count left, else takes them back);
+  without them (about 1 minute). That run reads every file once and counts each frozen half-year's GRs:
+  a half-year whose count is not the archive's is taken back into the engine (mail), the others stay frozen;
 - the website's first load is only the running half-year; the header shows
   **⚠ FY25-26 H1, FY25-26 H2, FY26-27 H1 not loaded [Load]**. Until Load is clicked, NBD, Uptrade /
   Downtrade, MoM and trends that use those months are incomplete. After Load the dashboard has the same
