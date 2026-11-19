@@ -89,6 +89,7 @@ function newState_() {
     recentInfo: null,             // { version, from, halves, dropped } for recentParts
     frozenSig: '',                // R2.gs: half-years left out of this master (read from Cloudflare R2), e.g. "FY25-26_H1,FY25-26_H2"
     frozenHalves: {},             // { FY25-26_H1: { start, end } } for the website
+    forceFull: false,             // next run rebuilds everything (after a failed freeze check)
     headers: [],
     keyColumn: '',
     dateColumns: [],
