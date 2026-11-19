@@ -96,3 +96,9 @@ load the old master, the new rows, every lookup file and a huge delta file toget
   (no old master in memory, no huge delta; dashboards do one full reload), and writes the
   `DASHBOARD_MASTER` sheet in the follow-up run a minute later.
 Every GR and every number stays the same as before; only memory use changes. Settings are in `Config.gs`.
+
+# PROCESS_LOG self-check
+PROCESS_LOG is only the human view; the real list of loaded files is the engine manifest (`engine_state.json`).
+At the end of every refresh the engine now puts back a row for any loaded file whose PROCESS_LOG row was
+deleted or cleared (marked "Row restored from engine"), and removes leftover rows that hold only a Status.
+Status updates now write only the cells of the files concerned, never the whole column.

@@ -298,7 +298,11 @@ function upsertProcessLog_(entry) {
   else sheet.getRange(rowIndex + 1, 1, 1, newRow.length).setValues([newRow]);
 }
 
-/** Updates Status for several files in one write. */
+/**
+ * Updates Status for several files. Only the Status cells of those files' rows are written
+ * (the old version read the whole column and wrote all of it back, so a row cleared or moved
+ * in between could end up as a blank row with only a status in it).
+ */
 function setProcessLogStatuses_(fileIds, status) {
   if (!fileIds || !fileIds.length) return;
   var sheet = getProcessLogSheet_();
@@ -310,12 +314,58 @@ function setProcessLogStatuses_(fileIds, status) {
 
   var wanted = {};
   fileIds.forEach(function (id) { wanted[String(id)] = true; });
-
-  var col = [];
+  var cells = [];
   for (var r = 1; r < data.length; r++) {
-    col.push([wanted[String(data[r][idCol])] ? status : data[r][statusCol]]);
+    var id = String(data[r][idCol]).trim();
+    if (id && wanted[id] && data[r][statusCol] !== status) cells.push(sheet.getRange(r + 1, statusCol + 1).getA1Notation());
   }
-  if (col.length) sheet.getRange(2, statusCol + 1, col.length, 1).setValues(col);
+  if (cells.length) sheet.getRangeList(cells).setValue(status);
+}
+
+/**
+ * PROCESS_LOG self-check, end of every refresh: the engine's manifest (engine_state.json) is the
+ * real list of loaded files; this sheet is only the human view of it. So
+ *  - a loaded file with no PROCESS_LOG row (row deleted or cleared by hand) gets its row back,
+ *    marked "restored from engine";
+ *  - a row with no File_ID and nothing but a Status (left behind by a cleared row) is removed.
+ * Nothing in the data depends on this sheet, so no GR is ever lost or added by it.
+ */
+function syncProcessLogWithManifest_(state) {
+  try {
+    var sheet = getProcessLogSheet_();
+    var data = sheet.getDataRange().getValues();
+    if (!data.length) return;
+    var headers = data[0].map(function (h) { return String(h).trim(); });
+    var idCol = headers.indexOf('File_ID'), statusCol = headers.indexOf('Status');
+    if (idCol === -1 || statusCol === -1) return;
+
+    var have = {}, orphans = [];
+    for (var r = 1; r < data.length; r++) {
+      var id = String(data[r][idCol]).trim();
+      if (id) { have[id] = true; continue; }
+      var other = data[r].some(function (v, i) { return i !== statusCol && String(v).trim() !== ''; });
+      if (!other && String(data[r][statusCol]).trim() !== '') orphans.push(r + 1);
+    }
+    for (var o = orphans.length - 1; o >= 0; o--) sheet.deleteRow(orphans[o]);
+
+    var add = [];
+    Object.keys(state.sources || {}).forEach(function (code) {
+      var files = (state.sources[code] || {}).files || {};
+      Object.keys(files).forEach(function (fid) {
+        if (have[fid]) return;
+        var m = files[fid], e = {
+          File_ID: fid, File_Name: m.fileName || '', Source_Code: code,
+          Last_Updated: m.lastUpdated ? new Date(Number(m.lastUpdated)) : '', Processed_Time: new Date(),
+          Row_Count: m.rows === undefined ? '' : m.rows, Status: 'PROCESSED',
+          Error_Message: 'Row restored from engine (it was missing in this sheet; the data was never affected)'
+        };
+        add.push(headers.map(function (h) { return e.hasOwnProperty(h) ? e[h] : ''; }));
+      });
+    });
+    if (add.length) sheet.getRange(sheet.getLastRow() + 1, 1, add.length, headers.length).setValues(add);
+  } catch (e) {
+    Logger.log('PROCESS_LOG self-check skipped: ' + e);   // a log view problem never stops the refresh
+  }
 }
 
 /** Clears PROCESS_LOG rows (keeps header). */
