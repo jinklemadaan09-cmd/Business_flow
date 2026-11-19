@@ -113,7 +113,7 @@ function GRA_r2Sync_(ss, s, t0, force) {
     if (!fp) continue;
     var meta = JSON.parse(p.getProperty('GRA_R2_' + key) || 'null');
     if (meta && meta.hash === fp.hash && !force) continue;
-    if (meta && meta.hash === fp.hash && force && R2_exists_(c, R2_fileKey_(key))) continue;
+    if (meta && meta.hash === fp.hash && force) { try { if (R2_exists_(c, R2_fileKey_(key))) continue; } catch (e) { /* not sure: send it again */ } }
     if (sent.length && Date.now() - t0 > GRA_TIME_BUDGET_MS) { waiting++; continue; }
     try {
       var file = DriveApp.getFileById(current[key].id), bytes = file.getSize();   // size from Drive, the bytes are not read into memory
@@ -133,7 +133,7 @@ function GRA_r2Sync_(ss, s, t0, force) {
     try { R2_writeIndex_(c, current); p.setProperty('GRA_R2_INDEX', listed); } catch (e) { failed.push('index.json (' + String(e && e.message || e).slice(0, 200) + ')'); }
   }
   if (sent.length) out.push('R2: copied ' + sent.join(', '));
-  if (waiting) { out.push('R2: ' + waiting + ' half-year(s) left, continues in 1 min'); GRA_scheduleContinue_(1); }
+  if (waiting) out.push('R2: ' + waiting + ' half-year(s) not sent yet (time limit): click "move ready half-years now" again');
   if (failed.length) {
     out.push('R2 upload failed: ' + failed.join('; '));
     GRA_mail_(s, 'GR Archive: Cloudflare R2 upload failed',

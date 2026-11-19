@@ -325,7 +325,8 @@ function runIncrementalRefresh_() {
     state.keyColumn !== keyField ||
     lookupSourceChanged_(changedSources, baseName, keyField, cfgCache) ||
     state.joinDefaultsSig !== joinDefaultsSignature_(cfgCache) ||  // a Default_Value was added/changed
-    frozenBefore !== frozenSig;                                     // half-years frozen / taken back
+    frozenBefore !== frozenSig ||                                   // half-years frozen / taken back
+    !!state.forceFull;                                              // a freeze check failed last run
 
   // Ton/Lacs or Display_Format changed → only the sheet view needs rewriting, not the data.
   if (hasMaster_(state) && JSON.stringify(state.sourceNames) !== JSON.stringify(schema.sourceNames)) {
@@ -449,6 +450,7 @@ function runIncrementalRefresh_() {
   state.mirrorDirty = true;
   state.joinDefaultsSig = joinDefaultsSignature_(cfgCache);
   state.frozenSig = frozenSig;
+  state.forceFull = false;
   state.frozenHalves = {};
   Object.keys(frozen).forEach(function (k) { state.frozenHalves[k] = { start: frozen[k].start, end: frozen[k].end }; });
   saveState_(state);
@@ -457,7 +459,9 @@ function runIncrementalRefresh_() {
   var newly = frozenSig.split(',').filter(function (k) { return k && frozenBefore.split(',').indexOf(k) < 0; });
   if (newly.length && !cachedFileIds.length && !affectedCount && !bigChange && typeof engineFreezeCheck_ === 'function') {
     var fc = engineFreezeCheck_(rowsBefore, state.rowCount, newly, frozen);
-    if (fc) { scanNotes.push(fc); state.frozenSig = '#check'; saveState_(state); scheduleContinuation_(); }
+    // taken back: the next run (1 minute) rebuilds with them; the other frozen half-years stay frozen
+    if (fc) { scanNotes.push(fc); state.frozenSig = engineFrozenSig_(frozen); state.forceFull = true;
+      Object.keys(state.frozenHalves).forEach(function (k) { if (!frozen[k]) delete state.frozenHalves[k]; }); saveState_(state); scheduleContinuation_(); }
   }
 
   setProcessLogStatuses_(cachedFileIds, 'PROCESSED');
