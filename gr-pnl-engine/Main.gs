@@ -315,7 +315,8 @@ function runIncrementalRefresh_() {
     saveState_(state);
   }
 
-  if (!fullRecompute && !Object.keys(affected).length) {
+  var affectedCount = Object.keys(affected).length;
+  if (!fullRecompute && !affectedCount) {
     if (state.mirrorDirty) writeMasterSheets_(state, false, t0);
     if (stoppedEarly) {
       scheduleContinuation_();
@@ -329,32 +330,69 @@ function runIncrementalRefresh_() {
     return idle;
   }
 
-  /* ---------- 3. join only the affected keys (or everything) ---------- */
+  // Memory: a change that touches a big part of the master (several big files replaced at once)
+  // is built like "Rebuild master from cache": the old master is not loaded next to the new rows
+  // and no huge delta file is written. Dashboards then do one full reload. Same rows either way.
+  var bigChange = !fullRecompute && hasMaster_(state) &&
+    affectedCount > Math.max(SETTINGS.BIG_CHANGE_MIN_KEYS, (state.rowCount || 0) * SETTINGS.BIG_CHANGE_SHARE);
+  if (bigChange) fullRecompute = true;
+
+  /* ---------- 3. join only the affected keys (or everything), in batches ---------- */
+  var steps = getActiveJoinSteps_();
+  var needed = {};   // sources the join reads (others, e.g. card-rate files for the card API, are not loaded)
+  needed[baseName] = true;
+  steps.forEach(function (st) { needed[String(st.Left_Dataset || '').trim()] = true; needed[String(st.Right_Dataset || '').trim()] = true; });
+
+  var baseKc = sourceKeyCol_(baseName, baseSrc.Unique_Key, cfgCache);
+  var baseRows = loadSourceDataset_(state, baseName, baseKc,
+    resolveOutputColumnName_(baseName, baseSrc.Date_Column, cfgCache),
+    fullRecompute ? null : affected, sourceMaxCol_(baseSrc, cfgCache));
+
+  // A lookup joined on the base key (GR NO → GR NO) can only match the GRs being built,
+  // so only those GRs are loaded from it (e.g. DSR: 1.5 lakh rows → the GRs of this run).
+  var baseKeys = {};
+  baseRows.forEach(function (r) { var k = normKey_(r[baseKc]); if (k) baseKeys[k] = true; });
   var datasets = {};
+  datasets[baseName] = baseRows;
   sources.forEach(function (src) {
     var code = src.Source_Code;
+    if (code === baseName || !needed[code]) return;
     var kc = sourceKeyCol_(code, src.Unique_Key, cfgCache);
     var dc = resolveOutputColumnName_(code, src.Date_Column, cfgCache);
-    var filter = (code === baseName && !fullRecompute) ? affected : null;
+    var filter = (baseKc === keyField && lookupOnBaseKeyOnly_(steps, code, kc, keyField, cfgCache)) ? baseKeys : null;
     datasets[code] = loadSourceDataset_(state, code, kc, dc, filter, sourceMaxCol_(src, cfgCache));
   });
-  var joined = runJoinSteps_(datasets, cfgCache, baseName);
+  baseKeys = null;
 
   /* ---------- 4. apply to master ---------- */
   var masterRows = fullRecompute ? new Map() : loadMasterRowsMap_(state);
   var keyIdx = schema.headers.indexOf(keyField);
   var upserts = [];
   var present = {};
+  var memo = {};
+  var batch = SETTINGS.JOIN_BATCH_ROWS;
 
-  joined.forEach(function (rec) {
-    var k = normKey_(rec[keyField]);
-    if (!k) return;
-    var row = schema.headers.map(function (h) { return cleanOut_(rec[h]); });
-    row[keyIdx] = k;
-    masterRows.set(k, row);
-    present[k] = true;
-    upserts.push(row);
-  });
+  // The base rows are joined BATCH rows at a time; each batch's records are turned into plain
+  // rows and let go before the next batch, so only one batch of joined records is ever in memory.
+  for (var b = 0; b < baseRows.length; b += batch) {
+    var ds = Object.assign({}, datasets);
+    ds[baseName] = baseRows.slice(b, b + batch);
+    for (var z = b; z < Math.min(b + batch, baseRows.length); z++) baseRows[z] = null;
+    var joined = runJoinSteps_(ds, cfgCache, baseName, memo, steps);
+    ds = null;
+    for (var q = 0; q < joined.length; q++) {
+      var rec = joined[q];
+      joined[q] = null;
+      var k = normKey_(rec[keyField]);
+      if (!k) continue;
+      var row = schema.headers.map(function (h) { return cleanOut_(rec[h]); });
+      row[keyIdx] = k;
+      masterRows.set(k, row);
+      if (!fullRecompute) { present[k] = true; upserts.push(row); }
+    }
+    joined = null;
+  }
+  baseRows = null; datasets = null; memo = null;
 
   var deletes = [];
   if (!fullRecompute) {
@@ -362,6 +400,7 @@ function runIncrementalRefresh_() {
       if (!present[k] && masterRows.has(k)) { masterRows.delete(k); deletes.push(k); }
     });
   }
+  present = null;
 
   var version = Date.now();
   if (fullRecompute) {
@@ -371,7 +410,12 @@ function runIncrementalRefresh_() {
   } else {
     appendDelta_(state, upserts, deletes, version);
   }
-  writeMasterSnapshot_(state, schema, keyField, Array.from(masterRows.values()), version);
+  var upsertCount = fullRecompute ? masterRows.size : upserts.length;
+  upserts = null;
+  var allRows = Array.from(masterRows.values());
+  masterRows = null;
+  writeMasterSnapshot_(state, schema, keyField, allRows, version);
+  allRows = null;
   state.pendingKeys = {};
   state.mirrorDirty = true;
   state.joinDefaultsSig = joinDefaultsSignature_(cfgCache);
@@ -380,10 +424,13 @@ function runIncrementalRefresh_() {
   setProcessLogStatuses_(cachedFileIds, 'PROCESSED');
 
   /* ---------- 5. human-facing sheets (failure here never blocks the dashboard) ---------- */
-  var sheetWritten = writeMasterSheets_(state, false, t0);
+  // After a full / big build the sheet is written by the next run (fresh memory, ~1 minute later).
+  var sheetWritten = false;
+  if (fullRecompute) scheduleContinuation_();
+  else sheetWritten = writeMasterSheets_(state, false, t0);
 
-  var msg = (fullRecompute ? 'Full recompute. ' : 'Incremental. ') +
-    'Master rows: ' + state.rowCount + ' · updated: ' + upserts.length + ' · removed: ' + deletes.length +
+  var msg = (bigChange ? 'Big change (' + affectedCount + ' GRs): rebuilt from cache. ' : fullRecompute ? 'Full recompute. ' : 'Incremental. ') +
+    'Master rows: ' + state.rowCount + ' · updated: ' + upsertCount + ' · removed: ' + deletes.length +
     ' · files read: ' + cachedFileIds.length +
     (fileErrors ? ' · ' + fileErrors + ' file(s) in ERROR (see PROCESS_LOG)' : '') +
     (stoppedEarly ? ' · more files pending — continuing automatically in ~1 minute' : '') +
@@ -412,6 +459,27 @@ function lookupSourceChanged_(changedSources, baseName, keyField, cfgCache) {
       var lk = resolveDatasetColumn_(String(st.Left_Dataset || '').trim(), st.Left_Key, cfgCache);
       return lk !== keyField;
     });
+  });
+}
+
+/**
+ * True when every active step that reads this source as its right side joins it on the base key
+ * (e.g. PNL.GR NO = DSR.GR NO) and that is also the source's own Unique_Key. Then rows of other
+ * GRs can never match, so they need not be loaded. Any other kind of join (lane, branch, rate card,
+ * optional keys) → false, and the whole source is loaded as before.
+ */
+function lookupOnBaseKeyOnly_(steps, code, sourceKeyCol, keyField, cfgCache) {
+  var uses = steps.filter(function (st) {
+    return String(st.Left_Dataset || '').trim() === code || String(st.Right_Dataset || '').trim() === code;
+  });
+  if (!uses.length) return false;
+  return uses.every(function (st) {
+    if (String(st.Right_Dataset || '').trim() !== code) return false;   // used as a left side: load all
+    var rkSpec = String(st.Right_Key || '').trim(), lkSpec = String(st.Left_Key || '').trim();
+    if (!rkSpec || !lkSpec || /\+|\?$/.test(rkSpec) || /\+/.test(lkSpec)) return false;
+    var lk = resolveDatasetColumn_(String(st.Left_Dataset || '').trim(), lkSpec, cfgCache);
+    var rk = resolveDatasetColumn_(code, rkSpec, cfgCache);
+    return lk === keyField && rk === sourceKeyCol;
   });
 }
 

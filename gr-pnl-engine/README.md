@@ -85,3 +85,14 @@ P&L / DSR input folders:
 - "Get data from folder" and **Check folders** never read these folders as input (they show as
   `SKIPPED: engine data folder`).
 - If one of these folders is put in the Drive Trash by mistake, the engine takes it back out on its next run.
+
+# Memory guard for big refreshes (Out of memory fix)
+When several big files are replaced at once (e.g. DSR H1 + H2 + a P&L file), a normal refresh used to
+load the old master, the new rows, every lookup file and a huge delta file together and stop with
+**Out of memory**; the dashboard then stayed on the last good data. The refresh now:
+- joins the base rows in batches of `JOIN_BATCH_ROWS` (20,000), turning each batch into plain rows before the next;
+- loads a lookup joined on GR NO (like DSR) only for the GRs being built, and skips sources no join uses;
+- builds a change of more than max(`BIG_CHANGE_MIN_KEYS`, 25% of the master) like **Rebuild master from cache**
+  (no old master in memory, no huge delta; dashboards do one full reload), and writes the
+  `DASHBOARD_MASTER` sheet in the follow-up run a minute later.
+Every GR and every number stays the same as before; only memory use changes. Settings are in `Config.gs`.
