@@ -409,9 +409,10 @@ function R2_put_(c, key, blob) {
   if (r.getResponseCode() !== 200) throw new Error('PUT ' + key + ': HTTP ' + r.getResponseCode() + ' ' + r.getContentText().slice(0, 300));
 }
 
-function R2_exists_(c, key) { return R2_req_(c, 'HEAD', key, null).getResponseCode() === 200; }
+/* UrlFetchApp has no HEAD method ("Attribute provided with invalid value: method"): read only the first byte instead. */
+function R2_exists_(c, key) { var code = R2_req_(c, 'GET', key, null, { Range: 'bytes=0-0' }).getResponseCode(); return code === 200 || code === 206; }
 
-function R2_req_(c, method, key, blob) {
+function R2_req_(c, method, key, blob, extra) {
   var host = c.account + '.r2.cloudflarestorage.com';
   var path = '/' + encodeURIComponent(c.bucket) + '/' + String(key).split('/').map(R2_enc_).join('/');
   var now = new Date();
@@ -430,6 +431,7 @@ function R2_req_(c, method, key, blob) {
     headers: { 'x-amz-date': amzDate, 'x-amz-content-sha256': payloadHash,
                Authorization: 'AWS4-HMAC-SHA256 Credential=' + c.id + '/' + scope + ', SignedHeaders=' + signed + ', Signature=' + sig }
   };
+  if (extra) Object.keys(extra).forEach(function (h) { opt.headers[h] = extra[h]; });   // not signed (allowed by SigV4)
   if (blob) { opt.payload = blob; opt.contentType = blob.getContentType() || 'application/octet-stream'; }
   return UrlFetchApp.fetch('https://' + host + path, opt);
 }
