@@ -9533,12 +9533,35 @@ function arcFrozenPill(){
   GRYear.S.loadFrozen = ()=>arcLoad(arcFrozenMissing());
   GRYear.pill();
 }
+/* frozen half-years of the CURRENT FY (Apr onward) not loaded yet. Yield Analysis month-wise tables show
+   "This FY till date" by default, so these load by themselves once per page (only after the first screen
+   is drawn, from this browser's copy when it has one); older half-years still wait for the header's Load. */
+function arcFrozenCurFY(){
+  const now = new Date(), fy = now.getMonth()>=3 ? now.getFullYear() : now.getFullYear()-1, s = fy+'-04-01', fz = L.frozen||{};
+  return arcFrozenMissing().filter(k=>String((fz[k]||{}).end||'')>=s);
+}
+window.GRArcFY = {
+  missing(){ return ARC_ON ? arcFrozenCurFY() : []; },
+  busy(){ return !!ARC.loading; },
+  load(force){
+    const w = this.missing(); if (!w.length || ARC.loading) return;
+    if (ARC.fyTried && !force) return; ARC.fyTried = true;
+    arcLoad(w);
+  }
+};
+const ARC_FY_KEYS = ['y1','pwt','ylt','nbd'];
+function arcFyNotes(){ try{ if (window.TM) ARC_FY_KEYS.forEach(k=>TM.fyNote(k)); }catch(e){} }
+function arcFyAuto(){   /* index arrived after the tables were drawn: start the load if a Yield table wants it */
+  try{ if (document.querySelector('.tab.active')?.getAttribute('data-page')!=='yield' || !window.TM) return;
+    if (ARC_FY_KEYS.some(k=>TM.mode(k)==='fy')) window.GRArcFY.load();
+    arcFyNotes(); }catch(e){}
+}
 function arcAfterApply(di){
   if (!ARC_ON || typeof parseGrDate!=='function') return;
   ARC.di = di;
   if (!ARC.asked){   /* once per page: is there anything in R2 to offer? */
     ARC.asked = true;
-    arcGet('index.json').then(r=>r.json()).then(j=>{ ARC.index = j; GRYear.S.arcAvail = arcWanted(ARC.di).length; arcFrozenPill();
+    arcGet('index.json').then(r=>r.json()).then(j=>{ ARC.index = j; GRYear.S.arcAvail = arcWanted(ARC.di).length; arcFrozenPill(); arcFyAuto();
       if ((GRYear.S.full || arcNeedEarly()) && GRYear.S.arcAvail) arcLoad(); })
       .catch(e=>{ ARC.error = String(e && e.message || e); console.warn('Archive (R2):', ARC.error); });
     return;
@@ -9585,6 +9608,7 @@ function arcLoad(only){
     GRYear.S.arcBusy = false; ARC.loading = null;
     GRYear.S.frozenMiss = arcFrozenMissing().map(k=>k.replace('_',' '));
     if (added) applyToDashboard(true); else { setStatus(); GRYear.pill(); }
+    arcFyNotes();
   })();
   return ARC.loading;
 }
@@ -15179,15 +15203,18 @@ window.__tillDate = { range, banner };
 'use strict';
 /* =====================================================================
    TABLE MONTHS — some tables pick their own months from the ⋯ menu and
-   ignore the top Month filter. Nothing picked = Last 6 months.
+   ignore the top Month filter. Nothing picked = the table's default:
+   Yield Analysis month-wise tables = This FY till date, Booking Zone ×
+   Destination Zone = the top Month filter, the rest = Last 6 months.
    Other top filters (zone, branch, customer, load type, dates) still apply.
    ===================================================================== */
 const LS='grpnl_tblmonths_v1';
 const TABLES={
-  pwt:{sel:'#yieldDayWeekPanel',narrow:()=>(App.yieldDayWeek||{}).mode==='day',redraw:()=>window.renderYieldDayWeekTable&&window.renderYieldDayWeekTable()},
-  ylt:{sel:'#yieldLoadTypePanel',narrow:()=>App.yltMode==='day',redraw:()=>window.renderYieldLoadType&&window.renderYieldLoadType()},
-  y3:{sel:'#mrmY3y',redraw:()=>{ const s=document.querySelector('#mrmY3y select[data-mrm]'); if(s) s.dispatchEvent(new Event('change',{bubbles:true})); }},
-  nbd:{sel:'#nbd-yield',redraw:()=>window.renderNbd&&window.renderNbd('yield')},
+  pwt:{sel:'#yieldDayWeekPanel',def:'fy',narrow:()=>(App.yieldDayWeek||{}).mode==='day',redraw:()=>window.renderYieldDayWeekTable&&window.renderYieldDayWeekTable()},
+  ylt:{sel:'#yieldLoadTypePanel',def:'fy',narrow:()=>App.yltMode==='day',redraw:()=>window.renderYieldLoadType&&window.renderYieldLoadType()},
+  y1:{sel:'#mrmY1y',def:'fy',redraw:()=>{ const s=document.querySelector('#mrmY1y select[data-mrm]'); if(s) s.dispatchEvent(new Event('change',{bubbles:true})); }},
+  y3:{sel:'#mrmY3y',def:'top',redraw:()=>{ const s=document.querySelector('#mrmY3y select[data-mrm]'); if(s) s.dispatchEvent(new Event('change',{bubbles:true})); }},
+  nbd:{sel:'#nbd-yield',def:'fy',redraw:()=>window.renderNbd&&window.renderNbd('yield')},
   trend:{sel:'#page-trend',redraw:()=>window.renderTrendV33&&window.renderTrendV33()},
   zl:{sel:'#zlPanel',redraw:()=>window.__renderZL&&window.__renderZL()}
 };
@@ -15198,7 +15225,9 @@ const allM=()=>(App.months||[]).map(m=>m.key).filter(Boolean).sort();
 const mLab=k=>{ const m=(App.months||[]).find(x=>x.key===k); return m?m.label:k; };
 const fyOf=k=>{ const y=+k.slice(0,4), m=+k.slice(5); return m>=4?y:y-1; };
 const fyLab=y=>`FY ${y}-${String(y+1).slice(2)}`;
-function mode(key){ const c=cfg[key]; return c&&c.mode?c.mode:'l6'; }
+const defOf=key=>(TABLES[key]&&TABLES[key].def)||'l6';
+const defLab=key=>(MODES.find(x=>x[0]===defOf(key))||MODES[0])[1];
+function mode(key){ const c=cfg[key]; return c&&c.mode?c.mode:defOf(key); }
 function months(key){
   const md=mode(key), a=allM(); if(!a.length||md==='top') return null;
   if(md==='pick'){ const have=new Set(a), s=((cfg[key]||{}).months||[]).filter(k=>have.has(k)).sort(); if(s.length) return s; return a.slice(-6); }
@@ -15207,9 +15236,24 @@ function months(key){
   if(md==='fy'){ const fy=fyOf(a[a.length-1]); return a.filter(k=>fyOf(k)===fy); }
   return a.slice(-6);
 }
+/* This FY: months of the current FY kept only in Cloudflare R2 (frozen) load by themselves, once, after the
+   first screen is drawn; until then the table says so, so Apr–Sep never look empty without a word. */
+function fyNote(key){
+  const t=TABLES[key], p=t&&document.querySelector(t.sel); if(!p||key==='trend') return;
+  let n=p.querySelector(':scope > .tm-fy-note');
+  const A=window.GRArcFY, miss=(A&&mode(key)==='fy')?A.missing():[];
+  if(!miss.length){ if(n) n.remove(); return; }
+  if(!n){ n=document.createElement('div'); n.className='yr-note tm-fy-note'; const h=p.querySelector(':scope > .panel-head'); if(h) h.insertAdjacentElement('afterend',n); else p.prepend(n);
+    n.addEventListener('click',e=>{ if(e.target.closest('button')){ window.GRArcFY.load(true); fyNote(key); } }); }
+  const lab=miss.map(k=>k.replace('_',' ')).join(', ');
+  A.load();   /* automatic once per page; the button retries */
+  n.innerHTML=A.busy()?`<span>⏳ Loading ${lab} (Apr–Sep) from the archive… this table fills in by itself.</span>`
+    :`<span>⚠ ${lab} (Apr–Sep) is not loaded yet, so those months are missing here.</span><button type="button">Load</button>`;
+}
 function modeLabel(key){ const md=mode(key); if(md==='pick'){ const s=months(key)||[]; return s.length===1?mLab(s[0]):s.length+' months picked'; } return (MODES.find(x=>x[0]===md)||MODES[0])[1]; }
 /* run a table's render with its own months in place of the top Month filter */
 function run(key,fn){
+  setTimeout(()=>{ try{ fyNote(key); }catch(e){} },0);
   let ms=months(key); if(!ms) return fn();
   /* Daily view: only the latest of the table's months, so it stays readable and fast */
   const t=TABLES[key]; if(t&&t.narrow&&t.narrow()) ms=ms.slice(-1);
@@ -15218,7 +15262,7 @@ function run(key,fn){
   try{ return fn(); } finally { f.globalMonths=gm; f.globalMonth=g; }
 }
 function set(key,c){ if(c) cfg[key]=c; else delete cfg[key]; save(); const t=TABLES[key]; try{ t&&t.redraw(); }catch(e){ console.error('Table months',e); } }
-window.TM={run,months,mode,modeLabel,explicit:key=>!!cfg[key],reset:key=>{ if(cfg[key]){ delete cfg[key]; save(); } }};
+window.TM={run,months,mode,modeLabel,fyNote,explicit:key=>!!cfg[key],reset:key=>{ if(cfg[key]){ delete cfg[key]; save(); } }};
 
 /* MoM Trends: its own Period chips take over again once clicked */
 document.addEventListener('click',e=>{ if(e.target.closest&&e.target.closest('#page-trend .tr-seg[data-k="period"] button')) window.TM.reset('trend'); },true);
@@ -15230,13 +15274,14 @@ function section(key,menu){
   const fys=[]; a.forEach(k=>{ const y=fyOf(k); let g=fys.find(x=>x.y===y); if(!g){ g={y,ms:[]}; fys.push(g); } g.ms.push(k); });
   const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
   const d=document.createElement('div'); d.className='tm-sec';
-  d.innerHTML=`<div class="tm-h">Table months</div><div class="tm-note">Nothing picked = <b>Last 6 months</b>. The top Month filter doesn't change this table.</div>`
-   +MODES.map(([v,l])=>`<label><input type="radio" name="tmq" value="${v}" ${md===v?'checked':''}> <span>${l}${v==='l6'?' <b class="d">(default)</b>':''}</span></label>`).join('')
+  const dv=defOf(key);
+  d.innerHTML=`<div class="tm-h">Table months</div><div class="tm-note">Nothing picked = <b>${defLab(key)}</b>. ${md==='top'?'Now the top Month filter applies to this table.':'The top Month filter doesn\'t change this table.'}</div>`
+   +MODES.map(([v,l])=>`<label><input type="radio" name="tmq" value="${v}" ${md===v?'checked':''}> <span>${l}${v===dv?' <b class="d">(default)</b>':''}</span></label>`).join('')
    +fys.map((g,i)=>`<div class="tm-h">${i===0?'Or pick months · ':''}${fyLab(g.y)}</div><div class="tm-grid">${g.ms.map(k=>`<label><input type="checkbox" value="${k}" ${md==='pick'&&cur.has(k)?'checked':''}> <span>${esc(mLab(k))}</span></label>`).join('')}</div>`).join('')
-   +`<div class="tm-act"><span data-tm="clear">Clear → Last 6</span><span class="ap" data-tm="apply">Apply</span></div>`;
+   +`<div class="tm-act"><span data-tm="clear">Clear → ${dv==='top'?'Top filter':dv==='fy'?'This FY':'Last 6'}</span><span class="ap" data-tm="apply">Apply</span></div>`;
   const close=()=>{ menu.classList.remove('tm-wide'); document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'})); };
   d.addEventListener('click',e=>e.stopPropagation());
-  d.querySelectorAll('input[type=radio]').forEach(r=>r.onchange=()=>{ close(); set(key,r.value==='l6'?null:{mode:r.value}); });
+  d.querySelectorAll('input[type=radio]').forEach(r=>r.onchange=()=>{ close(); set(key,r.value===dv?null:{mode:r.value}); });
   d.querySelector('[data-tm="clear"]').onclick=()=>{ close(); set(key,null); };
   d.querySelector('[data-tm="apply"]').onclick=()=>{ const v=[...d.querySelectorAll('input[type=checkbox]:checked')].map(x=>x.value); close(); set(key,v.length?{mode:'pick',months:v}:null); };
   return d;
@@ -17711,13 +17756,16 @@ const empty='<div class="rt-empty">No GRs in the current filter.</div>';
 /* ---------- Y1 · Yield vs Cost per KG, last 6 months ---------- */
 function y1(all,anchor){
   const p=panel('yield','mrmY1y','Yield vs Cost per KG — Month Wise'); if(!p) return;
-  const rows=all.filter(r=>inProd(r,ST.y1p)), ms=monthsIn(rows), ctl=lab('Product',sel('y1p',PRODUCTS,ST.y1p));
+  /* months: ⋯ menu → Table months (default This FY till date); "Same as top Month filter" = the top filters' rows */
+  const __t=window.TM?TM.months('y1'):null, __s=__t?new Set(__t):null, __b=(window.TM&&TM.mode('y1')==='top'&&typeof getFilteredRows==='function')?getFilteredRows():filterRowsCached({...App.filters,globalMonth:'',globalMonths:[]});   /* Date From / To still narrows, like the other month-wise tables */
+  if(window.TM) setTimeout(()=>TM.fyNote('y1'),0);
+  const rows=__b.filter(r=>inProd(r,ST.y1p)&&(!__s||__s.has(r.monthKey))), ms=monthsIn(rows), ctl=lab('Product',sel('y1p',PRODUCTS,ST.y1p));
   if(!ms.length) return put(p,'',ctl,empty);
   const mr=ms.map(m=>rows.filter(r=>r.monthKey===m)), a=mr.map(A);
   const by=a.map(x=>sd(x.bf,x.cw)), gy=a.map(x=>sd(x.tf,x.cw)), ck=a.map(x=>sd(x.ex,x.aw)), mg=gy.map((g,i)=>g-ck[i]);
   const line=(t,v,cls)=>`<tr${cls?` class="${cls}"`:''}><td class="l">${t}</td>${v.map((x,i)=>`<td${gr(mr[i],mlab(ms[i]))}>${x}</td>`).join('')}</tr>`;
   const d=gy.map((g,i)=>i?chg('gy',gy[i-1],g):'<span class="na">—</span>');
-  put(p,`${PRODUCTS.find(x=>x[0]===ST.y1p)[1]} · ₹/kg`,ctl,`<table class="mrm-table"><tr><th class="l">₹ / kg</th>${ms.map(m=>`<th>${mlab(m)}</th>`).join('')}</tr>
+  put(p,`${PRODUCTS.find(x=>x[0]===ST.y1p)[1]} · ₹/kg · ${window.TM?TM.modeLabel('y1'):''} (${mlab(ms[0])} – ${mlab(ms[ms.length-1])})`,ctl,`<table class="mrm-table"><tr><th class="l">₹ / kg</th>${ms.map(m=>`<th>${mlab(m)}</th>`).join('')}</tr>
    ${line('Basic Yield',by.map(v=>n2(v)))}${line('Gross Yield',gy.map(v=>n2(v)))}${line('Cost per KG',ck.map(v=>n2(v)))}${line('Margin per KG',mg.map(v=>n2(v)),'mrm-tot')}${line('Gross Yield Variance % (MoM)',d)}</table>`);
 }
 
@@ -17744,9 +17792,10 @@ function y3(all,anchor){
   const p=panel('yield','mrmY3y','Booking Zone × Destination Zone'); if(!p) return;
   const k=ST.y3m, M=MEAS[k], pm=(App.baseMonth&&App.baseMonth!==anchor)?App.baseMonth:prevMonth(anchor);
   const ctl=lab('Measure',sel('y3m',Object.keys(MEAS).map(x=>[x,MEAS[x].l+(MEAS[x].u?' ('+MEAS[x].u+')':'')]),k))+lab('Product',sel('y3p',PRODUCTS,ST.y3p));
-  const rows=all.filter(r=>inProd(r,ST.y3p)), __t=window.TM?TM.months('y3'):null, __c=new Set(__t||[anchor]), __p=new Set(); { let k=(__t||[anchor])[0]; for(let i=0;i<__c.size;i++){ k=prevMonth(k); __p.add(k); } } if(!__t) { __p.clear(); __p.add(pm); }
+  const __top=window.TM&&TM.mode('y3')==='top'&&typeof getFilteredRows==='function'?getFilteredRows().filter(r=>inProd(r,ST.y3p)):null, __tm=__top?monthsIn(__top).filter(Boolean):[];
+  const rows=all.filter(r=>inProd(r,ST.y3p)), __t=__tm.length>1?__tm:(window.TM&&!__top?TM.months('y3'):null), __a=__tm.length===1?__tm[0]:anchor, __c=new Set(__t||[__a]), __p=new Set(); { let k=(__t||[__a])[0]; for(let i=0;i<__c.size;i++){ k=prevMonth(k); __p.add(k); } } if(!__t) { __p.clear(); __p.add((App.baseMonth&&App.baseMonth!==__a)?App.baseMonth:prevMonth(__a)); }
   const __rl=ks=>{ ks=[...ks].sort(); return ks.length===1?mlab(ks[0]):mlab(ks[0])+' – '+mlab(ks[ks.length-1]); }, __cL=__rl(__c), __pL=__rl(__p);
-  const cur=rows.filter(r=>__c.has(r.monthKey)), prv=rows.filter(r=>__p.has(r.monthKey));
+  const cur=__top?__top:rows.filter(r=>__c.has(r.monthKey)), prv=rows.filter(r=>__p.has(r.monthKey));
   if(!cur.length) return put(p,__cL,ctl,empty);
   const O=zoneOrder(cur), D=destOrder(cur), dz=r=>(r.destzone||'').toUpperCase();
   const cell=(rs)=>M.f(A(rs)), G=M.f(A(cur));
@@ -18162,7 +18211,9 @@ setTimeout(()=>{ const pg=document.querySelector('.tab.active')?.getAttribute('d
     let b=document.getElementById('mnBanner');
     if (!b){ const hd=document.getElementById('topHeader'); if (!hd) return; b=document.createElement('div'); b.id='mnBanner'; b.innerHTML='Showing original (unmerged) Customer / Consignor / Consignee names · <a>change in Metric Definitions</a>'; hd.insertAdjacentElement('afterend',b);
       b.querySelector('a').addEventListener('click',()=>{ const tab=document.querySelector('.tab[data-page="def"]'); if (tab) tab.click(); }); }
-    b.style.display=o?'block':'none';
+    /* only on the Data Quality tab */
+    const pg=document.querySelector('.tab.active')?.getAttribute('data-page')||'';
+    b.style.display=(o&&pg==='dq')?'block':'none';
   }
   function set(merged){
     window.GRNamesUnmerged=!merged;
@@ -18173,6 +18224,7 @@ setTimeout(()=>{ const pg=document.querySelector('.tab.active')?.getAttribute('d
     if (typeof window.NameGroupsReapply==='function') window.NameGroupsReapply();
   }
   document.addEventListener('change',e=>{ if (e.target&&e.target.id==='mnToggle') set(e.target.checked); });
+  document.addEventListener('click',e=>{ if (e.target.closest&&e.target.closest('.tab[data-page]')) setTimeout(paint,0); });
   if (document.readyState==='loading') document.addEventListener('DOMContentLoaded',paint); else paint();
 })();
 </script>

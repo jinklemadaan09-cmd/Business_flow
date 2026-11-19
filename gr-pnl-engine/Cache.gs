@@ -169,7 +169,7 @@ function loadSourceDataset_(state, sourceCode, keyCol, dateCol, filterKeys, maxC
 
   var records = [];
   files.forEach(function (m) {
-    if (freeze && engineFileFrozen_(m.halves, freeze.frozen)) return;
+    if (freeze && !freeze.noSkip && engineFileFrozen_(m.halves, freeze.frozen)) return;
     var data = readJsonFile_(m.cacheId);
     var kIdx = data.cols.indexOf(keyCol);
     if (freeze && !m.halves) {

@@ -78,8 +78,22 @@ function R2_test() {
  * verified) that R2 does not have yet or has an older version of, then freezes the ones R2 now has with the same data.
  */
 function R2_uploadNow() {
-  var ss = GRA_engineSs_(), s = GRA_settings_(ss), t0 = Date.now(), text;
+  var ss = GRA_engineSs_(), s = GRA_settings_(ss), t0, text;
   if (GRA_engineBusy_()) { GRA_dialog_('Cloudflare R2', 'The engine refresh is still working. Try again in a few minutes.', ''); return; }
+  // 1. the archive is checked against the engine data of right now (a file changed after the nightly run is archived first)
+  var start = Date.now(), arc = GRA_run_(false, true);
+  if (/^Error:/.test(arc.text || '')) { GRA_dialog_('Cloudflare R2', 'The archive check failed, nothing was uploaded or frozen:\n\n' + arc.text, ''); return; }
+  if (!arc.busy && !arc.building && Date.now() - start > 4 * 60 * 1000) {
+    GRA_dialog_('Cloudflare R2', 'The archive is now up to date with the engine data (that took ' + Math.round((Date.now() - start) / 1000) +
+      ' s). Click "move ready half-years now" once more to upload and freeze (Apps Script allows 6 minutes per click).', '');
+    return;
+  }
+  if (arc.busy || arc.building) {
+    GRA_dialog_('Cloudflare R2', 'The archive is being updated with the latest engine data first:\n\n' + arc.text +
+      '\n\nClick "move ready half-years now" again when ARCHIVE_LOG shows the run is finished. Nothing was uploaded or frozen.', '');
+    return;
+  }
+  t0 = Date.now();
   var lock = LockService.getDocumentLock() || LockService.getScriptLock();
   if (!lock.tryLock(30000)) { GRA_dialog_('Cloudflare R2', 'An archive run is going. Try again when it has finished (see ARCHIVE_LOG).', ''); return; }
   try {
@@ -212,7 +226,7 @@ function GRA_dashboardDrop_(headers) {
 /* ------------------------------------------------------------------ freeze: old half-years leave the engine */
 
 var FRZ_PROP = 'ENGINE_FROZEN';           // { FY26-27_H1: { start, end, rows, hash, at } }  read by the engine (Main.gs)
-var FRZ_BLOCK_PROP = 'ENGINE_FREEZE_BLOCKED';   // { key: { hash, why, at } }  not frozen again until its data changes
+var FRZ_BLOCK_PROP = 'ENGINE_FREEZE_BLOCKED';   // old versions only: cleared by the next freeze
 
 function engineFrozen_() {
   try { return JSON.parse(PropertiesService.getScriptProperties().getProperty(FRZ_PROP) || '{}') || {}; } catch (e) { return {}; }
@@ -263,7 +277,7 @@ function engineFreezeColumn_() {
 /**
  * Called at the end of a clean archive run, after the R2 copy (Archive.gs GRA_run_). Freezes each half-year that:
  * ended FREEZE_AFTER_DAYS days ago, is archived and verified (heal OK, same row count), is in R2 with the same
- * data (hash) and listed in archive/index.json, and was not blocked by a failed check for this same data.
+ * data (hash) and listed in archive/index.json.
  * The engine then rebuilds without those months (in about 1 minute) and checks the row count.
  */
 function GRA_freeze_(ss, s, heal) {
@@ -271,14 +285,13 @@ function GRA_freeze_(ss, s, heal) {
   var c = R2_cfg_();
   if (!c) return '';
   var p = PropertiesService.getScriptProperties(), fz = engineFrozen_(), added = [];
-  var blocked = JSON.parse(p.getProperty(FRZ_BLOCK_PROP) || '{}') || {};
+  p.deleteProperty(FRZ_BLOCK_PROP);   // old versions kept a block list; a click is the owner's decision
   var listed = String(p.getProperty('GRA_R2_INDEX') || '').split(',');
   (heal.periods || []).forEach(function (x) {
     var key = x.key;
     if (!x.ok || fz[key] || !R2_readyHalf_(key, s) || listed.indexOf(key) < 0) return;
     var fp = GRA_storedFp_(key), meta = JSON.parse(p.getProperty('GRA_R2_' + key) || 'null');
     if (!fp || !meta || meta.hash !== fp.hash || fp.rows !== x.rows) return;
-    if (blocked[key] && blocked[key].hash === fp.hash) return;
     try { if (!R2_exists_(c, R2_fileKey_(key))) return; } catch (e) { return; }
     var h = GRA_halfOf_(GRA_labelStart_(key));
     fz[key] = { start: h.start, end: h.end, rows: fp.rows, hash: fp.hash, at: new Date().toISOString() };
@@ -298,25 +311,25 @@ function GRA_freeze_(ss, s, heal) {
 }
 
 /**
- * Engine side (Main.gs), after a run that only changed the frozen list: the master must have lost exactly the
- * rows the archive counted for the newly frozen half-years. If not, they are taken back and not frozen again
- * until their data changes. Returns a note or ''.
+ * Engine side (Main.gs), in the run right after a freeze (every file read): each newly frozen half-year must hold
+ * exactly the GRs its archive counted (= the R2 copy). One that does not (its data changed after the archive
+ * was checked) is taken back into the engine; the others stay frozen. Returns a note or ''.
  */
-function engineFreezeCheck_(before, after, newly, fz) {
-  var want = before;
-  newly.forEach(function (k) { want -= Number(fz[k] && fz[k].rows) || 0; });
-  if (after === want) return '';
-  var p = PropertiesService.getScriptProperties(), blocked = JSON.parse(p.getProperty(FRZ_BLOCK_PROP) || '{}') || {};
-  var why = 'master ' + before + ' -> ' + after + ' GRs, expected ' + want;
-  newly.forEach(function (k) { blocked[k] = { hash: fz[k].hash, why: why, at: new Date().toISOString() }; delete fz[k]; });
-  p.setProperty(FRZ_BLOCK_PROP, JSON.stringify(blocked));
+function engineFreezeCheck_(count, newly, fz) {
+  var bad = newly.filter(function (k) { return (count[k] || 0) !== (Number(fz[k] && fz[k].rows) || 0); });
+  if (!bad.length) return '';
+  var lines = bad.map(function (k) { return k + ': engine ' + (count[k] || 0) + ' GRs, archive / R2 ' + fz[k].rows; });
+  bad.forEach(function (k) { delete fz[k]; });
   engineSetFrozen_(fz);
   try {
-    GRA_mail_(GRA_settings_(GRA_engineSs_()), 'GR engine: freeze undone for ' + newly.join(', '),
-      '<p>The engine check did not match (' + GRA_esc_(why) + '), so these half-years were taken back into the engine. ' +
-      'Nothing is lost. They are frozen again only after their data changes.</p>');
+    GRA_mail_(GRA_settings_(GRA_engineSs_()), 'GR engine: freeze undone for ' + bad.join(', '),
+      '<p>The engine data of these half-years is not the same as their archive / R2 copy, so they stay in the engine ' +
+      '(nothing is lost, the dashboard is correct):</p><ul>' + lines.map(function (l) { return '<li>' + GRA_esc_(l) + '</li>'; }).join('') +
+      '</ul><p>Usually a file of those months changed after the last archive run. Click ' +
+      '<b>Cloudflare R2: move ready half-years now</b> again: it first updates the archive, then uploads and freezes.</p>' +
+      (Object.keys(fz).length ? '<p>Still frozen: ' + GRA_esc_(Object.keys(fz).sort().join(', ')) + '.</p>' : ''));
   } catch (e) {}
-  return 'Freeze check failed (' + why + '): ' + newly.join(', ') + ' taken back';
+  return 'Freeze check: ' + lines.join('; ') + ' → taken back';
 }
 
 /** Nightly archive run: one mail per half-year that is ready to move to R2 (nothing is uploaded). */
@@ -374,11 +387,8 @@ function GRA_unfreezeOne() {
 /** Menu: what is frozen, and a way to take everything back into the engine. */
 function GRA_freezeStatus() {
   var fz = engineFrozen_(), keys = Object.keys(fz).sort();
-  var blocked = JSON.parse(PropertiesService.getScriptProperties().getProperty(FRZ_BLOCK_PROP) || '{}') || {};
   var t = keys.length ? keys.map(function (k) { return GRA_labelOf_(k) + ': ' + GRA_fmt_(fz[k].rows) + ' GRs, frozen ' + String(fz[k].at).slice(0, 10); }).join('\n')
                       : 'Nothing is frozen. The engine reads every month.';
-  var b = Object.keys(blocked);
-  if (b.length) t += '\n\nNot frozen after a failed check: ' + b.map(function (k) { return k + ' (' + blocked[k].why + ')'; }).join('; ');
   GRA_dialog_('Frozen half-years (read from Cloudflare R2)', t, '');
 }
 function GRA_unfreezeAll() {
