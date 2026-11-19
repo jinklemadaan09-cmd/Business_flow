@@ -173,14 +173,29 @@ function dedupeByKeyFn_(records, keyFn, dateOutputCol, maxOutputCol) {
 
 var JOIN_STATS_ = null;   // filled by debugJoin()
 
-/** Runs every active step; returns the final record array. */
-function runJoinSteps_(datasets, columnConfigCache, baseName) {
-  var steps = getActiveJoinSteps_();
+/**
+ * Runs every active step; returns the final record array.
+ * memo (optional, Main.gs): an object kept between calls when the base rows are joined in batches.
+ * The right-side index of a step whose right side is a source (not the output of an earlier step)
+ * is built once and reused for every batch, so batching costs no extra time.
+ * Memory: a left dataset no later step reads is updated in place instead of copied, and every
+ * dataset no later step needs is let go as soon as its step is done. The output is the same.
+ */
+function runJoinSteps_(datasets, columnConfigCache, baseName, memo, stepsIn) {
+  var steps = stepsIn || getActiveJoinSteps_();
   if (!steps.length) return datasets[baseName] || [];
 
   var lastOutput = null;
+  var outputs = {};
+  steps.forEach(function (st) { outputs[String(st.Output_Dataset || '').trim() || ('STEP_' + st.Step_No)] = true; });
+  var usedLater = function (name, from) {
+    for (var j = from; j < steps.length; j++) {
+      if (String(steps[j].Left_Dataset || '').trim() === name || String(steps[j].Right_Dataset || '').trim() === name) return true;
+    }
+    return false;
+  };
 
-  steps.forEach(function (step) {
+  steps.forEach(function (step, si) {
     var L = String(step.Left_Dataset || '').trim();
     var R = String(step.Right_Dataset || '').trim();
     var O = String(step.Output_Dataset || '').trim() || ('STEP_' + step.Step_No);
@@ -204,23 +219,30 @@ function runJoinSteps_(datasets, columnConfigCache, baseName) {
     var lKey = keyFn_(lkCols), rKey = hasOpt ? optionalKeyFn_(rkCols, rOpt) : keyFn_(rkCols);
     var rk = (rkCols.length === 1 && !hasOpt) ? rkCols[0] : null;
 
-    var rightSide = right;
-    var rule = String(step.Right_Duplicate_Rule || '').trim().toUpperCase();
-    if (rule && rule !== 'NONE') {
-      var rd = String(step.Right_Duplicate_Date_Column || '').trim()
-        ? resolveDatasetColumn_(R, step.Right_Duplicate_Date_Column, columnConfigCache)
-        : null;
-      var mc = maxRuleColumn_(step.Right_Duplicate_Rule);           // e.g. MAX:CARD_RATE
-      mc = mc ? resolveDatasetColumn_(R, mc, columnConfigCache) : null;
-      rightSide = rk ? dedupeRecords_(right.map(function (r) { return Object.assign({}, r); }), rk, rd, mc)
-                     : dedupeByKeyFn_(right, rKey, rd, mc);
+    var memoKey = 'step_' + si + '_' + step.Step_No;
+    var canMemo = !!memo && !outputs[R];   // right side is a source: the same for every batch
+    var index = canMemo ? memo[memoKey] : null;
+    if (!index) {
+      var rightSide = right;
+      var rule = String(step.Right_Duplicate_Rule || '').trim().toUpperCase();
+      if (rule && rule !== 'NONE') {
+        var rd = String(step.Right_Duplicate_Date_Column || '').trim()
+          ? resolveDatasetColumn_(R, step.Right_Duplicate_Date_Column, columnConfigCache)
+          : null;
+        var mc = maxRuleColumn_(step.Right_Duplicate_Rule);           // e.g. MAX:CARD_RATE
+        mc = mc ? resolveDatasetColumn_(R, mc, columnConfigCache) : null;
+        rightSide = rk ? dedupeRecords_(right.map(function (r) { return Object.assign({}, r); }), rk, rd, mc)
+                       : dedupeByKeyFn_(right, rKey, rd, mc);
+      }
+      index = new Map();
+      rightSide.forEach(function (r) {
+        var k = rKey(r);
+        if (k) index.set(k, r); // last one wins (records arrive oldest-first)
+      });
+      rightSide = null;
+      if (canMemo) memo[memoKey] = index;
     }
-
-    var index = new Map();
-    rightSide.forEach(function (r) {
-      var k = rKey(r);
-      if (k) index.set(k, r); // last one wins (records arrive oldest-first)
-    });
+    var inPlace = !!memo && !usedLater(L, si + 1);   // nobody reads the left rows again: no copy needed
 
     var inner = String(step.Join_Type || 'LEFT').trim().toUpperCase() === 'INNER';
     var defaults = joinDefaults_(R, columnConfigCache); // Default_Value for GRs not found on the right
@@ -238,7 +260,7 @@ function runJoinSteps_(datasets, columnConfigCache, baseName) {
       }
       var match = (lf && !lf(l)) ? null : lookup(l);
       if (!match && inner) return;
-      var combined = Object.assign({}, l);
+      var combined = inPlace ? l : Object.assign({}, l);
       if (match) {
         Object.keys(match).forEach(function (k) {
           if (rk && k === rk) return;
@@ -255,6 +277,11 @@ function runJoinSteps_(datasets, columnConfigCache, baseName) {
     datasets[O] = out;
     lastOutput = O;
     if (st) JOIN_STATS_.push(st);
+    if (memo) {   // let go of what no later step needs (sources stay: the next batch uses them via the index)
+      if (L !== O && outputs[L] && !usedLater(L, si + 1)) delete datasets[L];
+      if (L === baseName && !usedLater(L, si + 1)) delete datasets[L];
+      if (R !== O && outputs[R] && !usedLater(R, si + 1)) delete datasets[R];
+    }
   });
 
   return datasets[lastOutput] || [];

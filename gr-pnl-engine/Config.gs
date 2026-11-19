@@ -51,6 +51,12 @@ var SETTINGS = {
   AUTO_REFRESH_HOURS: 2,          // auto-refresh interval (any whole hours). Menu can turn it OFF (manual only)
   MAX_FILE_PHASE_MS: 4 * 60 * 1000, // stop opening new files after this; the rest continue next run
   MAX_DELTAS: 60,                   // incremental history kept for dashboard clients
+  // Memory (Out of memory fix): the join runs this many base rows at a time, and a refresh whose
+  // changed GRs exceed max(BIG_CHANGE_MIN_KEYS, master rows x BIG_CHANGE_SHARE) is built like
+  // "Rebuild master from cache" (no old master in memory, no huge delta file).
+  JOIN_BATCH_ROWS: 20000,
+  BIG_CHANGE_MIN_KEYS: 20000,
+  BIG_CHANGE_SHARE: 0.25,
   SHEET_WRITE_CHUNK_ROWS: 5000,
 
   // Output column names used by CALC_GP / CALC_GP_PERCENT
