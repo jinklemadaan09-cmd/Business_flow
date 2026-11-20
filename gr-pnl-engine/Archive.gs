@@ -107,6 +107,7 @@ function GRA_menu_(ui) {
     .addSeparator()
     .addItem('Open archive folder', 'GRA_openFolder')
     .addItem('Archive status (optional, it checks itself)', 'GRA_checkFiles')
+    .addItem('Which files have GRs of a half-year (e.g. FY24-25)', 'GRA_whichFiles')
     .addSeparator()
     .addItem('Cloudflare R2: save keys', 'R2_saveKeys')
     .addItem('Cloudflare R2: test connection', 'R2_test')

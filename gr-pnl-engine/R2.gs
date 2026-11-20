@@ -450,3 +450,58 @@ function R2_enc_(s) { return encodeURIComponent(s).replace(/[!'()*]/g, function 
 function R2_bytes_(s) { return Utilities.newBlob(String(s)).getBytes(); }
 function R2_hmac_(keyBytes, text) { return Utilities.computeHmacSignature(Utilities.MacAlgorithm.HMAC_SHA_256, R2_bytes_(text), keyBytes); }
 function R2_hex_(bytes) { return bytes.map(function (b) { return ('0' + (b & 0xff).toString(16)).slice(-2); }).join(''); }
+
+/**
+ * Menu: which source files hold the GRs of a half-year (e.g. FY24-25). Reads the engine's per-file caches of the
+ * base source (the GR rows) and lists each file with how many of its rows have a GR DT in that half-year,
+ * the dates and a few GR NOs, so the owner can open the file and check them. Changes nothing.
+ */
+function GRA_whichFiles() {
+  var ui = SpreadsheetApp.getUi();
+  var r = ui.prompt('Which files have GRs of a half-year', 'Type a year or half-year, for example FY24-25 or FY24-25_H1.', ui.ButtonSet.OK_CANCEL);
+  if (r.getSelectedButton() !== ui.Button.OK) return;
+  var want = String(r.getResponseText() || '').trim().toUpperCase().replace(/\s+/g, '_');
+  if (!/^FY\d\d-\d\d(_H[12])?$/.test(want)) { GRA_dialog_('Which files', 'Write it like FY24-25 or FY24-25_H1.', ''); return; }
+  GRA_dialog_('Which files: ' + want, GRA_whichFilesText_(want), '');
+}
+
+function GRA_whichFilesText_(want) {
+  var t0 = Date.now(), ss = GRA_engineSs_(), s = GRA_settings_(ss);
+  var inHalf = function (v) { var iso = GRA_iso_(v); return !!iso && GRA_halfOf_(iso).key.indexOf(want) === 0; };
+  var state = loadState_(), base = getBaseDatasetName_(getActiveSources_()), man = state.sources[base];
+  if (!man) return 'The engine has no files for its base source ' + base + ' yet.';
+  // the engine master: how many GRs of that half-year it has now
+  var inMaster = 0;
+  if (state.masterParts && state.masterParts.length) {
+    var di = GRA_col_(state.headers, s.DATE_COLUMN);
+    if (di >= 0) readMasterRows_(state).forEach(function (row) { if (inHalf(row[di])) inMaster++; });
+  }
+  var files = Object.keys(man.files).map(function (id) { return man.files[id]; }), out = [], skipped = 0;
+  for (var i = 0; i < files.length; i++) {
+    if (Date.now() - t0 > 4.5 * 60 * 1000) { skipped = files.length - i; break; }
+    var m = files[i], data;
+    try { data = readJsonFile_(m.cacheId); } catch (e) { continue; }
+    var fi = GRA_col_(data.cols, s.DATE_COLUMN), ki = GRA_col_(data.cols, s.KEY_COLUMN);
+    if (fi < 0) continue;
+    var n = 0, lo = '', hi = '', ex = [];
+    data.rows.forEach(function (row) {
+      if (!inHalf(row[fi])) return;
+      n++;
+      var iso = GRA_iso_(row[fi]);
+      if (!lo || iso < lo) lo = iso;
+      if (!hi || iso > hi) hi = iso;
+      if (ex.length < 5) ex.push((ki >= 0 ? String(row[ki]) : '?') + ' (' + String(row[fi]).slice(0, 24) + ')');
+    });
+    if (n) out.push({ name: m.fileName || m.cacheId, n: n, lo: lo, hi: hi, ex: ex });
+  }
+  out.sort(function (a, b) { return b.n - a.n; });
+  var text = 'Engine data now: ' + GRA_fmt_(inMaster) + ' GRs with ' + s.DATE_COLUMN + ' in ' + want + '.\n\n' +
+    (out.length ? out.map(function (f) {
+      return f.name + ': ' + GRA_fmt_(f.n) + ' rows, ' + s.DATE_COLUMN + ' ' + f.lo + ' to ' + f.hi + '\n   e.g. ' + f.ex.join(', ');
+    }).join('\n\n') : 'No source file of ' + base + ' has rows in ' + want + '.') +
+    (skipped ? '\n\n' + skipped + ' file(s) not checked (time limit): run it again.' : '') +
+    '\n\nOpen the file in the dashboard data folder and filter ' + s.DATE_COLUMN + ' to find these rows. If the year is wrong, ' +
+    'fix it in the file: the next refresh and archive run take it from there.';
+  GRA_log_(ss, 'WHICH FILES', want + ' | ' + text.replace(/\n+/g, ' | '), Math.round((Date.now() - t0) / 1000) + ' s');
+  return text;
+}
