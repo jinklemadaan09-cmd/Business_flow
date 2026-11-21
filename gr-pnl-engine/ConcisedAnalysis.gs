@@ -11,6 +11,11 @@
  *     3. This week: goals, zone-wise
  *     4. Action tracker points
  *     5. Action plan: where to work
+ *     6. The numbers (weekly meeting bullets: revenue vs target, FTL/LTL, run rate, best day,
+ *        stuck and working zones with circles, LTL yield vs benchmark)
+ *     7. Last week's goals & achievements and this week's goals (bullets)
+ *     8. Zone gap: GAP, daily asking rate, coming week goal (Rs Cr). By Whom / By When are typed
+ *        by hand and kept on every rebuild.
  *   Tab "Targets"             monthly revenue target and GP % target per zone (the only inputs)
  *
  * Revenue = TOTAL FREIGHT. GP = TOTAL FREIGHT - TOTAL EXPENSE. Zone = BOOKING ZONE.
@@ -31,6 +36,7 @@ var CA_ = {
   // Source: PAN INDIA - Final Target 26-27.xlsx, tab "NOV`26 Target", column "Target Nov`26"
   // (West 412 and Gujarat West 545 as in the row totals of that tab and its copy).
   // Zone names match with or without a trailing " RO". Change the Targets tab, not this list.
+  MANUAL_SEED_SHEET: 'Next Week Goal',   // By Whom / By When are copied from here the first time
   SEED_TARGETS_LACS: {
     'TOTAL': 2750, 'NORTH ZONE': 1072, 'SOUTH ZONE': 435, 'WEST ZONE': 412, 'GUJARAT WEST ZONE': 545,
     'EAST ZONE': 163, 'NORTH EAST ZONE': 92, 'NEPAL ZONE': 31
@@ -44,7 +50,7 @@ var CA_ = {
   ACTION_POINTS: 8,
   ACTION_PLAN_ROWS: 8,
 
-  PROP_LAST: 'CA_LAST_RUN'
+  PROP_LAST: 'CA_LAST_RUN_V2'   // new name after a layout change, so the next hourly run rebuilds
 };
 
 var CA_COLORS_ = {
@@ -96,6 +102,9 @@ function CA_run_(force) {
   var targets = CA_readTargets_(ss);
   var rows = CA_readRows_(state, CA_firstDayNeeded_(today));
   var model = CA_build_(rows, targets, today);
+  var tz = {};
+  model.zones.forEach(function (z) { tz[CA_zk_(z)] = model.targets[z].month; });
+  model.meeting = CA_meeting_(rows, { zones: tz, total: model.targetTotal.month }, CA_cut_(model.dataTo, today));
   CA_writeTargets_(ss, model);
   CA_render_(ss, model, Utilities.formatDate(new Date(), CA_.TZ, 'dd-MMM-yy HH:mm'));
   props.setProperty(CA_.PROP_LAST, key);
@@ -105,10 +114,10 @@ function CA_run_(force) {
 
 /* ================================ data in ================================ */
 
-/** Earliest date any block needs: first day of the previous month, or 5 weeks back. */
+/** Earliest date any block needs: first day of the 3rd full month back (circle shares, yield benchmark), or 6 weeks back. */
 function CA_firstDayNeeded_(today) {
   var t = CA_d_(today);
-  var a = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth() - 1, 1));
+  var a = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth() - 3, 1));
   var b = CA_addDays_(t, -42);
   return CA_iso_(a < b ? a : b);
 }
@@ -126,24 +135,35 @@ function CA_readRows_(state, fromDay) {
   var ix = {
     date: col(['GR DT', 'GR DATE']), zone: col(['BOOKING ZONE', 'ORIGIN ZONE']),
     branch: col(['BOOKING BRANCH', 'ORIGIN']), cust: col(['CONSIGNOR', 'CNGR']),
-    rev: col(['TOTAL FREIGHT']), exp: col(['TOTAL EXPENSE', 'TOTAL EXPENSES'])
+    rev: col(['TOTAL FREIGHT']), exp: col(['TOTAL EXPENSE', 'TOTAL EXPENSES']),
+    circle: col(['BOOKING CIRCLE', 'ORIGIN CIRCLE']), lt: col(['LOAD TYPE']),
+    cw: col(['CWEIGHT', 'CHARGED WEIGHT']), fr: col(['BASIC FREIGHT', 'FREIGHT'])
   };
+  var at = function (r, i) { return i >= 0 ? r[i] : ''; };
   var out = [];
   (state.masterParts || []).forEach(function (id) {
     var part = readJsonFile_(id);
     part.rows.forEach(function (r) {
       var d = r[ix.date];
       if (typeof d !== 'string' || d < fromDay) return;
-      out.push(CA_rec_(d, r[ix.zone], r[ix.branch], r[ix.cust], r[ix.rev], ix.exp >= 0 ? r[ix.exp] : 0));
+      out.push(CA_rec_(d, r[ix.zone], r[ix.branch], r[ix.cust], r[ix.rev], at(r, ix.exp),
+                       at(r, ix.circle), at(r, ix.lt), at(r, ix.cw), at(r, ix.fr)));
     });
   });
   return out;
 }
 
-function CA_rec_(day, zone, branch, cust, rev, exp) {
+function CA_rec_(day, zone, branch, cust, rev, exp, circle, loadType, cweight, basic) {
   var s = function (v) { v = String(v == null ? '' : v).replace(/\s+/g, ' ').trim(); return v || 'UNSPECIFIED'; };
   var n = function (v) { v = Number(v); return isFinite(v) ? v : 0; };
-  return { d: day.slice(0, 10), z: s(zone), b: s(branch), c: s(cust), rev: n(rev), gp: n(rev) - n(exp) };
+  var lt = s(loadType).toUpperCase();
+  return { d: day.slice(0, 10), z: s(zone), b: s(branch), c: s(cust), rev: n(rev), gp: n(rev) - n(exp),
+           ci: s(circle), lt: lt === 'SML' ? 'LTL' : lt, cw: n(cweight), fr: n(basic) };
+}
+
+/** Last full day with data: the data's last day, but never today (today is still being booked). */
+function CA_cut_(dataTo, today) {
+  return dataTo && dataTo < today ? dataTo : CA_iso_(CA_addDays_(CA_d_(today), -1));
 }
 
 /** Targets tab → { zones: {ZONE: {rev: lacs/month or null, gp: fraction or null}}, total: {...} } */
@@ -356,6 +376,205 @@ function CA_build_(rows, targets, today) {
 }
 
 
+/* ================================ weekly meeting numbers ================================ */
+
+/**
+ * Bullets and the zone gap table for the weekly meeting, from the same rows.
+ * rows: CA_rec_ records (Rs, kg). targets: { zones: { ZONE KEY: Lacs/month }, total: Lacs/month }.
+ * asOf: last full day with data. Working days = Monday to Saturday. Weeks = Monday to Sunday.
+ * Circle target = zone target x the circle's share of the zone's revenue in the last 3 full months.
+ * Yield = LTL Total Freight / CWeight (and Basic Freight / CWeight) against the last 2 full months.
+ * Pure function (no Google services).
+ */
+function CA_meeting_(rows, targets, asOf) {
+  var MS = CA_MON_, BENCH = 2;
+  var D = CA_d_, I = CA_iso_;
+  var add = function (iso, n) { return I(CA_addDays_(D(iso), n)); };
+  var dow = function (iso) { return (D(iso).getUTCDay() + 6) % 7; };
+  var wd = function (a, b) { var n = 0; for (var x = a; x <= b; x = add(x, 1)) if (dow(x) !== 6) n++; return n; };
+  var sd = function (n, d) { return (!d || Math.abs(d) < 1e-9) ? 0 : n / d; };
+  var title = function (v) {
+    return String(v).replace(/\s+circle$/i, '').toLowerCase().replace(/\b[a-z]/g, function (c) { return c.toUpperCase(); })
+      .replace(/\bNcr\b/, 'NCR').replace(/\bUp\b/, 'UP').replace(/\bNe\b/, 'NE').replace(/\bMp\b/, 'MP');
+  };
+  var zShort = function (z) { return title(CA_zk_(z).replace(/ ZONE$/, '').replace(/^ZONE /, '')); };
+  var day = function (iso) { var d = D(iso); return ('0' + d.getUTCDate()).slice(-2) + ' ' + MS[d.getUTCMonth()]; };
+  var rng = function (a, b) {
+    if (a === b) return day(a);
+    var x = D(a), y = D(b);
+    return x.getUTCMonth() === y.getUTCMonth() ? x.getUTCDate() + '-' + y.getUTCDate() + ' ' + MS[y.getUTCMonth()] : day(a) + ' - ' + day(b);
+  };
+  var cr = function (v) { return 'Rs ' + (v / 1e7).toFixed(2) + ' Cr'; };
+  var lk = function (v) { return 'Rs ' + (v / 1e5).toFixed(1) + ' L'; };
+  var pc = function (v) { return (v * 100).toFixed(1) + '%'; };
+  var chg = function (a, b) { return b ? a / b - 1 : null; };
+  var ORDER = ['NORTH ZONE', 'SOUTH ZONE', 'GUJARAT WEST ZONE', 'WEST ZONE', 'EAST ZONE', 'NORTH EAST ZONE', 'NEPAL ZONE'];
+
+  var y = +asOf.slice(0, 4), mo = +asOf.slice(5, 7);
+  var mStart = asOf.slice(0, 8) + '01';
+  var mEnd = I(new Date(Date.UTC(y, mo, 0)));
+  var b3Start = I(new Date(Date.UTC(y, mo - 4, 1))), b3End = add(mStart, -1);
+  var bnStart = I(new Date(Date.UTC(y, mo - 1 - BENCH, 1)));
+  var wdMonth = wd(mStart, mEnd), wdDone = wd(mStart, asOf), wdLeft = asOf < mEnd ? wd(add(asOf, 1), mEnd) : 0;
+  var dw = dow(asOf), owStart = add(asOf, -dw);
+  var lwStart = add(owStart, -7), lwEnd = add(owStart, -1), lwSame = add(lwStart, dw);
+  var nwStart = add(asOf, 7 - dw), nwEndRaw = add(nwStart, 5), nwEnd = nwEndRaw < mEnd ? nwEndRaw : mEnd;
+  var nwDays = nwStart <= mEnd ? wd(nwStart, nwEnd) : 0;
+  var dim = +mEnd.slice(8, 10);
+
+  var S = function () { return { rev: 0, ftl: 0, ltl: 0, lcw: 0, lfr: 0, fcw: 0 }; };
+  var put = function (o, r) {
+    o.rev += r.rev;
+    if (r.lt === 'FTL') { o.ftl += r.rev; o.fcw += r.cw; } else { o.ltl += r.rev; o.lcw += r.cw; o.lfr += r.fr; }
+  };
+  var mtd = S(), bench = S(), ow = S(), lw = S(), lwS = S();
+  var zM = {}, z3 = {}, cM = {}, c3 = {}, daily = {}, zName = {};
+  var g = function (m, k) { return m[k] || (m[k] = S()); };
+  var dataTo = '';
+  rows.forEach(function (r) {
+    var d = r.d;
+    if (!d || d > asOf) return;
+    if (d > dataTo) dataTo = d;
+    var z = CA_zk_(r.z), ck = z + '\u0001' + (r.ci || 'UNSPECIFIED');
+    if (!zName[z]) zName[z] = String(r.z || '').trim().toUpperCase();
+    if (d >= mStart) { put(mtd, r); put(g(zM, z), r); put(g(cM, ck), r); daily[d] = (daily[d] || 0) + r.rev; }
+    else {
+      if (d >= b3Start && d <= b3End) { put(g(z3, z), r); put(g(c3, ck), r); }
+      if (d >= bnStart && d <= b3End) put(bench, r);
+    }
+    if (d >= owStart) put(ow, r);
+    if (d >= lwStart && d <= lwEnd) { put(lw, r); if (d <= lwSame) put(lwS, r); }
+    if (d >= add(owStart, -35) && d < mStart) daily[d] = (daily[d] || 0) + r.rev;
+  });
+
+  /* ---- targets (Lacs → Rs) ---- */
+  var tz = targets.zones || {};
+  var keys = {};
+  Object.keys(zM).concat(Object.keys(tz)).forEach(function (z) {
+    if (z && z !== 'UNSPECIFIED' && ((tz[z] || 0) > 0 || (zM[z] || {}).rev > 0)) keys[z] = true;
+  });
+  var zoneKeys = Object.keys(keys).sort(function (a, b) {
+    var ia = ORDER.indexOf(a), ib = ORDER.indexOf(b);
+    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || ((zM[b] || { rev: 0 }).rev - (zM[a] || { rev: 0 }).rev);
+  });
+  var zoneSum = zoneKeys.reduce(function (s, z) { return s + (tz[z] || 0); }, 0);
+  var T = (targets.total != null && targets.total > 0 ? targets.total : zoneSum) * 1e5;
+  var gap = Math.max(0, T - mtd.rev), need = wdLeft ? gap / wdLeft : 0, run = sd(mtd.rev, wdDone), pace = sd(wdDone, wdMonth);
+
+  var zones = zoneKeys.map(function (z) {
+    var t = (tz[z] || 0) * 1e5, a = zM[z] || S(), gz = Math.max(0, t - a.rev), ask = wdLeft ? gz / wdLeft : 0;
+    return { key: z, name: zName[z] || (z + ' RO'), short: zShort(z), target: t, rev: a.rev, pct: t ? a.rev / t : null, gap: gz, ask: ask, week: ask * nwDays };
+  });
+  var total = { key: 'PAN INDIA', name: 'Pan India', short: 'Pan India', target: T, rev: mtd.rev, pct: sd(mtd.rev, T), gap: gap, ask: need, week: need * nwDays };
+
+  var circles = [];
+  Object.keys(cM).forEach(function (ck) {
+    var p = ck.split('\u0001'), z = p[0], c = p[1];
+    if (!c || c === 'UNSPECIFIED' || c === '-') return;
+    var zt = (tz[z] || 0) * 1e5, zb = (z3[z] || { rev: 0 }).rev, cb = (c3[ck] || { rev: 0 }).rev;
+    if (!zt || !zb || !cb) return;
+    var share = cb / zb, t = zt * share, a = cM[ck];
+    circles.push({ zone: z, name: title(c), share: share, target: t, rev: a.rev, pct: a.rev / t, gap: Math.max(0, t - a.rev) });
+  });
+  var circlesOf = function (z) { var l = circles.filter(function (c) { return c.zone === z && c.share >= 0.05; }); return l.length > 1 ? l : []; };
+
+  var best = null;
+  Object.keys(daily).forEach(function (d) { if (d >= mStart && (!best || daily[d] > best.v)) best = { d: d, v: daily[d] }; });
+  var ty = sd(mtd.ltl, mtd.lcw), by = sd(mtd.lfr, mtd.lcw), bty = sd(bench.ltl, bench.lcw), bby = sd(bench.lfr, bench.lcw);
+  var fty = sd(mtd.ftl, mtd.fcw), bfty = sd(bench.ftl, bench.fcw);
+  var benchLab = MS[+bnStart.slice(5, 7) - 1] + '-' + MS[+b3End.slice(5, 7) - 1];
+
+  /* ---- the numbers ---- */
+  var M = [];
+  M.push({ t: 'Revenue: ' + cr(mtd.rev) + ' booked against a ' + cr(T) + ' target, which is ' + pc(total.pct) + ' achieved (' +
+    pc(pace) + ' of the month’s working days are gone). FTL is ' + cr(mtd.ftl) + ' and LTL is ' + cr(mtd.ltl) + '.' });
+  if (wdLeft) {
+    M.push({ t: 'Run-rate gap: Current run-rate is ' + lk(run) + '/day, but we need ' + lk(need) + '/day for the remaining ' + wdLeft + ' working days.' +
+      (best ? ' Our best day this month was ' + lk(best.v) + ' (' + day(best.d) + ')' + (need > best.v ? ', so the target needs a record run.' : ', so the target is within reach at our best-day pace.') : '') });
+  } else {
+    M.push({ t: 'Month closed: ' + cr(mtd.rev) + ' against ' + cr(T) + (gap > 0 ? ', short by ' + cr(gap) : ', target achieved') + '.' +
+      (best ? ' Best day was ' + lk(best.v) + ' (' + day(best.d) + ').' : '') });
+  }
+  var ranked = zones.filter(function (z) { return z.pct != null && z.target > 0; });
+  var low = ranked.slice().sort(function (a, b) { return a.pct - b.pct; }).filter(function (z) { return z.pct < total.pct; }).slice(0, 3);
+  var sub = function (list, n, asc) {
+    return list.slice().sort(function (a, b) { return asc ? a.pct - b.pct : b.pct - a.pct; }).slice(0, n)
+      .map(function (c) { return c.name + ' ' + pc(c.pct); }).join(', ');
+  };
+  if (low.length) {
+    M.push({ t: 'Where we’re stuck:' });
+    low.forEach(function (z) { var s2 = sub(circlesOf(z.key), 2, true); M.push({ t: z.short + ' is at ' + pc(z.pct) + (s2 ? ' (' + s2 + ')' : '') + '.', sub: true }); });
+  }
+  var big = ranked.slice().sort(function (a, b) { return b.gap - a.gap; })[0];
+  if (big && big.gap > 0) {
+    var bc = circlesOf(big.key).sort(function (a, b) { return b.gap - a.gap; })[0];
+    M.push({ t: big.short + ' has the biggest absolute gap of ' + cr(big.gap) + ', ' + (low.indexOf(big) >= 0 ? 'at' : 'even at') + ' ' + pc(big.pct) + '.' +
+      (bc && bc.gap > 0 ? ' ' + bc.name + ' alone is ' + cr(bc.gap) + ' behind.' : ''), sub: low.length > 0 });
+  }
+  var high = ranked.slice().sort(function (a, b) { return b.pct - a.pct; }).filter(function (z) { return z.pct >= total.pct && low.indexOf(z) < 0; }).slice(0, 1);
+  if (high.length) {
+    var hz = high[0], hs = sub(circlesOf(hz.key), 2, false);
+    var others = circles.filter(function (c) { return c.zone !== hz.key && c.share >= 0.05 && circlesOf(c.zone).length && c.target >= 0.005 * T && c.pct > total.pct; })
+      .sort(function (a, b) { return b.pct - a.pct; }).slice(0, 2);
+    M.push({ t: 'Working well: ' + hz.short + ' is at ' + pc(hz.pct) + (hs ? ', with ' + hs.replace(/, ([^,]*)$/, ' and $1') : '') + '.' +
+      (others.length ? ' ' + others.map(function (c) { return c.name + ' (' + pc(c.pct) + ')'; }).join(' and ') + ' ' + (others.length > 1 ? 'are' : 'is') + ' also ahead.' : '') });
+  }
+  if (bty) {
+    var yOk = ty >= bty * 0.98, vOk = total.pct >= pace * 0.98;
+    var verdict = yOk && !vOk ? 'Yield is not the problem, volume is' : !yOk && vOk ? 'Volume is on track, yield is the problem' : !yOk && !vOk ? 'Both volume and yield are behind' : 'Volume and yield are both on track';
+    var bw = by >= bby ? 'which is above' : (by >= bby * 0.98 ? 'which is only slightly below' : 'which is below');
+    M.push({ t: verdict + ': LTL total yield is Rs ' + ty.toFixed(2) + ' against a Rs ' + bty.toFixed(2) + ' benchmark (' + benchLab + '). Basic yield is Rs ' +
+      by.toFixed(2) + ' against Rs ' + bby.toFixed(2) + ', ' + bw + '.' + (bfty ? ' FTL total yield is Rs ' + fty.toFixed(2) + ' against Rs ' + bfty.toFixed(2) + '.' : '') });
+  }
+
+  /* ---- weekly ---- */
+  var W = [], perDayT = T / dim;
+  var wGoal = function (a, b) { var n = 0; for (var x = a; x <= b; x = add(x, 1)) n++; return n * perDayT; };
+  var owGoal = wGoal(owStart, add(owStart, 6)), lwGoal = wGoal(lwStart, lwEnd);
+  var owFull = dw === 6;
+  var lwDays = [];
+  for (var x = lwStart; x <= lwEnd; x = add(x, 1)) lwDays.push({ d: x, v: daily[x] || 0 });
+  var wkd = lwDays.filter(function (q) { return dow(q.d) < 5 && q.v > 0; }), sat = lwDays.filter(function (q) { return dow(q.d) === 5; })[0];
+  var vals = wkd.map(function (q) { return q.v; });
+  W.push({ t: 'Last week (' + rng(lwStart, lwEnd) + '): ' + cr(lw.rev) + ', which is about ' + Math.round(sd(lw.rev, lwGoal) * 100) + '% of the weekly goal of ' + cr(lwGoal) + '.' +
+    (vals.length ? ' Weekdays ran Rs ' + (Math.min.apply(null, vals) / 1e5).toFixed(0) + '-' + (Math.max.apply(null, vals) / 1e5).toFixed(0) + ' L/day' : '') +
+    (sat && sat.v ? ', and Saturday was ' + lk(sat.v) + '.' : (vals.length ? '.' : '')) });
+  var cmpB = owFull ? lw : lwS, cmpLab = owFull ? 'last week' : (dw ? 'the same ' + (dw + 1) + ' days last week' : 'last Monday');
+  var c1 = chg(ow.rev, cmpB.rev);
+  W.push({ t: 'This week (' + rng(owStart, asOf) + (owFull ? '' : ', ' + (dw + 1) + ' day' + (dw ? 's' : '') + ' so far') + '): ' + cr(ow.rev) +
+    ', which is about ' + Math.round(sd(ow.rev, owGoal) * 100) + '% of the weekly goal' +
+    (c1 == null ? '.' : ' and ' + Math.abs(c1 * 100).toFixed(0) + '% ' + (c1 >= 0 ? 'higher' : 'lower') + ' than ' + cmpLab + ' (' + cr(cmpB.rev) + ').') });
+  var cf = chg(ow.ftl, cmpB.ftl), cl = chg(ow.ltl, cmpB.ltl);
+  if (cf != null && cl != null) {
+    var w = function (n, c, a, b) { return n + ' ' + (c >= 0 ? 'rose' : 'fell') + ' ' + Math.abs(c * 100).toFixed(0) + '% (' + cr(a) + ' to ' + cr(b) + ')'; };
+    W.push({ t: 'FTL vs LTL: ' + w('FTL', cf, cmpB.ftl, ow.ftl) + '. ' + w('LTL', cl, cmpB.ltl, ow.ltl) + ', so ' +
+      (cf >= 0 && cl >= 0 ? (cf > cl ? 'FTL' : 'LTL') + ' is growing faster' : (cf < cl ? 'FTL' : 'LTL') + ' is the weaker segment') + '.' });
+  }
+  var bestWk = null;
+  for (var k = 1; k <= 5; k++) {
+    var a0 = add(owStart, -7 * k), v = 0;
+    for (var x2 = a0; x2 <= add(a0, 6); x2 = add(x2, 1)) v += daily[x2] || 0;
+    if (!bestWk || v > bestWk.v) bestWk = { a: a0, v: v };
+  }
+  if (nwDays && wdLeft) {
+    W.push({ t: 'Coming week (' + rng(nwStart, nwEnd) + '): We need about ' + cr(need * nwDays) + ' (' + lk(need) + ' x ' + nwDays + ' days) just to stay on track' +
+      (bestWk && bestWk.v ? ', versus ' + cr(bestWk.v) + ' in our best recent week (' + rng(bestWk.a, add(bestWk.a, 6)) + ').' : '.') });
+  } else if (wdLeft) {
+    W.push({ t: 'Rest of the month (' + wdLeft + ' working days): We need ' + cr(gap) + ' (' + lk(need) + '/day) to close the target.' });
+  }
+
+  var dn = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][dw];
+  return {
+    asOf: asOf, wdLeft: wdLeft, nwDays: nwDays, zones: zones, total: total, monthBullets: M, weekBullets: W,
+    labels: {
+      month: 'Current month (' + rng(mStart, asOf) + ', data till ' + dn + ' ' + day(asOf) + ')',
+      week: 'Weekly: this week (' + rng(owStart, asOf) + ') vs last week (' + rng(lwStart, lwEnd) + ')',
+      nextWeek: nwDays ? 'Week (' + rng(nwStart, nwEnd) + ') Goal' : 'Rest of Month Goal'
+    }
+  };
+}
+
+
 /* ================================ sheet out ================================ */
 
 function CA_writeTargets_(ss, m) {
@@ -400,6 +619,8 @@ function CA_writeTargets_(ss, m) {
 
 function CA_render_(ss, m, stamp) {
   var sh = ss.getSheetByName(CA_.SHEET) || ss.insertSheet(CA_.SHEET, 0);
+  var manual = CA_readManual_(sh);
+  if (!Object.keys(manual).length) manual = CA_readManual_(ss.getSheetByName(CA_.MANUAL_SEED_SHEET));
   sh.getRange(1, 1, sh.getMaxRows(), sh.getMaxColumns()).breakApart();
   sh.clear();
   sh.getRange(1, 1, sh.getMaxRows(), sh.getMaxColumns()).setFontFamily('Arial').setFontSize(10).setVerticalAlignment('middle');
@@ -502,9 +723,62 @@ function CA_render_(ss, m, stamp) {
     m.plan.map(function (x) { return [x.zone, x.where, x.gap, x.action]; }),
     [null, null, LAC, null], { spans: [1, 3, 1, 5], left: [1, 3], empty: 'No gap found' });
 
+  /* 6, 7: meeting bullets (one merged row per bullet) */
+  var mt = m.meeting;
+  var bullets = function (title, label, list) {
+    sh.getRange(r, 1, 1, W).setBorder(null, null, true, null, null, null, CA_COLORS_.block, SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
+    sh.getRange(r, 1).setValue(title).setFontSize(11).setFontWeight('bold').setFontColor(CA_COLORS_.block);
+    r++;
+    sh.getRange(r, 1).setValue(label).setFontWeight('bold').setFontColor(CA_COLORS_.title);
+    r++;
+    list.forEach(function (b) {
+      var text = (b.sub ? '        - ' : '\u2022  ') + b.t;
+      sh.getRange(r, 1, 1, W).merge().setValue(text).setWrap(true).setVerticalAlignment('top');
+      sh.setRowHeight(r, 18 * Math.max(1, Math.ceil(text.length / 160)) + 4);
+      r++;
+    });
+    r++;
+  };
+  bullets('6. The numbers', mt.labels.month, mt.monthBullets);
+  bullets('7. Last week\u2019s goals & achievements and this week\u2019s goals', mt.labels.week, mt.weekBullets);
+
+  /* 8: zone gap (Rs Cr); By Whom / By When are typed by hand and kept */
+  var CR = '0.00;(0.00);"-"';
+  var mk = function (z) { var k = CA_zk_(z.name === 'Pan India' ? 'PAN INDIA' : z.name); return manual[k] || ['', '']; };
+  var b8 = block('8. Zone gap: daily asking rate and week goal (' + mt.wdLeft + ' working days left, Rs Cr)',
+    ['Zone', 'Month Target', 'Revenue so far', '% Achieved', 'GAP against Target', 'Daily Asking Rate', mt.labels.nextWeek, 'By Whom', 'By When'],
+    mt.zones.concat([mt.total]).map(function (z) {
+      var mm = mk(z);
+      return [z.name, z.target / 1e7, z.rev / 1e7, z.pct == null ? '' : z.pct, z.gap / 1e7, z.ask / 1e7, z.week / 1e7, mm[0], mm[1]];
+    }),
+    [null, CR, CR, PCT, CR, CR, CR, null, null], { spans: [1, 1, 1, 1, 1, 1, 1, 2, 1], total: true, left: [7, 8] });
+  if (b8) sh.getRange(b8.row, b8.at[7], mt.zones.length + 1, 3).setFontColor('#0000FF').setWrap(true);
+
   sh.setColumnWidth(1, 190);
   sh.setColumnWidths(2, W - 1, 104);
   sh.setFrozenRows(2);
+}
+
+
+/**
+ * By Whom / By When typed in a zone table: finds the header row holding "By Whom" and reads the rows under it
+ * until column A is blank. Returns { ZONE KEY: [byWhom, byWhen] }.
+ */
+function CA_readManual_(sh) {
+  var out = {};
+  if (!sh || sh.getLastRow() < 2) return out;
+  var v = sh.getRange(1, 1, sh.getLastRow(), Math.max(1, sh.getLastColumn())).getValues();
+  var norm = function (x) { return String(x == null ? '' : x).replace(/\s+/g, ' ').trim().toUpperCase(); };
+  for (var i = 0; i < v.length; i++) {
+    var w = v[i].map(norm).indexOf('BY WHOM'), n = v[i].map(norm).indexOf('BY WHEN');
+    if (w < 0) continue;
+    for (var j = i + 1; j < v.length && norm(v[j][0]); j++) {
+      var z = norm(v[j][0]);
+      out[CA_zk_(z)] = [v[j][w] == null ? '' : v[j][w], n >= 0 && v[j][n] != null ? v[j][n] : ''];
+    }
+    break;
+  }
+  return out;
 }
 
 
