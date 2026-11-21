@@ -22,6 +22,9 @@ Code: [`gr-pnl-engine/ConcisedAnalysis.gs`](../gr-pnl-engine/ConcisedAnalysis.gs
 | 3 | This week: goals | Zone, Week Target, Done so far, Balance, Needed per Day, Month Balance, Needed per Day (month) |
 | 4 | Action tracker points | Zone, Point, Value, Status |
 | 5 | Action plan: where to work | Zone, Where (branch or customer), Gap, Action |
+| 6 | The numbers (weekly meeting) | Bullets: revenue vs target and % with FTL/LTL split, run rate vs needed per working day, best day, stuck zones (weakest circles), biggest gap, working well, LTL yield vs benchmark |
+| 7 | Last week's goals & achievements and this week's goals | Bullets: last week vs weekly goal, ongoing week vs same days last week, FTL/LTL change, coming week need vs best recent week |
+| 8 | Zone gap (Rs Cr) | Zone, Month Target, Revenue so far, % Achieved, GAP against Target, Daily Asking Rate, Week Goal, By Whom, By When |
 
 ## Definitions
 
@@ -40,6 +43,14 @@ Code: [`gr-pnl-engine/ConcisedAnalysis.gs`](../gr-pnl-engine/ConcisedAnalysis.gs
 | Blank zone revenue target | TOTAL target split by each zone's revenue share of the last 3 full months |
 | Blank GP % target | Zone's own GP % of the last 3 full months |
 | Customer | CONSIGNOR |
+| Working days (blocks 6-8) | Monday to Saturday |
+| Run rate | MTD revenue / working days gone |
+| Daily Asking Rate | GAP / working days left in the month |
+| Week Goal (block 8) | Daily Asking Rate x working days in the coming week (Mon-Sat, within the month) |
+| Weekly goal (block 7) | Month target / days in month x 7 |
+| Circle % | Zone target x the circle's share of the zone's revenue in the last 3 full months (no circle targets in the data yet) |
+| Yield | LTL TOTAL FREIGHT / CWEIGHT and BASIC FREIGHT / CWEIGHT, against the last 2 full months |
+| By Whom / By When | Typed by hand in block 8 and kept on every rebuild. The first time they are copied from the "Next Week Goal" tab. |
 
 ### Action tracker points (auto)
 - Month pace: needed per day vs run rate, when the month is behind target.
