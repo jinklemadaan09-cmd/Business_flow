@@ -1,7 +1,7 @@
 Archive.js  (54671 chars)
 Auth.js  (8709 chars)
 Cache.js  (12448 chars)
-ConcisedAnalysis.js  (30507 chars)
+ConcisedAnalysis.js  (28465 chars)
 Config.js  (15595 chars)
 DataFolders.js  (8070 chars)
 Lanes.js  (10706 chars)
@@ -14,7 +14,7 @@ Reports.js  (5893 chars)
 filereader.js  (8721 chars)
 joinengine.js  (14544 chars)
 transform.js  (13909 chars)
-webapp.js  (11201 chars)
+webapp.js  (11176 chars)
 Dashboard.html
 
 Functions defined in more than one file: none
