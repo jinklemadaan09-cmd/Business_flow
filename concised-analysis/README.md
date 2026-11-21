@@ -10,7 +10,7 @@ Code: [`gr-pnl-engine/ConcisedAnalysis.gs`](../gr-pnl-engine/ConcisedAnalysis.gs
 
 | Tab | Content |
 |---|---|
-| Concised Analysis | Five blocks, rebuilt on every update. Do not type here. |
+| Concised Analysis | Ten blocks, rebuilt on every update. Do not type here. |
 | Targets | Monthly revenue target and GP % target per zone. The only inputs. |
 
 ## Blocks
@@ -21,10 +21,12 @@ Code: [`gr-pnl-engine/ConcisedAnalysis.gs`](../gr-pnl-engine/ConcisedAnalysis.gs
 | 2 | Last week: goal vs achievement | Zone, Target, Revenue, % Ach, Target Miss, GP, GP %, GP % Target, vs Previous Week, Status |
 | 3 | This week: goals | Zone, Week Target, Done so far, Balance, Needed per Day, Month Balance, Needed per Day (month) |
 | 4 | Action tracker points | Zone, Point, Value, Status |
-| 5 | Action plan: where to work | Zone, Where (branch or customer), Gap, Action |
+| 5 | Action plan: where to work | Zone, Branch, Consignors to work on (drop, L), Gap, Action |
 | 6 | The numbers (weekly meeting) | Bullets: revenue vs target and % with FTL/LTL split, run rate vs needed per working day, best day, stuck zones (weakest circles), biggest gap, working well, LTL yield vs benchmark |
 | 7 | Last week's goals & achievements and this week's goals | Bullets: last week vs weekly goal, ongoing week vs same days last week, FTL/LTL change, coming week need vs best recent week |
 | 8 | Zone gap (Rs Cr) | Zone, Month Target, Revenue so far, % Achieved, GAP against Target, Daily Asking Rate, Week Goal, By Whom, By When |
+| 9 | Lost customers | Consignors with at least Rs 1 L last month and nothing this month: Zone, Branch, Consignor, Last Month Revenue, GRs, GP %, Last GR, Days since (top 30) |
+| 10 | Negative GP consignors (MTD) | Zone, Branch, Consignor, MTD Revenue, MTD GP, GP %, GRs (top 30, worst first) |
 
 ## Definitions
 
@@ -58,15 +60,25 @@ Code: [`gr-pnl-engine/ConcisedAnalysis.gs`](../gr-pnl-engine/ConcisedAnalysis.gs
 - Zones whose GP % last week is more than 1 point below target.
 - Top 3 customers whose last-week revenue fell most against their 4-week average.
 
-### Action plan (auto, largest gap first, 8 rows)
-- Branches in Missed or Close zones with the largest drop against their 4-week average.
+### Action plan (auto, largest gap first, 15 rows)
+- Branches in Missed or Close zones with the largest drop against their 4-week average, with the 4 consignors that dropped most in that branch.
 - Customers with the largest drop against their 4-week average.
 - Customers under 10% GP % (gap = GP at target - actual GP).
 
 Customers and branches under Rs 2 Lacs in the 4-week window are left out. All limits are in `CA_` at the top of the code.
 
+## Copies to other sheets (after every update)
+
+| Sheet | What goes there |
+|---|---|
+| Sales Weekly/ Daily Tracker Sugam 2026 (huddle agenda) | Block 6 text in the notes cell of "The numbers" row, block 7 text in the notes cell of the goals row. One Word and good news stay manual. |
+| Last week / this week sheet | Blocks 2 and 3, in tab "Sales Tracker - Weekly" |
+| Action tracker sheet | Blocks 4, 5, 9 and 10, in tab "Sales Tracker - Actions" |
+
+Ids, tabs and blocks are in `CA_.PUSH`. A blank id turns that copy off. If one copy fails, the others still run and **Update now** shows why.
+
 ## Setup (once)
-1. The Google account that owns the GR PNL Engine needs **Editor** access to the Sales Tracker sheet.
+1. The Google account that owns the GR PNL Engine needs **Editor** access to the Sales Tracker sheet and to the three sheets above.
 2. Merge the PR. The `GR engine: sync` action sends the code to the engine.
 3. Engine sheet > **GR PNL Engine > Concised Analysis > Turn on hourly update** (allow permissions).
 4. The **Targets** tab starts with the Nov'26 zone targets (Rs Lacs): North 1,072, Gujarat West 545, South 435, West 412, East 163, North East 92, Nepal 31, Total 2,750. Source: PAN INDIA - Final Target 26-27.xlsx, tab NOV`26 Target, column Target Nov`26. Change the blue cells for a new month.

@@ -48,9 +48,31 @@ var CA_ = {
   LOW_GP_PCT: 0.10,       // customers under this GP % are listed in the action plan
   MIN_CUSTOMER_LACS: 2,   // ignore customers below this revenue (Rs Lacs) in a 4-week window
   ACTION_POINTS: 8,
-  ACTION_PLAN_ROWS: 8,
+  ACTION_PLAN_ROWS: 15,
+  PLAN_CONSIGNORS: 4,     // consignor names listed against each branch in the action plan
+  LOST_MIN_LACS: 1,       // lost customer: at least this much last month, nothing this month
+  LOST_ROWS: 30,
+  NEG_GP_ROWS: 30,
 
-  PROP_LAST: 'CA_LAST_RUN_V2'   // new name after a layout change, so the next hourly run rebuilds
+  // Copies sent to other sheets after each update. A blank id switches that copy off.
+  // The engine owner needs Editor access to each of these files.
+  PUSH: {
+    HUDDLE_ID: '1TvdMNI9H39gNceZhOFZbI_MgEHHK6cVZwRhk0LbF9ow',   // Sales Weekly/ Daily Tracker Sugam 2026
+    HUDDLE_SHEET: '',                                             // blank = first tab
+    HUDDLE_ROWS: [                                                // agenda row (text match) -> text written in its notes cell
+      { match: 'THE NUMBERS', text: 'month' },
+      { match: 'GOALS', text: 'week' }
+    ],
+    HUDDLE_NOTES_HEAD: ['NOTES', 'NOTE', 'REMARKS', 'DETAILS', 'DISCUSSION'],
+    WEEKLY_ID: '1ffENUOTaLgQxVlxVqkfKzOr3-kCDVFqQaLX1mdXvPXM',    // last week / this week sheet
+    WEEKLY_SHEET: 'Sales Tracker - Weekly',
+    WEEKLY_BLOCKS: ['2.', '3.'],
+    ACTION_ID: '1akcGiG2Fk6XsIlUCMfTVzUK7DvKiGGP01s4_88OgY_w',    // action tracker sheet
+    ACTION_SHEET: 'Sales Tracker - Actions',
+    ACTION_BLOCKS: ['4.', '5.', '9.', '10.']
+  },
+
+  PROP_LAST: 'CA_LAST_RUN_V3'   // new name after a layout change, so the next hourly run rebuilds
 };
 
 var CA_COLORS_ = {
@@ -106,9 +128,12 @@ function CA_run_(force) {
   model.zones.forEach(function (z) { tz[CA_zk_(z)] = model.targets[z].month; });
   model.meeting = CA_meeting_(rows, { zones: tz, total: model.targetTotal.month }, CA_cut_(model.dataTo, today));
   CA_writeTargets_(ss, model);
-  CA_render_(ss, model, Utilities.formatDate(new Date(), CA_.TZ, 'dd-MMM-yy HH:mm'));
+  var stamp = Utilities.formatDate(new Date(), CA_.TZ, 'dd-MMM-yy HH:mm');
+  CA_render_(ss, model, stamp);
+  SpreadsheetApp.flush();
+  var notes = CA_push_(ss.getSheetByName(CA_.SHEET), model, stamp);
   props.setProperty(CA_.PROP_LAST, key);
-  return 'Updated: data up to ' + CA_fmtDay_(model.dataTo) + '.';
+  return 'Updated: data up to ' + CA_fmtDay_(model.dataTo) + '.' + (notes.length ? '\n' + notes.join('\n') : '');
 }
 
 
@@ -264,8 +289,8 @@ function CA_build_(rows, targets, today) {
     var o = {};
     rows.forEach(function (r) {
       if (r.d < a || r.d > b) return;
-      var k = keyFn(r), x = o[k] || (o[k] = { rev: 0, gp: 0 });
-      x.rev += r.rev; x.gp += r.gp;
+      var k = keyFn(r), x = o[k] || (o[k] = { rev: 0, gp: 0, n: 0, last: '' });
+      x.rev += r.rev; x.gp += r.gp; x.n++; if (r.d > x.last) x.last = r.d;
     });
     return o;
   };
@@ -351,27 +376,90 @@ function CA_build_(rows, targets, today) {
   });
   pts = pts.slice(0, CA_.ACTION_POINTS);
 
-  /* ---- 5. action plan: where to work (largest Rs gap first) ---- */
+  /* ---- 5. action plan: where to work (largest Rs gap first), with the consignors behind each branch drop ---- */
+  var K = '\u0001';
+  var bcLw = sum(P.lw[0], P.lw[1], function (r) { return r.b + K + r.z + K + r.c; });
+  var bc4 = sum(P.pw4[0], P.pw4[1], function (r) { return r.b + K + r.z + K + r.c; });
+  var mainBranch = {};   // consignor|zone -> branch with most revenue in the 5 weeks
+  Object.keys(bc4).forEach(function (k) {
+    var p = k.split(K), ck = p[2] + K + p[1];
+    if (!mainBranch[ck] || bc4[k].rev > mainBranch[ck].rev) mainBranch[ck] = { b: p[0], rev: bc4[k].rev };
+  });
+  var brCust = {};       // branch|zone -> consignors that dropped, biggest first
+  Object.keys(bc4).forEach(function (k) {
+    var p = k.split(K), d = (bc4[k].rev / 4 - get(bcLw, k).rev) / L;
+    if (d <= 0) return;
+    (brCust[p[0] + K + p[1]] = brCust[p[0] + K + p[1]] || []).push({ name: p[2], drop: d });
+  });
+  var names = function (list) {
+    return (list || []).sort(function (a, b) { return b.drop - a.drop; }).slice(0, CA_.PLAN_CONSIGNORS)
+      .map(function (x) { return x.name + ' (' + lac(x.drop) + ')'; }).join(', ');
+  };
   var plan = [];
   var missedZones = {};
   last.concat(stand).forEach(function (r) { if (r.status === 'Missed' || r.status === 'Close') missedZones[r.zone] = true; });
-  brDrops.filter(function (x) { return missedZones[x.zone]; }).slice(0, 4).forEach(function (x) {
-    plan.push({ zone: x.zone, where: 'Branch: ' + x.name, gap: x.drop, action: 'Recover booking volume; review top customers of the branch' });
+  brDrops.filter(function (x) { return missedZones[x.zone]; }).slice(0, 7).forEach(function (x) {
+    plan.push({ zone: x.zone, branch: x.name, who: names(brCust[x.name + K + x.zone]), gap: x.drop,
+                action: 'Recover branch volume; call the consignors listed' });
   });
-  custDrops.slice(0, 4).forEach(function (x) {
-    plan.push({ zone: x.zone, where: 'Customer: ' + x.name, gap: x.drop, action: 'Call customer; check rate, service and lost lanes' });
+  custDrops.slice(0, 8).forEach(function (x) {
+    var mb = mainBranch[x.name + K + x.zone];
+    plan.push({ zone: x.zone, branch: mb ? mb.b : '', who: x.name + ' (' + lac(x.drop) + ')', gap: x.drop,
+                action: 'Call customer; check rate, service and lost lanes' });
   });
   lowGp.slice(0, 3).forEach(function (x) {
-    plan.push({ zone: x.zone, where: 'Customer: ' + x.name + ' (GP ' + CA_pct1_(x.gpPct) + ')', gap: x.gap, action: 'Revise rate or cut cost on this account' });
+    var mb = mainBranch[x.name + K + x.zone];
+    plan.push({ zone: x.zone, branch: mb ? mb.b : '', who: x.name + ' (GP ' + CA_pct1_(x.gpPct) + ')', gap: x.gap,
+                action: 'Revise rate or cut cost on this account' });
   });
   plan.sort(function (a, b) { return b.gap - a.gap; });
   plan = plan.slice(0, CA_.ACTION_PLAN_ROWS);
+
+  /* ---- 9. lost customers: business last month, nothing this month ---- */
+  P.lm = [CA_iso_(lmStart), CA_iso_(lmEnd)];
+  var keyCZ = function (r) { return r.c + K + r.z; };
+  var lmC = sum(P.lm[0], P.lm[1], keyCZ), mtdC = sum(P.mtd[0], P.mtd[1], keyCZ);
+  var lastSeen = sum('0000', '9999', keyCZ);
+  var lmBr = {};
+  rows.forEach(function (r) {
+    if (r.d < P.lm[0] || r.d > P.lm[1]) return;
+    var k = keyCZ(r), o = lmBr[k] || (lmBr[k] = {});
+    o[r.b] = (o[r.b] || 0) + r.rev;
+  });
+  var topKey = function (o) { return Object.keys(o || {}).sort(function (a, b) { return o[b] - o[a]; })[0] || ''; };
+  var cutD = CA_d_(cut);
+  var lost = Object.keys(lmC).filter(function (k) {
+    return lmC[k].rev >= CA_.LOST_MIN_LACS * L && get(mtdC, k).rev <= 0;
+  }).map(function (k) {
+    var p = k.split(K), ls = lastSeen[k].last;
+    return { zone: p[1], branch: topKey(lmBr[k]), name: p[0], lmRev: lmC[k].rev / L, lmGrs: lmC[k].n,
+             lmGpPct: pct(lmC[k].gp, lmC[k].rev), lastGr: ls, days: ls ? Math.round((cutD - CA_d_(ls)) / 86400000) : null };
+  }).sort(function (a, b) { return b.lmRev - a.lmRev; });
+  var lostTotal = lost.reduce(function (s2, x) { return s2 + x.lmRev; }, 0);
+  var lostCount = lost.length;
+  lost = lost.slice(0, CA_.LOST_ROWS);
+
+  /* ---- 10. negative GP consignors, month to date ---- */
+  var mtdBr = {};
+  rows.forEach(function (r) {
+    if (r.d < P.mtd[0] || r.d > P.mtd[1]) return;
+    var k = keyCZ(r), o = mtdBr[k] || (mtdBr[k] = {});
+    o[r.b] = (o[r.b] || 0) + r.rev;
+  });
+  var negGp = Object.keys(mtdC).filter(function (k) { return mtdC[k].rev > 0 && mtdC[k].gp < 0; }).map(function (k) {
+    var p = k.split(K), x = mtdC[k];
+    return { zone: p[1], branch: topKey(mtdBr[k]), name: p[0], rev: x.rev / L, gp: x.gp / L, gpPct: pct(x.gp, x.rev), grs: x.n };
+  }).sort(function (a, b) { return a.gp - b.gp; });
+  var negTotal = negGp.reduce(function (s2, x) { return s2 + x.gp; }, 0);
+  var negCount = negGp.length;
+  negGp = negGp.slice(0, CA_.NEG_GP_ROWS);
 
   return {
     today: today, dataTo: dataTo, periods: P, mtdDays: dayN, daysLeft: daysLeft, monthDaysLeft: mDaysLeft,
     zones: zones, targets: tgt, targetTotal: tgtTotal,
     stand: stand, standTotal: standTot, last: last, lastTotal: lastTot, thisWeek: thisW, thisTotal: thisTot,
-    points: pts, plan: plan
+    points: pts, plan: plan,
+    lost: lost, lostCount: lostCount, lostTotal: lostTotal, negGp: negGp, negCount: negCount, negTotal: negTotal
   };
 }
 
@@ -718,10 +806,11 @@ function CA_render_(ss, m, stamp) {
   if (b4) m.points.forEach(function (x, i) { sh.getRange(b4.row + i, b4.at[2]).setNumberFormat(x.fmt === 'pct' ? PCT : LAC); });
 
   /* 5 */
-  block('5. Action plan: where to work',
-    ['Zone', 'Where', 'Gap', 'Action'],
-    m.plan.map(function (x) { return [x.zone, x.where, x.gap, x.action]; }),
-    [null, null, LAC, null], { spans: [1, 3, 1, 5], left: [1, 3], empty: 'No gap found' });
+  var b5 = block('5. Action plan: where to work (gap = drop vs 4-week average, Rs Lacs)',
+    ['Zone', 'Branch', 'Consignors to work on (drop, L)', 'Gap', 'Action'],
+    m.plan.map(function (x) { return [x.zone, x.branch, x.who, x.gap, x.action]; }),
+    [null, null, null, LAC, null], { spans: [1, 2, 4, 1, 2], left: [1, 2, 4], empty: 'No gap found' });
+  if (b5) sh.getRange(b5.row, b5.at[2], m.plan.length, 4).setWrap(true);
 
   /* 6, 7: meeting bullets (one merged row per bullet) */
   var mt = m.meeting;
@@ -754,9 +843,119 @@ function CA_render_(ss, m, stamp) {
     [null, CR, CR, PCT, CR, CR, CR, null, null], { spans: [1, 1, 1, 1, 1, 1, 1, 2, 1], total: true, left: [7, 8] });
   if (b8) sh.getRange(b8.row, b8.at[7], mt.zones.length + 1, 3).setFontColor('#0000FF').setWrap(true);
 
+  /* 9: lost customers */
+  var DT = 'dd-mmm-yy';
+  block('9. Lost customers: business in ' + CA_fmtRange_(P.lm) + ', nothing this month (' + m.lostCount +
+    ' consignors, Rs ' + CA_lac_(m.lostTotal) + ' L last month)',
+    ['Zone', 'Branch', 'Consignor', 'Last Month Revenue', 'GRs', 'GP %', 'Last GR', 'Days since'],
+    m.lost.map(function (x) { return [x.zone, x.branch, x.name, x.lmRev, x.lmGrs, nz(x.lmGpPct), x.lastGr ? CA_d_(x.lastGr) : '', nz(x.days)]; }),
+    [null, null, null, LAC, '0', PCT, DT, '0'], { spans: [1, 2, 2, 1, 1, 1, 1, 1], left: [1, 2], empty: 'No lost customer' });
+
+  /* 10: negative GP */
+  block('10. Negative GP consignors, month to date (' + m.negCount + ' consignors, GP Rs ' + CA_lac_(m.negTotal) + ' L)',
+    ['Zone', 'Branch', 'Consignor', 'MTD Revenue', 'MTD GP', 'GP %', 'GRs'],
+    m.negGp.map(function (x) { return [x.zone, x.branch, x.name, x.rev, x.gp, x.gpPct, x.grs]; }),
+    [null, null, null, LAC, LAC, PCT, '0'], { spans: [1, 2, 3, 1, 1, 1, 1], left: [1, 2], signCols: [4, 5], empty: 'No negative GP consignor' });
+
   sh.setColumnWidth(1, 190);
   sh.setColumnWidths(2, W - 1, 104);
   sh.setFrozenRows(2);
+}
+
+
+/* ================================ copies to other sheets ================================ */
+
+/** Sends the meeting text and the blocks to the other sheets. A failure in one copy never stops the others. */
+function CA_push_(src, m, stamp) {
+  var P = CA_.PUSH, notes = [];
+  var tryIt = function (label, id, fn) {
+    if (!id) return;
+    try { fn(SpreadsheetApp.openById(id)); notes.push(label + ': done'); }
+    catch (e) { notes.push(label + ': not updated (' + e.message + ')'); }
+  };
+  tryIt('Huddle sheet', P.HUDDLE_ID, function (dst) { CA_pushHuddle_(dst, m); });
+  tryIt('Weekly sheet', P.WEEKLY_ID, function (dst) { CA_copyBlocks_(src, P.WEEKLY_BLOCKS, dst, P.WEEKLY_SHEET, stamp); });
+  tryIt('Action tracker', P.ACTION_ID, function (dst) { CA_copyBlocks_(src, P.ACTION_BLOCKS, dst, P.ACTION_SHEET, stamp); });
+  return notes;
+}
+
+/** Bullet list as one cell of text. */
+function CA_bulletText_(label, list) {
+  return [label].concat(list.map(function (b) { return (b.sub ? '    - ' : '\u2022 ') + b.t; })).join('\n');
+}
+
+/** Huddle agenda: finds each agenda row by its text and writes the matching bullets into that row's notes cell. */
+function CA_pushHuddle_(dst, m) {
+  var P = CA_.PUSH;
+  var sh = P.HUDDLE_SHEET ? dst.getSheetByName(P.HUDDLE_SHEET) : dst.getSheets()[0];
+  if (!sh) throw new Error('tab ' + P.HUDDLE_SHEET + ' not found');
+  var v = sh.getDataRange().getDisplayValues();
+  var norm = function (x) { return String(x == null ? '' : x).replace(/\s+/g, ' ').trim().toUpperCase(); };
+  var noteCol = -1;
+  for (var i = 0; i < Math.min(v.length, 10) && noteCol < 0; i++) {
+    for (var j = 0; j < v[i].length; j++) if (P.HUDDLE_NOTES_HEAD.indexOf(norm(v[i][j])) >= 0) { noteCol = j; break; }
+  }
+  if (noteCol < 0) throw new Error('no Notes column found');
+  var texts = { month: CA_bulletText_(m.meeting.labels.month, m.meeting.monthBullets),
+                week: CA_bulletText_(m.meeting.labels.week, m.meeting.weekBullets) };
+  var done = {};
+  P.HUDDLE_ROWS.forEach(function (h) {
+    for (var r = 0; r < v.length; r++) {
+      if (done[r]) continue;
+      var hit = v[r].some(function (x, c) { return c !== noteCol && norm(x).indexOf(h.match) >= 0; });
+      if (!hit) continue;
+      sh.getRange(r + 1, noteCol + 1).setValue(texts[h.text]).setWrap(true).setVerticalAlignment('top');
+      done[r] = true;
+      return;
+    }
+    throw new Error('agenda row "' + h.match + '" not found');
+  });
+}
+
+/**
+ * Copies whole blocks of the Concised Analysis tab (values, number formats, colours, merges) into a tab of another file.
+ * A block runs from its title row ("5. Action plan ...") to the row before the next title. The tab is rebuilt each time.
+ */
+function CA_copyBlocks_(src, prefixes, dst, tabName, stamp) {
+  var last = src.getLastRow(), W = 10;
+  var colA = src.getRange(1, 1, last, 1).getDisplayValues().map(function (x) { return x[0]; });
+  var isTitle = function (t) { return /^\d+\. /.test(t); };
+  var spans = [];
+  prefixes.forEach(function (p) {
+    for (var i = 0; i < last; i++) {
+      if (colA[i].indexOf(p + ' ') !== 0) continue;
+      var e = i + 1;
+      while (e < last && !isTitle(colA[e])) e++;
+      spans.push([i + 1, e - i]);   // [first row, row count]
+      return;
+    }
+  });
+  var sh = dst.getSheetByName(tabName) || dst.insertSheet(tabName);
+  sh.getRange(1, 1, sh.getMaxRows(), sh.getMaxColumns()).breakApart();
+  sh.clear();
+  sh.setHiddenGridlines(true);
+  sh.getRange(1, 1, sh.getMaxRows(), Math.min(sh.getMaxColumns(), W)).setFontFamily('Arial').setFontSize(10).setVerticalAlignment('middle');
+  sh.getRange(1, 1).setValue('From Sales Tracker, Concised Analysis   |   Updated ' + stamp + '   |   Rs in Lacs')
+    .setFontSize(9).setFontColor(CA_COLORS_.sub);
+  var at = 3;
+  spans.forEach(function (sp) {
+    var a = src.getRange(sp[0], 1, sp[1], W), b = sh.getRange(at, 1, sp[1], W);
+    b.setValues(a.getValues());
+    b.setNumberFormats(a.getNumberFormats());
+    b.setBackgrounds(a.getBackgrounds());
+    b.setFontColors(a.getFontColors());
+    b.setFontWeights(a.getFontWeights());
+    b.setFontSizes(a.getFontSizes());
+    b.setHorizontalAlignments(a.getHorizontalAlignments());
+    b.setWraps(a.getWraps());
+    a.getMergedRanges().forEach(function (g) {
+      sh.getRange(at + g.getRow() - sp[0], g.getColumn(), g.getNumRows(), g.getNumColumns()).merge();
+    });
+    sh.getRange(at, 1, 1, W).setBorder(null, null, true, null, null, null, CA_COLORS_.block, SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
+    for (var k = 0; k < sp[1]; k++) sh.setRowHeight(at + k, src.getRowHeight(sp[0] + k));
+    at += sp[1];
+  });
+  for (var c = 1; c <= W; c++) sh.setColumnWidth(c, src.getColumnWidth(c));
 }
 
 
@@ -772,9 +971,11 @@ function CA_readManual_(sh) {
   for (var i = 0; i < v.length; i++) {
     var w = v[i].map(norm).indexOf('BY WHOM'), n = v[i].map(norm).indexOf('BY WHEN');
     if (w < 0) continue;
+    var prevWhen = '';   // By When is often one merged cell for all zones: carry it down
     for (var j = i + 1; j < v.length && norm(v[j][0]); j++) {
-      var z = norm(v[j][0]);
-      out[CA_zk_(z)] = [v[j][w] == null ? '' : v[j][w], n >= 0 && v[j][n] != null ? v[j][n] : ''];
+      var z = norm(v[j][0]), when = n >= 0 && v[j][n] != null && v[j][n] !== '' ? v[j][n] : '';
+      if (when === '' && z !== 'PAN INDIA') when = prevWhen; else if (z !== 'PAN INDIA') prevWhen = when;
+      out[CA_zk_(z)] = [v[j][w] == null ? '' : v[j][w], when];
     }
     break;
   }
