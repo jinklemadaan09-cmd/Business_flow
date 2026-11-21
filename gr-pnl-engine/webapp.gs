@@ -208,7 +208,7 @@ function cardApi_(state, plain) {
  * (Cloudflare Pages). Body (text/plain): {"fn":"liveApi","args":[...]}.
  * Only the functions the page needs are allowed; data calls still need a valid sign-in session.
  */
-var PAGE_FUNCTIONS_ = { liveApi: true, authLogin: true, authCheck: true, authLogout: true, apiTimings: true, lanesGet: true, lanesSave: true, ngGet: true, ngSave: true, layoutGet: true, layoutSave: true, reportsList: true, reportGet: true, reportUpload: true, reportDelete: true, meetingTargetsGet: true };
+var PAGE_FUNCTIONS_ = { liveApi: true, authLogin: true, authCheck: true, authLogout: true, apiTimings: true, lanesGet: true, lanesSave: true, ngGet: true, ngSave: true, layoutGet: true, layoutSave: true, reportsList: true, reportGet: true, reportUpload: true, reportDelete: true };
 function doPost(e) {
   var req = {};
   try { req = JSON.parse((e && e.postData && e.postData.contents) || '{}'); } catch (x) { /* bad body */ }
