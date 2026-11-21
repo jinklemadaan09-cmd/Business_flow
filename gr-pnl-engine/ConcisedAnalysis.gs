@@ -526,3 +526,44 @@ function CA_fmtRange_(p) {
 }
 function CA_lac_(v) { return (Math.round(v * 100) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function CA_pct1_(v) { return (Math.round(v * 1000) / 10).toFixed(1) + '%'; }
+
+
+/* ================================ dashboard: Meeting Numbers page ================================ */
+
+/**
+ * Zone revenue targets for the dashboard's "Meeting Numbers" page, read from the Sales Tracker
+ * Targets tab (the same targets the Concised Analysis tab uses).
+ * Per zone: column D "Revenue Target used" when filled (blank zones already split there),
+ * else column B, else the starting target in CA_.SEED_TARGETS_LACS. Amounts in Rs Lacs.
+ */
+function meetingTargetsGet(session) {
+  try {
+    if (laneSessionUser_(session) === false) return { ok: false, error: 'LOGIN_REQUIRED' };
+    var cache = CacheService.getScriptCache(), hit = null;
+    try { hit = cache.get('mtg_targets_v1'); } catch (e) { /* ignore */ }
+    if (hit) return JSON.parse(hit);
+    var out = { ok: true, source: 'Sales Tracker > Targets', zones: {}, total: null };
+    Object.keys(CA_.SEED_TARGETS_LACS).forEach(function (k) { if (k !== 'TOTAL') out.zones[k] = CA_.SEED_TARGETS_LACS[k]; });
+    out.total = CA_.SEED_TARGETS_LACS.TOTAL;
+    try {
+      var sh = SpreadsheetApp.openById(CA_.SPREADSHEET_ID).getSheetByName(CA_.TARGETS_SHEET);
+      if (sh && sh.getLastRow() > 1) {
+        var w = Math.min(4, sh.getLastColumn());
+        sh.getRange(2, 1, sh.getLastRow() - 1, w).getValues().forEach(function (r) {
+          var z = String(r[0] || '').replace(/\s+/g, ' ').trim().toUpperCase();
+          if (!z) return;
+          var num = function (v) { return v === '' || v == null || !isFinite(Number(v)) ? null : Number(v); };
+          var v = num(r[3]); if (v == null) v = num(r[1]);
+          if (v == null) return;
+          if (z === 'TOTAL') out.total = v; else out.zones[CA_zk_(z)] = v;
+        });
+      }
+    } catch (e) {
+      out.source = 'Built-in starting targets (Targets tab not readable: ' + String(e && e.message || e) + ')';
+    }
+    try { cache.put('mtg_targets_v1', JSON.stringify(out), 600); } catch (e) { /* ignore */ }
+    return out;
+  } catch (err) {
+    return { ok: false, error: String(err && err.message || err) };
+  }
+}
