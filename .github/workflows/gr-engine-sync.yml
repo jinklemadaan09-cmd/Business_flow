@@ -1,5 +1,6 @@
 # GR PNL Engine <-> GitHub (same pattern as SCOT cross sell).
-#   Every push to main that changes gr-pnl-engine/ code sends it to the live engine Apps Script (mode push).
+#   Every push to main that changes gr-pnl-engine/ code sends it to the live engine Apps Script (mode push)
+#   and points the published dashboard web app at a new version (no manual "New version" needed).
 #   Run by hand: GitHub > Actions > "GR engine: sync" > Run workflow
 #     push = repo code > Apps Script
 #     pull = Apps Script > repo (saves code written in the editor into gr-pnl-engine/)
@@ -87,6 +88,24 @@ jobs:
         if: env.MODE == 'push'
         working-directory: ${{ runner.temp }}/live
         run: clasp push --force
+
+      # New version + point the published web app (dashboard link) at it, so nobody has to do
+      # Deploy > Manage deployments > Edit > New version by hand. Every deployment except @HEAD is updated.
+      - name: Push - publish a new version of the web app
+        if: env.MODE == 'push'
+        working-directory: ${{ runner.temp }}/live
+        run: |
+          NOTE="GitHub $(echo $GITHUB_SHA | cut -c1-7)"
+          VER=$(clasp create-version "$NOTE" 2>&1 | grep -o '[0-9]\+' | tail -1)
+          if [ -z "$VER" ]; then echo "::error::Could not create a new Apps Script version"; exit 1; fi
+          LIST=$(clasp list-deployments 2>&1); echo "$LIST"
+          IDS=$(echo "$LIST" | grep -v '@HEAD' | grep -o 'AKfy[A-Za-z0-9_-]*' | sort -u)
+          if [ -z "$IDS" ]; then echo "::warning::No published deployment found; version $VER created only."; exit 0; fi
+          for ID in $IDS; do
+            clasp update-deployment "$ID" --versionNumber "$VER" --description "$NOTE" \
+              || clasp deploy --deploymentId "$ID" --versionNumber "$VER" --description "$NOTE"
+            echo "::notice::Deployment $ID now on version $VER ($NOTE)"
+          done
 
       - name: Save changes in the repo
         run: |
