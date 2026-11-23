@@ -34,11 +34,11 @@ var CA_ = {
 
   // Starting monthly revenue targets (Rs Lacs), written into the Targets tab when a zone has no row yet.
   // Source: PAN INDIA - Final Target 26-27.xlsx, tab "NOV`26 Target", column "Target Nov`26"
-  // (West 412 and Gujarat West 545 as in the row totals of that tab and its copy).
+  // West 545 and Gujarat West 412 (confirmed by the sales team, 23 Nov 2026).
   // Zone names match with or without a trailing " RO". Change the Targets tab, not this list.
   MANUAL_SEED_SHEET: 'Next Week Goal',   // By Whom / By When are copied from here the first time
   SEED_TARGETS_LACS: {
-    'TOTAL': 2750, 'NORTH ZONE': 1072, 'SOUTH ZONE': 435, 'WEST ZONE': 412, 'GUJARAT WEST ZONE': 545,
+    'TOTAL': 2750, 'NORTH ZONE': 1072, 'SOUTH ZONE': 435, 'WEST ZONE': 545, 'GUJARAT WEST ZONE': 412,
     'EAST ZONE': 163, 'NORTH EAST ZONE': 92, 'NEPAL ZONE': 31
   },
   // A blank GP % target means: hold the zone's own GP % of the last 3 full months.
@@ -72,7 +72,8 @@ var CA_ = {
     ACTION_BLOCKS: ['4.', '5.', '9.', '10.']
   },
 
-  PROP_LAST: 'CA_LAST_RUN_V3'   // new name after a layout change, so the next hourly run rebuilds
+  PROP_TARGET_FIX: 'CA_TARGET_FIX_WEST_GUJ',   // one-time swap of the West / Gujarat West targets, see CA_fixTargetsOnce_
+  PROP_LAST: 'CA_LAST_RUN_V4'   // new name after a layout change, so the next hourly run rebuilds
 };
 
 var CA_COLORS_ = {
@@ -121,6 +122,7 @@ function CA_run_(force) {
   if (!force && props.getProperty(CA_.PROP_LAST) === key) return 'No change since the last update.';
 
   var ss = SpreadsheetApp.openById(CA_.SPREADSHEET_ID);
+  CA_fixTargetsOnce_(ss, props);
   var targets = CA_readTargets_(ss);
   var rows = CA_readRows_(state, CA_firstDayNeeded_(today));
   var model = CA_build_(rows, targets, today);
@@ -189,6 +191,27 @@ function CA_rec_(day, zone, branch, cust, rev, exp, circle, loadType, cweight, b
 /** Last full day with data: the data's last day, but never today (today is still being booked). */
 function CA_cut_(dataTo, today) {
   return dataTo && dataTo < today ? dataTo : CA_iso_(CA_addDays_(CA_d_(today), -1));
+}
+
+/**
+ * One time only: the Targets tab was seeded with West 412 and Gujarat West 545, which were swapped.
+ * If the tab still holds exactly those two values, write West 545 and Gujarat West 412.
+ * Any other value typed by hand is left alone. Runs once, then a script property switches it off.
+ */
+function CA_fixTargetsOnce_(ss, props) {
+  if (props.getProperty(CA_.PROP_TARGET_FIX)) return;
+  var sh = ss.getSheetByName(CA_.TARGETS_SHEET);
+  if (sh && sh.getLastRow() > 1) {
+    var vals = sh.getRange(2, 1, sh.getLastRow() - 1, 2).getValues();
+    var at = {};
+    vals.forEach(function (r, i) { var z = String(r[0] || '').trim().toUpperCase(); if (z) at[CA_zk_(z)] = { row: i + 2, rev: Number(r[1]) }; });
+    var w = at['WEST ZONE'], g = at['GUJARAT WEST ZONE'];
+    if (w && g && w.rev === 412 && g.rev === 545) {
+      sh.getRange(w.row, 2).setValue(545);
+      sh.getRange(g.row, 2).setValue(412);
+    }
+  }
+  props.setProperty(CA_.PROP_TARGET_FIX, 'done');
 }
 
 /** Targets tab → { zones: {ZONE: {rev: lacs/month or null, gp: fraction or null}}, total: {...} } */
@@ -326,11 +349,18 @@ function CA_build_(rows, targets, today) {
   /* ---- 3. this week: goals ---- */
   var tw = byZone(P.twDone);
   var daysLeft = Math.max(0, Math.round((CA_d_(P.tw[1]) - CA_d_(P.twDone[1])) / 86400000));
-  var mDaysLeft = Math.max(0, Math.round((mEnd - CA_d_(mtdTo || CA_iso_(CA_addDays_(mStart, -1)))) / 86400000));
+  // working days (Monday to Saturday) left in the month after the last day with data
+  var workDays = function (a, b) {
+    var n = 0;
+    for (var d = a; d <= b; d = CA_addDays_(d, 1)) if (d.getUTCDay() !== 0) n++;
+    return n;
+  };
+  var mDaysLeft = workDays(CA_addDays_(CA_d_(mtdTo || CA_iso_(CA_addDays_(mStart, -1))), 1), mEnd);
+  var wdDone = mtdTo ? workDays(mStart, CA_d_(mtdTo)) : 0;
   var thisRow = function (name, done, mt, mDone) {
     var wt = tgtFor(mt, P.tw[0], P.tw[1]);
     var bal = Math.max(0, wt - done.rev / L), mBal = Math.max(0, mt - mDone.rev / L);
-    return { zone: name, target: wt, done: done.rev / L, balance: bal, perDay: daysLeft ? bal / daysLeft : null,
+    return { zone: name, target: wt, monthT: mt, done: done.rev / L, balance: bal, perDay: daysLeft ? bal / daysLeft : null,
              monthBal: mBal, monthPerDay: mDaysLeft ? mBal / mDaysLeft : null };
   };
   var thisW = zones.map(function (z) { return thisRow(z, get(tw, z), tgt[z].month, get(mtd, z)); });
@@ -361,8 +391,8 @@ function CA_build_(rows, targets, today) {
   var pts = [];
   var lac = function (v) { return CA_lac_(v); };
   if (standTot.ach != null && standTot.ach < CA_.ACHIEVED_PCT && thisTot.monthPerDay != null) {
-    var runRate = dayN ? standTot.rev / dayN : 0;
-    pts.push({ point: 'Month target needs ' + lac(thisTot.monthPerDay) + ' L/day; run rate ' + lac(runRate) + ' L/day',
+    var runRate = wdDone ? standTot.rev / wdDone : 0;   // per working day, same basis as the need
+    pts.push({ point: 'Month target needs ' + lac(thisTot.monthPerDay) + ' L/working day (' + mDaysLeft + ' left); run rate ' + lac(runRate) + ' L/working day',
                zone: 'All', value: standTot.ach, fmt: 'pct', status: thisTot.monthPerDay > runRate * 1.05 ? 'Off Track' : 'Watch' });
   }
   last.filter(function (r) { return r.status === 'Missed'; }).sort(function (a, b) { return b.miss - a.miss; }).forEach(function (r) {
@@ -792,11 +822,11 @@ function CA_render_(ss, m, stamp) {
 
   /* 3 */
   block('3. This week: goals (' + CA_fmtRange_(P.tw) + ', ' + m.daysLeft + ' days left)',
-    ['Zone', 'Week Target', 'Done so far', 'Balance', 'Needed per Day', 'Month Balance', 'Needed per Day (month)'],
+    ['Zone', 'Week Target', 'Monthly Target', 'Done so far', 'Balance', 'Needed per Day', 'Month Balance', 'Needed per Working Day (month, ' + m.monthDaysLeft + ' days left)'],
     m.thisWeek.concat([m.thisTotal]).map(function (x) {
-      return [x.zone, x.target, x.done, x.balance, nz(x.perDay), x.monthBal, nz(x.monthPerDay)];
+      return [x.zone, x.target, x.monthT, x.done, x.balance, nz(x.perDay), x.monthBal, nz(x.monthPerDay)];
     }),
-    [null, LAC, LAC, LAC, LAC, LAC, LAC], { total: true });
+    [null, LAC, LAC, LAC, LAC, LAC, LAC, LAC], { total: true });
 
   /* 4 */
   var b4 = block('4. Action tracker points',
