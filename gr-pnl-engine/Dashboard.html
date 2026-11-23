@@ -1191,10 +1191,10 @@ const CORE_FIELDS = [
   ['grdt','GR Date',['grdt','grdate','date','gr date']],
   ['loadtype','Load Type',['loadtype','load type']],
   ['grtype','GR Type',['grtype','gr type']],
-  ['originzone','Origin Zone',['originzone','origin zone']],
+  ['originzone','Origin Zone',['originzone','origin zone','booking zone','bookingzone']],
   ['destzone','Destination Zone',['destinationzone','destination zone','destzone','dest zone']],
   ['origin','Origin',['origin','branch','origin branch','booking branch']],
-  ['origincircle','Origin Circle',['origincircle','origin circle']],
+  ['origincircle','Origin Circle',['origincircle','origin circle','booking circle','bookingcircle']],
   ['destname','DESTNAME',['destname','destination','destiantion','destination name','dest name']],
   ['destcircle','Destination Circle',['destinationcircle','destination circle','destcircle']],
   ['deliverypoint','Delivery Point',['deliverypoint','delivery point']],
@@ -19482,7 +19482,7 @@ document.addEventListener('click',e=>{ const t=e.target.closest&&e.target.closes
 .hy-tb{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border:1px solid #bfd0e3;border-radius:4px;background:#eef4fb;color:#0b2545;font-weight:900;cursor:pointer;margin-right:6px;font-size:11px}
 </style>
 <style>.hy-table td.hy-am{text-align:center!important;font-weight:800}.hy-table th.hy-amh{background:#1a7f42!important;text-align:center!important}</style>
-<style>.hy-ctl .rt-pop label{text-transform:none;letter-spacing:0;font-size:11.5px;color:#182536}.hy-table th.hy-fy{background:#6a1b9a!important}.hy-table th.hy-fy0{background:#5b2c83!important}.hy-table th.hy-lth{background:#00695c!important}.hy-table td.hy-ltc{background:#e8f5f2;text-align:center}.hy-table td.hy-fyc{background:#f7f0fb}.hy-table tfoot td.hy-fyc{background:#efe3f7}</style>
+<style>.hy-table tr.hy-sub td{background:#e8f0f8!important;font-weight:800}.hy-ctl .rt-pop label{text-transform:none;letter-spacing:0;font-size:11.5px;color:#182536}.hy-table th.hy-fy{background:#6a1b9a!important}.hy-table th.hy-fy0{background:#5b2c83!important}.hy-table th.hy-lth{background:#00695c!important}.hy-table td.hy-ltc{background:#e8f5f2;text-align:center}.hy-table td.hy-fyc{background:#f7f0fb}.hy-table tfoot td.hy-fyc{background:#efe3f7}</style>
 <style>.hy-more{display:flex;align-items:center;gap:8px;justify-content:center;padding:10px 0 2px;font-size:12px;color:#41536a;font-weight:600}</style>
 <script id="halfYearJs">
 /* ======================================================================
@@ -19499,7 +19499,6 @@ const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;'
 const $=id=>document.getElementById(id);
 const MN=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const PARTY=[['cngr','Consignor'],['cnge','Consignee'],['customer','Customer Name']];
-const LVL=[['1','Party'],['2','Party › Branch'],['3','Party › Branch › Destination']];
 const TR=[['ALL','All'],['up','Uptrade'],['dn','Downtrade'],['sm','Flat'],['nw','New'],['nb','No business']];
 const SORT=[['tot','Largest business first'],['drop','Biggest drop first'],['rise','Biggest rise first']];
 const TXT={up:'▲ Uptrade',dn:'▼ Downtrade',nw:'New',nb:'No business',sm:'Flat'};
@@ -19507,6 +19506,10 @@ const ST=window.__HY_ST=window.__HY_ST||{party:'cngr',lvl:'3',trend:'ALL',sort:'
 /* Measures (column groups) of this table; Active Months is off until ticked */
 const MEASH=[['fy0','FY (previous) Avg + Active months'],['fy1','FY (current) Avg + Active months'],['lt','FTL / PTL'],['half','Half-year business'],['avgm','Avg / month (half-year)'],['chg','Change %'],['trend','Trend'],['am','Active Months (half-year)']];
 if(!ST.meas) ST.meas=MEASH.map(m=>m[0]).filter(k=>k!=='am');
+/* Hierarchy Levels (multi-select, in tick order, like the tables above). Uptrade / Downtrade is judged on the ticked
+   combination, e.g. Origin Zone › Party = each zone + party pair. 'party' = the field picked in Party. */
+const HLV=[['originzone','Origin Zone'],['destzone','Destination Zone'],['origincircle','Origin Circle'],['destcircle','Destination Circle'],['party','Party'],['origin','Origin (Branch)'],['destname','Destination']];
+if(!Array.isArray(ST.levels)||!ST.levels.length) ST.levels=['party','origin'];
 const mi=k=>{ const p=String(k).split('-'); return (+p[0])*12+(+p[1]-1); };
 const mk=i=>Math.floor(i/12)+'-'+String(i%12+1).padStart(2,'0');
 const L=v=>'₹'+(v/1e5).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -19521,9 +19524,10 @@ function panel(){
   let p=$('hy-yield'); if(p) return p;
   const sec=$('page-yield'); if(!sec) return null;
   p=document.createElement('div'); p.className='panel report-panel hy-panel'; p.id='hy-yield';
-  p.innerHTML=`<div class="panel-head"><div><h2>Half-Yearly Business — Uptrade / Downtrade</h2><div class="panel-sub">Total Freight per half-year (H1 = Apr–Sep, H2 = Oct–Mar). Avg / month of the current half vs the previous half: higher = Uptrade, lower = Downtrade. Click ▸ to open a party's branches and destinations; click an amount to open its GRs. The Month / Date filter does not apply, except to the Avg FY and FTL / PTL columns, which use the months picked in the Month slicer; other slicers do.</div></div></div><div class="hy-ctl" data-ctl></div><div data-kpi></div><div class="table-scroll" data-wrap style="max-height:680px"></div><div data-more></div>`;
+  p.innerHTML=`<div class="panel-head"><div><h2>Half-Yearly Business — Uptrade / Downtrade</h2><div class="panel-sub">Total Freight per half-year (H1 = Apr–Sep, H2 = Oct–Mar). Avg / month of the current half vs the previous half: higher = Uptrade, lower = Downtrade. Pick the columns in Hierarchy Levels (Uptrade / Downtrade is judged on that combination); click an amount to open its GRs. The Month / Date filter does not apply, except to the Avg FY and FTL / PTL columns, which use the months picked in the Month slicer; other slicers do.</div></div></div><div class="hy-ctl" data-ctl></div><div data-kpi></div><div class="table-scroll" data-wrap style="max-height:680px"></div><div data-more></div>`;
   const nb=$('nbd-yield'); if(nb&&nb.parentNode===sec) sec.insertBefore(p,nb); else sec.appendChild(p);
-  p.addEventListener('change',e=>{ const s=e.target.closest('[data-hy]'); if(!s) return; ST[s.dataset.hy]=s.value; ST.exp=new Set(); ST.show=200; draw(); });
+  p.addEventListener('change',e=>{ const hv=e.target.closest('[data-hy-lv]'); if(hv){ const k=hv.dataset.hyLv; let l=ST.levels.filter(x=>x!==k); if(hv.checked) l.push(k); ST.levels=l.length?l:['party']; ST.show=200; draw(); setTimeout(()=>{ const x=p.querySelector('[data-hy-hp]'); if(x) x.classList.add('on'); },0); return; }
+    const s=e.target.closest('[data-hy]'); if(!s) return; ST[s.dataset.hy]=s.value; ST.exp=new Set(); ST.show=200; draw(); });
   p.addEventListener('input',e=>{ const s=e.target.closest('[data-hy-q]'); if(!s) return; ST.q=/@/.test(s.value)?'':s.value; ST.show=200; clearTimeout(ST._t); ST._t=setTimeout(()=>{ draw(); const i=p.querySelector('[data-hy-q]'); if(i){ i.focus(); i.setSelectionRange(i.value.length,i.value.length); } },250); });
   p.addEventListener('click',e=>{
     const k=e.target.closest('[data-hy-k]'); if(k){ ST.trend=ST.trend===k.dataset.hyK?'ALL':k.dataset.hyK; ST.show=200; draw(); return; }
@@ -19533,6 +19537,9 @@ function panel(){
     if(e.target.closest('[data-hy-mclr]')){ p.querySelectorAll('[data-hy-mp] input').forEach(i=>i.checked=false); return; }
     if(e.target.closest('[data-hy-mok]')){ const v=MEASH.map(m=>m[0]).filter(k=>{ const i=p.querySelector(`[data-hy-mp] input[value="${k}"]`); return i&&i.checked; }); ST.meas=v.length?v:['half']; draw(); return; }
     if(e.target.closest('[data-hy-mp]')){ e.stopPropagation(); return; }
+    const hb=e.target.closest('[data-hy-hb]'); if(hb){ e.stopPropagation(); const pop=p.querySelector('[data-hy-hp]'); const on=pop.classList.contains('on'); document.querySelectorAll('.rt-pop.on').forEach(x=>x.classList.remove('on')); if(!on) pop.classList.add('on'); return; }
+    if(e.target.closest('[data-hy-hclr]')){ ST.levels=['party']; ST.show=200; draw(); setTimeout(()=>{ const x=p.querySelector('[data-hy-hp]'); if(x) x.classList.add('on'); },0); return; }
+    if(e.target.closest('[data-hy-hp]')){ e.stopPropagation(); return; }
     const m=e.target.closest('[data-hy-more]'); if(m){ ST.show+=200; draw(); return; }
     if(e.target.closest('[data-hy-more-all]')){ ST.show=1e9; draw(); return; }
     const d=e.target.closest('td[data-hy-f]'); if(d&&window.openDirectGr){ let f={}, ms=null; try{ f=JSON.parse(d.dataset.hyF); ms=JSON.parse(d.dataset.hyM); }catch(_){} window.openDirectGr(f,ms,'Half-Yearly Business'); }
@@ -19570,17 +19577,18 @@ function draw(){
   const fyL=fy=>fy+'-'+String(fy+1).slice(2);
   const mTxt=a=>a.length?(a.length>2?MN[a[0]%12]+'-'+String(Math.floor(a[0]/12)).slice(2)+' to '+MN[a[a.length-1]%12]+'-'+String(Math.floor(a[a.length-1]/12)).slice(2):a.map(i=>MN[i%12]+'-'+String(Math.floor(i/12)).slice(2)).join(', ')):'none';
   const M=new Set(ST.meas||[]), on=k=>M.has(k);
-  const party=ST.party, lvl=+ST.lvl||3;
+  const party=ST.party, LV=ST.levels.filter(k=>HLV.some(h=>h[0]===k));
+  const PL=PARTY.find(x=>x[0]===party)[1], lvName=k=>k==='party'?PL:HLV.find(h=>h[0]===k)[1], fOf=k=>k==='party'?party:k;
   const opt=(arr,v)=>arr.map(x=>`<option value="${x[0]}" ${String(v)===String(x[0])?'selected':''}>${esc(x[1])}</option>`).join('');
   p.querySelector('[data-ctl]').innerHTML=`<label>Party <select data-hy="party">${opt(PARTY,party)}</select></label>
-    <label>Hierarchy Levels <select data-hy="lvl">${opt(LVL,ST.lvl)}</select></label>
+    <span style="display:flex;align-items:center;gap:6px;font-size:11px;font-weight:700;color:#41536a;text-transform:uppercase">Hierarchy Levels <div class="rt-sel"><button type="button" class="yield-hier-btn" data-hy-hb style="text-transform:none">${esc(LV.map(lvName).join(' › '))} <span>▾</span></button><div class="rt-pop" data-hy-hp style="left:0;right:auto;width:250px"><div class="rt-help" style="text-transform:none;font-weight:600">Tick the levels in the order you want them as columns. Uptrade / Downtrade is judged on this combination.</div>${HLV.map(([k])=>{ const ix=LV.indexOf(k); return `<label><input type="checkbox" data-hy-lv="${k}" ${ix>=0?'checked':''}> <span>${esc(lvName(k))}</span>${ix>=0?`<b style="margin-left:auto;background:#1f5fa8;color:#fff;border-radius:9px;font-size:10px;padding:0 6px">${ix+1}</b>`:''}</label>`; }).join('')}<div class="rt-act"><button type="button" class="btn btn-sm btn-outline" data-hy-hclr>Clear</button></div></div></div></span>
     <label>Compare <select data-hy="cmp">${opt(opts.map(id=>[id,hLab(id)+' vs '+hLab(id-1)]),cur)}</select></label>
     <label>Trend <select data-hy="trend">${opt(TR,ST.trend)}</select></label>
     <label>Sort <select data-hy="sort">${opt(SORT,ST.sort)}</select></label>
     <div class="rt-sel"><button type="button" class="yield-hier-btn" data-hy-mb>Measures: ${MEASH.filter(m=>on(m[0])).length} of ${MEASH.length} <span>▾</span></button><div class="rt-pop" data-hy-mp style="left:0;right:auto;width:250px"><div class="rt-help">Tick the columns to show.</div>${MEASH.map(([k,l])=>`<label><input type="checkbox" value="${k}" ${on(k)?'checked':''}> <span>${esc(k==='fy0'?'FY '+fyL(fy0)+': Avg / month + Active months':k==='fy1'?'FY '+fyL(fy1)+': Avg / month + Active months':l)}</span></label>`).join('')}<div class="rt-act"><button type="button" class="btn btn-sm btn-outline" data-hy-mclr>Clear</button><button type="button" class="btn btn-sm btn-primary" data-hy-mok>Apply</button></div></div></div>
     <label>Search <input data-hy-q type="search" name="hy-q-${Date.now()%1e6}" autocomplete="off" autocorrect="off" spellcheck="false" readonly onfocus="this.removeAttribute('readonly')" data-lpignore="true" data-1p-ignore="true" data-form-type="other" placeholder="Party name or any spelling" value="${esc(/@/.test(ST.q||'')?'':ST.q)}"></label>`;
   /* rows: every slicer except Month / Date */
-  const P=window.GRSpeed?GRSpeed.memo('hy3',[party,cur,prev,cols.join(','),curM,M1.join(','),M0.join(',')],build_):build_();
+  const P=window.GRSpeed?GRSpeed.memo('hy4',[party,LV.join(','),cur,prev,cols.join(','),curM,M1.join(','),M0.join(',')],build_):build_();
   function build_(){
   const fr=typeof filterRowsCached==='function'?filterRowsCached({...App.filters,globalMonth:'',dateFrom:null,dateTo:null}):App.rows;
   const want=new Set(cols.concat([prev]));
@@ -19589,10 +19597,9 @@ function draw(){
     if(f1||f0){ n.fm[i]=(n.fm[i]||0)+tv; const o=f1?0:2; if(lf) n.lt[o]=1; if(lp) n.lt[o+1]=1; } };
   for(const r of fr){ if(!r.monthKey) continue; const i=mi(r.monthKey), h=halfOf(i), w=want.has(h), f1=FM1.has(i), f0=FM0.has(i); if(!w&&!f1&&!f0) continue;
     const tv=r.total||0, cc=h===cur&&curDone.has(i), lf=GRFy.isF(r), lp=GRFy.isP(r);
-    const pk=pv(r,party); let a=P.get(pk); if(!a){ a=node(); a.kids=new Map(); a.raw=new Set(); P.set(pk,a); } add(a,h,tv,cc,i,w,f1,f0,lf,lp);
-    const rw=r[party+'Raw']; if(rw!=null&&rw!=='') a.raw.add(String(rw).toUpperCase());
-    const bk=pv(r,'origin'); let b=a.kids.get(bk); if(!b){ b=node(); b.kids=new Map(); a.kids.set(bk,b); } add(b,h,tv,cc,i,w,f1,f0,lf,lp);
-    const dk=pv(r,'destname'); let d=b.kids.get(dk); if(!d){ d=node(); b.kids.set(dk,d); } add(d,h,tv,cc,i,w,f1,f0,lf,lp); }
+    const vals=LV.map(k=>pv(r,fOf(k))), key=vals.join('␟');
+    let a=P.get(key); if(!a){ a=node(); a.vals=vals; a.raw=new Set(); P.set(key,a); } add(a,h,tv,cc,i,w,f1,f0,lf,lp);
+    const rw=r[party+'Raw']; if(rw!=null&&rw!=='') a.raw.add(String(rw).toUpperCase()); }
   return P;
   }
   const prevDone=done(prev);
@@ -19603,17 +19610,16 @@ function draw(){
     n.pa=pa; n.ca=ca; n.t=t; n.d=ca-pa;
     const fa=set=>{ let s=0,k=0; for(const i of set){ const v=n.fm[i]||0; if(Math.abs(v)>1e-9){ s+=v; k++; } } return [k?s/k:0,k]; };
     [n.f1,n.a1]=fa(M1); [n.f0,n.a0]=fa(M0); n.ltm=(n.lt[0]||n.lt[1])?GRFy.mix(n.lt[0],n.lt[1]):GRFy.mix(n.lt[2],n.lt[3]); return n; };
-  const byBr=lvl>=2;   /* Branch picked: one row per party + branch, never merged across branches */
-  const all=byBr?[...P.entries()].flatMap(([v,n])=>[...n.kids.entries()].map(([bv,b])=>{ calc(b); b.v=v; b.br=bv; b.raw=n.raw; return b; }))
-               :[...P.entries()].map(([v,n])=>{ calc(n); n.v=v; return n; });
-  const rowW=byBr?PARTY.find(x=>x[0]===party)[1]+' + Branch rows':PARTY.find(x=>x[0]===party)[1]+'s';
+  /* one row per combination of the ticked levels; Uptrade / Downtrade judged on that row */
+  const all=[...P.values()].map(n=>calc(n));
+  const rowW=LV.length===1?lvName(LV[0])+' rows':LV.map(lvName).join(' + ')+' rows';
   /* KPI: parties per trend + monthly change */
   const K={up:[0,0],dn:[0,0],nw:[0,0],nb:[0,0]}; all.forEach(n=>{ if(K[n.t]){ K[n.t][0]++; K[n.t][1]+=n.d; } });
   const kp=(k,l,cls)=>`<div class="hy-kpi ${cls}${ST.trend===k?' on':''}" data-hy-k="${k}" title="Click to show only these"><div class="v">${N(K[k][0])}</div><div class="l">${l}</div><div class="s ${K[k][1]>=0?'hy-up':'hy-dn'}">${K[k][1]>=0?'+':'−'}${L(Math.abs(K[k][1]))} Lacs / month</div></div>`;
   kEl.innerHTML=`<div class="hy-kpis">${kp('up','▲ Uptrade '+rowW,'up')}${kp('dn','▼ Downtrade','dn')}${kp('nw','New (no business in '+hLab(prev)+')','nw')}${kp('nb','No business yet in '+hLab(cur),'nb')}</div>`;
   let list=all.filter(n=>n.t);
   if(ST.trend!=='ALL') list=list.filter(n=>n.t===ST.trend);
-  const q=String(ST.q||'').trim().toUpperCase(); if(q&&!/@/.test(q)) list=list.filter(n=>n.v.toUpperCase().includes(q)||[...(n.raw||[])].some(x=>x.includes(q)));
+  const q=String(ST.q||'').trim().toUpperCase(); if(q&&!/@/.test(q)) list=list.filter(n=>n.vals.some(v=>v.toUpperCase().includes(q))||[...(n.raw||[])].some(x=>x.includes(q)));
   const tot=n=>(n.h[prev]||0)+(n.h[cur]||0);
   const srt=ST.sort==='drop'?(a,b)=>a.d-b.d:ST.sort==='rise'?(a,b)=>b.d-a.d:(a,b)=>tot(b)-tot(a);
   list.sort(srt);
@@ -19632,26 +19638,28 @@ function draw(){
     if(on('fy1')) h+=`<td class="hy-gs hy-fyc">${has1?(n.f1?'<b>'+L(n.f1)+'</b>':'–'):'<span class="hy-dim">–</span>'}</td><td class="hy-fyc hy-am">${has1?n.a1:'–'}</td>`;
     if(on('lt')) h+=`<td class="hy-gs hy-ltc">${n.ltCnt!=null?`<span style="font-size:10px;font-weight:800;white-space:nowrap">${n.ltCnt}</span>`:GRFy.badge(n.ltm)}</td>`;
     return h; };
-  const cnt=(m,w)=>m.size===1?esc([...m.keys()][0]):N(m.size)+' '+w;
+  /* merged node of several rows (subtotal / total) */
+  const merge=arr=>{ const T=node(); const tIds=[...new Set(cols.concat([prev]))]; arr.forEach(n=>{ tIds.forEach(id=>{ if(n.h[id]) T.h[id]=(T.h[id]||0)+n.h[id]; }); T.cc+=n.cc; for(const i in n.mm) T.mm[i]=(T.mm[i]||0)+n.mm[i]; for(const i in n.fm) T.fm[i]=(T.fm[i]||0)+n.fm[i]; }); calc(T); T.ltCnt=GRFy.countTxt(arr.map(n=>n.ltm)); return T; };
   let body='';
-  const full=!!window.__xmFullExport;   /* download: every row, every destination */
+  const full=!!window.__xmFullExport;   /* download: every row */
   const shown=full?list:list.slice(0,ST.show);
-  if(byBr){
-    for(const b of shown){ const f1={[party]:b.v,origin:b.br}, k1=b.v+'␟'+b.br, o1=lvl>2&&(full||ST.exp.has(k1));
-      body+=`<tr class="hy-l0"><td class="hier" title="${esc(b.v)}">${lvl>2?`<span class="hy-tb" data-hy-e="${esc(k1)}">${o1?'−':'+'}</span>`:''}${esc(b.v)}</td><td class="hier">${esc(b.br)}</td><td class="hier">${cnt(b.kids,'destinations')}</td>${fyc(b)}${cols.map(id=>cell(b,id,f1)).join('')}${tail(b)}</tr>`;
-      if(!o1) continue;
-      const ds=[...b.kids.entries()].map(([v,d])=>{ calc(d); d.v=v; return d; }).sort(srt);
-      for(const d of ds) body+=`<tr class="hy-l2"><td class="hier"><span style="display:inline-block;width:44px"></span>${esc(b.v)}</td><td class="hier">${esc(b.br)}</td><td class="hier">${esc(d.v)}</td>${fyc(d)}${cols.map(id=>cell(d,id,{...f1,destname:d.v})).join('')}${tail(d)}</tr>`; }
-  } else for(const n of shown){ const f0={[party]:n.v};
-    const dests=new Map(); n.kids.forEach(b=>b.kids.forEach((d,dk)=>dests.set(dk,1)));
-    body+=`<tr class="hy-l0"><td class="hier" title="${esc(n.v)}">${esc(n.v)}</td><td class="hier">${cnt(n.kids,'branches')}</td><td class="hier">${cnt(dests,'destinations')}</td>${fyc(n)}${cols.map(id=>cell(n,id,f0)).join('')}${tail(n)}</tr>`; }
+  const rowHtml=(n,cls)=>{ const f={}; LV.forEach((k,ix)=>{ f[fOf(k)]=n.vals[ix]; });
+    return `<tr class="${cls}">${n.vals.map(v=>`<td class="hier" title="${esc(v)}">${esc(v)}</td>`).join('')}${fyc(n)}${cols.map(id=>cell(n,id,f)).join('')}${tail(n)}</tr>`; };
+  if(LV.length>1){
+    /* groups of the first level, biggest first (by the same Sort), subtotal after each group */
+    const G=new Map(); list.forEach(n=>{ const g=n.vals[0]; if(!G.has(g)) G.set(g,[]); G.get(g).push(n); });   /* subtotal = all rows of the group */
+    const vis=new Set(shown); const gs=[...G.entries()].map(([g,all_])=>{ const S=merge(all_); S.g=g; S.arr=all_.filter(n=>vis.has(n)); return S; }).filter(S=>S.arr.length).sort(srt);
+    gs.forEach(S=>{ S.arr.forEach(n=>{ body+=rowHtml(n,'hy-l0'); });
+      const f={[fOf(LV[0])]:S.g};
+      body+=`<tr class="hy-sub"><td class="hier">${esc(S.g)} Total</td>${'<td class="hier"></td>'.repeat(LV.length-1)}${fyc(S)}${cols.map(id=>cell(S,id,f)).join('')}${tail(S)}</tr>`; });
+  } else shown.forEach(n=>{ body+=rowHtml(n,'hy-l0'); });
   /* grand total of the listed parties */
-  const T=node(); const tIds=[...new Set(cols.concat([prev]))]; list.forEach(n=>{ tIds.forEach(id=>{ if(n.h[id]) T.h[id]=(T.h[id]||0)+n.h[id]; }); T.cc+=n.cc; for(const i in n.mm) T.mm[i]=(T.mm[i]||0)+n.mm[i]; for(const i in n.fm) T.fm[i]=(T.fm[i]||0)+n.fm[i]; }); calc(T); T.ltCnt=GRFy.countTxt(list.map(n=>n.ltm));
+  const T=merge(list);
   const u='<span class="unit-head">Lacs</span>', pl=PARTY.find(x=>x[0]===party)[1];
   const fyHelp=(fy,a)=>'Total Freight of '+mTxt(a)+' (FY '+fyL(fy)+') ÷ months in which the row had business; a month with no business is not counted';
   const hh=id=>`<th class="${id===cur?'hy-c':id===prev?'hy-p':''}${id===cols[0]?' hy-gs':''}">${hLab(id)}<br><span style="font-weight:600;text-transform:none">${id===cur?runTxt(id):hSpan(id)}</span>${u}</th>`;
-  wrap.innerHTML=list.length?`<table class="yield-table hy-table"><thead><tr><th class="hier">${esc(pl)}</th><th class="hier">Branch</th><th class="hier">Destination</th>${on('fy0')?`<th class="hy-fy0 hy-gs" title="${esc(fyHelp(fy0,M0))}">FY ${fyL(fy0)}<br>Avg / month${u}</th><th class="hy-fy0" title="Months of ${esc(mTxt(M0))} in which the row had business">FY ${fyL(fy0)}<br>Active months</th>`:''}${on('fy1')?`<th class="hy-fy hy-gs" title="${esc(fyHelp(fy1,M1))}">FY ${fyL(fy1)}<br>Avg / month${u}</th><th class="hy-fy" title="Months of ${esc(mTxt(M1))} in which the row had business">FY ${fyL(fy1)}<br>Active months</th>`:''}${on('lt')?`<th class="hy-lth hy-gs" title="FTL/PTL = booked both FTL and PTL (LTL) in the FY ${fyL(fy1)} months picked; else FTL only / PTL only">FTL / PTL</th>`:''}${on('half')?cols.map(hh).join(''):''}${on('avgm')?`<th class="hy-t hy-gs">Avg / month<br>${esc(hLab(prev))}${u}</th><th class="hy-t">Avg / month<br>${esc(hLab(cur))}${u}</th>`:''}${on('chg')?'<th class="hy-t">Change %</th>':''}${on('trend')?'<th class="hy-t">Trend</th>':''}${on('am')?`<th class="hy-t hy-amh hy-gs">Active months<br>${esc(hLab(prev))}</th><th class="hy-t hy-amh">Active months<br>${esc(hLab(cur))}</th>`:''}</tr></thead>
-    <tbody>${body}</tbody><tfoot><tr><td class="hier">TOTAL (${N(list.length)} ${esc(rowW)})</td><td class="hier"></td><td class="hier"></td>${fyc(T)}${on('half')?cols.map(id=>has(id)?`<td${id===cols[0]?' class="hy-gs"':''}>${T.h[id]?L(T.h[id]):'–'}</td>`:`<td class="hy-dim${id===cols[0]?' hy-gs':''}">–</td>`).join(''):''}${tail(T)}</tr></tfoot></table>`
+  wrap.innerHTML=list.length?`<table class="yield-table hy-table"><thead><tr>${LV.map(k=>`<th class="hier">${esc(lvName(k))}</th>`).join('')}${on('fy0')?`<th class="hy-fy0 hy-gs" title="${esc(fyHelp(fy0,M0))}">FY ${fyL(fy0)}<br>Avg / month${u}</th><th class="hy-fy0" title="Months of ${esc(mTxt(M0))} in which the row had business">FY ${fyL(fy0)}<br>Active months</th>`:''}${on('fy1')?`<th class="hy-fy hy-gs" title="${esc(fyHelp(fy1,M1))}">FY ${fyL(fy1)}<br>Avg / month${u}</th><th class="hy-fy" title="Months of ${esc(mTxt(M1))} in which the row had business">FY ${fyL(fy1)}<br>Active months</th>`:''}${on('lt')?`<th class="hy-lth hy-gs" title="FTL/PTL = booked both FTL and PTL (LTL) in the FY ${fyL(fy1)} months picked; else FTL only / PTL only">FTL / PTL</th>`:''}${on('half')?cols.map(hh).join(''):''}${on('avgm')?`<th class="hy-t hy-gs">Avg / month<br>${esc(hLab(prev))}${u}</th><th class="hy-t">Avg / month<br>${esc(hLab(cur))}${u}</th>`:''}${on('chg')?'<th class="hy-t">Change %</th>':''}${on('trend')?'<th class="hy-t">Trend</th>':''}${on('am')?`<th class="hy-t hy-amh hy-gs">Active months<br>${esc(hLab(prev))}</th><th class="hy-t hy-amh">Active months<br>${esc(hLab(cur))}</th>`:''}</tr></thead>
+    <tbody>${body}</tbody><tfoot><tr><td class="hier">TOTAL (${N(list.length)} ${esc(rowW)})</td>${'<td class="hier"></td>'.repeat(LV.length-1)}${fyc(T)}${on('half')?cols.map(id=>has(id)?`<td${id===cols[0]?' class="hy-gs"':''}>${T.h[id]?L(T.h[id]):'–'}</td>`:`<td class="hy-dim${id===cols[0]?' hy-gs':''}">–</td>`).join(''):''}${tail(T)}</tr></tfoot></table>`
     :`<div class="empty-state"><h2>No parties for the selected Trend / Search.</h2>${ST.q||ST.trend!=='ALL'?'<button type="button" class="btn btn-sm btn-outline" data-hy-clr>Clear search and Trend</button>':''}</div>`;
   more.innerHTML=`<div class="panel-sub" style="margin-top:6px">Avg / month = business ÷ active months (completed months with business): ${esc(hLab(cur))} has ${nC} completed month${nC===1?'':'s'} in the data (${[...curDone].sort((a,b)=>a-b).map(i=>MN[i%12]+'-'+String(Math.floor(i/12)).slice(2)).join(', ')||'none'}); the running month is in the half-year total but not in the average. "–" in a half-year column = no data loaded for that half-year yet.${on('fy0')||on('fy1')?` Avg FY ${fyL(fy1)} = ${esc(mTxt(M1))}; Avg FY ${fyL(fy0)} = ${esc(mTxt(M0))} (months picked in the Month slicer; a month with no business is not counted).`:''}</div>${!full&&list.length>ST.show?`<div class="hy-more">Showing ${N(ST.show)} of ${N(list.length)} rows · <button type="button" class="btn btn-sm btn-outline" data-hy-more>Show 200 more</button> <button type="button" class="btn btn-sm btn-outline" data-hy-more-all>Show all</button></div>`:''}`;
   if(window.GRYear&&!has(cols[0])) GRYear.note(more,'');
