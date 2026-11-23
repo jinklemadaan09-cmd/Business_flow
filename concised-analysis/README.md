@@ -19,7 +19,7 @@ Code: [`gr-pnl-engine/ConcisedAnalysis.gs`](../gr-pnl-engine/ConcisedAnalysis.gs
 |---|---|---|
 | 1 | Where we stand: month to date | Zone, Month Target, MTD Target, MTD Revenue, % Ach, Target Miss, GP, GP %, vs Last Month (same days), Status |
 | 2 | Last week: goal vs achievement | Zone, Target, Revenue, % Ach, Target Miss, GP, GP %, GP % Target, vs Previous Week, Status |
-| 3 | This week: goals | Zone, Week Target, Done so far, Balance, Needed per Day, Month Balance, Needed per Day (month) |
+| 3 | This week: goals | Zone, Week Target, Monthly Target, Done so far, Balance, Needed per Day, Month Balance, Needed per Working Day (month) |
 | 4 | Action tracker points | Zone, Point, Value, Status |
 | 5 | Action plan: where to work | Zone, Branch, Consignors to work on (drop, L), Gap, Action |
 | 6 | The numbers (weekly meeting) | Bullets: revenue vs target and % with FTL/LTL split, run rate vs needed per working day, best day, stuck zones (weakest circles), biggest gap, working well, LTL yield vs benchmark |
@@ -46,7 +46,8 @@ Code: [`gr-pnl-engine/ConcisedAnalysis.gs`](../gr-pnl-engine/ConcisedAnalysis.gs
 | Blank GP % target | Zone's own GP % of the last 3 full months |
 | Customer | CONSIGNOR |
 | Working days (blocks 6-8) | Monday to Saturday |
-| Run rate | MTD revenue / working days gone |
+| Run rate | MTD revenue / working days gone (blocks 4 and 6) |
+| Needed per Working Day (month), block 3 | Month Balance / working days (Mon-Sat) left in the month |
 | Daily Asking Rate | GAP / working days left in the month |
 | Week Goal (block 8) | Daily Asking Rate x working days in the coming week (Mon-Sat, within the month) |
 | Weekly goal (block 7) | Month target / days in month x 7 |
