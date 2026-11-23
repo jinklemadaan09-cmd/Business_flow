@@ -19291,7 +19291,9 @@ function hierPop(p,pg,btn){
 /* keep the NBD panel as the last table of its page */
 function toEnd(p){ const sec=p&&p.parentNode; if(!sec) return; const kids=[...sec.children].filter(x=>x!==p&&x.classList&&x.classList.contains('panel')&&x.offsetParent!==null); const last=kids[kids.length-1]; if(last && (last.compareDocumentPosition(p)&Node.DOCUMENT_POSITION_PRECEDING)) last.after(p); }
 /* two-row sticky header (second row below the first) + frozen level columns on the left */
-function fixHead(wrap){ const t=wrap&&wrap.querySelector('table'); if(!t||!t.tHead) return; let top=0; [...t.tHead.rows].forEach(tr=>{ [...tr.cells].forEach(th=>{ th.style.top=top+'px'; }); top+=tr.getBoundingClientRect().height||0; });
+function fixHead(wrap){ const t=wrap&&(wrap.tagName==='TABLE'?wrap:wrap.querySelector('table')); if(!t||!t.tHead) return; let top=0;
+  /* each header row sticks just below the one above it; a lower row's first cell is not a frozen left column */
+  [...t.tHead.rows].forEach((tr,ri)=>{ [...tr.cells].forEach((th,ci)=>{ th.style.top=top+'px'; if(ri>0&&ci===0){ th.style.left='auto'; th.style.zIndex='20'; } }); top+=tr.getBoundingClientRect().height||0; });
   const L=+t.dataset.lv||0; if(!L) return; const b=[...(t.tBodies[0]?t.tBodies[0].rows:[])].find(r=>!r.classList.contains('nbd-more')); if(!b) return;
   const lefts=[]; let x=0; for(let i=0;i<L;i++){ lefts.push(x); x+=(b.cells[i]?b.cells[i].getBoundingClientRect().width:120); }
   const set=(c,i,z,bg)=>{ c.style.position='sticky'; c.style.left=lefts[i]+'px'; c.style.zIndex=z; if(bg) c.style.backgroundColor=bg; if(i===L-1) c.style.boxShadow='3px 0 4px -2px rgba(11,37,69,.28)'; };
@@ -19333,7 +19335,7 @@ function renderYield_(){
       b+=`<tr class="${o.sub?'nbd-st':''}">${sd.map((x,i)=>`<td class="hier">${i<=o.d?esc(o.path[i])+(o.sub&&i===o.d?' Total':''):''}</td>`).join('')}${sc(o.a,f)}</tr>`; }
     const A0=aggOf(all,TG);
     sumEl.innerHTML=`<div class="nbd-h3">Summary</div><div class="nbd-ctl"><div class="rt-sel msel nbd-hsel"><button type="button" class="yield-hier-btn msel-btn" data-nbd-h="sumLv">Hierarchy Levels: ${esc(st.sumLv.map(hLbl).join(' › '))} <span>▾</span></button><div class="rt-pop msel-pop nbd-hpop"></div></div></div>
-      <div class="table-scroll"><table class="yield-table nbd-table nbd-sum"><thead><tr>${sd.map(x=>`<th class="hier nbd-lv" rowspan="2">${esc(x[1])}</th>`).join('')}${GH1(SG)}</tr><tr>${GH2(SG)}</tr></thead>
+      <div class="table-scroll"><table class="yield-table nbd-table nbd-sum" data-lv="${SL}"><thead><tr>${sd.map(x=>`<th class="hier nbd-lv" rowspan="2">${esc(x[1])}</th>`).join('')}${GH1(SG)}</tr><tr>${GH2(SG)}</tr></thead>
       <tbody>${b}</tbody><tfoot><tr><td class="hier">PAN INDIA</td>${'<td class="hier"></td>'.repeat(SL-1)}${sc(A0,{})}</tr></tfoot></table></div>`;
   }
 
@@ -19359,7 +19361,7 @@ function renderYield_(){
         mb+=`<tr class="nbd-st">${mlv.map((y,j)=>`<td class="hier">${j<=d?esc(pth[j])+(j===d?' Total':''):''}</td>`).join('')}<td class="hier"></td>${mc(x.a,f,null)}<td class="nbd-gs">${share(x.a.nbd.t,x.a.t)}</td><td></td></tr>`; } };
     mw(mrs,0,[]);
     xEl.innerHTML=`<div class="nbd-h3">Month on Month</div><div class="nbd-ctl"><div class="rt-sel msel nbd-hsel"><button type="button" class="yield-hier-btn msel-btn" data-nbd-h="mLv">Hierarchy Levels: ${esc(mlv.map(x=>x[1]).concat(['Month']).join(' › '))} <span>▾</span></button><div class="rt-pop msel-pop nbd-hpop"></div></div></div>
-      <div class="table-scroll" style="max-height:640px"><table class="yield-table nbd-table nbd-sum"><thead><tr>${mlv.map(x=>`<th class="hier nbd-lv" rowspan="2">${esc(x[1])}</th>`).join('')}<th class="hier nbd-lv" rowspan="2">Month</th>${GH1(SG)}<th rowspan="2" class="nbd-gs">NBD %</th><th rowspan="2">NBD Freight vs previous month${u}</th></tr><tr>${GH2(SG)}</tr></thead>
+      <div class="table-scroll" style="max-height:640px"><table class="yield-table nbd-table nbd-sum" data-lv="${ML+1}"><thead><tr>${mlv.map(x=>`<th class="hier nbd-lv" rowspan="2">${esc(x[1])}</th>`).join('')}<th class="hier nbd-lv" rowspan="2">Month</th>${GH1(SG)}<th rowspan="2" class="nbd-gs">NBD %</th><th rowspan="2">NBD Freight vs previous month${u}</th></tr><tr>${GH2(SG)}</tr></thead>
       <tbody>${mb}</tbody></table></div>`;
   }
 
@@ -19452,7 +19454,7 @@ function renderMom(){
 function render(pg){ try{ if(!App.rows||!App.rows.length) return; if(pg==='yield'){ drawNbd(pg); if(window.renderHalfYear) window.renderHalfYear(); } else if(pg==='mom') drawNbd(pg); }catch(e){ console.error('NBD',e); } }
 /* the NBD table is drawn when it is on (or near) the screen; a filter click while it is off screen draws it on scroll */
 function drawNbd(pg,now){ const p0=panelFor(pg); if(!now&&p0&&window.GRLazy&&GRLazy.defer(p0,()=>{ try{ drawNbd(pg,true); }catch(e){ console.error('NBD',e); } })){ toEnd(p0); return; }
-  if(pg==='yield') renderYield(); else renderMom(); if(ST[pg]&&ST[pg].lost) showLost(pg,ST[pg].lost,true); const p=$('nbd-'+pg); if(p){ toEnd(p); requestAnimationFrame(()=>fixHead(p.querySelector('[data-wrap]'))); } }
+  if(pg==='yield') renderYield(); else renderMom(); if(ST[pg]&&ST[pg].lost) showLost(pg,ST[pg].lost,true); const p=$('nbd-'+pg); if(p){ toEnd(p); requestAnimationFrame(()=>p.querySelectorAll('table.nbd-table').forEach(fixHead)); } }
 window.renderNbd=render;
 window.__nbdDrawNow=pg=>drawNbd(pg,true);
 function after(){ const k=document.querySelector('.tab.active')?.dataset.page; if(k==='yield'||k==='mom') render(k); }
