@@ -297,7 +297,7 @@ footer.appfoot{padding:24px 18px;color:#8793a1;}
 .yield-table .sticky-hier.sticky-last, table.datatable .sticky-hier.sticky-last{box-shadow:7px 0 9px -8px rgba(11,37,69,.65)!important;}
 .mom-delta-fav{color:var(--green)!important;background:var(--green-bg)!important;font-weight:800!important;}
 .mom-delta-adv{color:var(--red)!important;background:var(--red-bg)!important;font-weight:800!important;}
-#momGpIndicatorFilter,#gpAnalysisFilter{height:34px;border:1px solid var(--border-strong);border-radius:7px;background:#fff;color:var(--text);padding:5px 9px;font-weight:600;}
+#momGpIndicatorFilter,#momUdFilter,#gpAnalysisFilter{height:34px;border:1px solid var(--border-strong);border-radius:7px;background:#fff;color:var(--text);padding:5px 9px;font-weight:600;}
 </style>
 
 <style id="grDrillCompactV23">
@@ -690,6 +690,7 @@ window.GRYear = (function(){
         <button class="btn btn-sm btn-outline" onclick="openFocusMode('momPanel')" title="Focus this table full-screen">⛶ Focus</button>
         <div class="toolbar">
           <select id="momGpIndicatorFilter" title="Filter rows by Comparison Month GP"><option value="ALL">GP Indicator: All</option><option value="POS">GP Positive</option><option value="NEG">GP Negative</option></select>
+          <select id="momUdFilter" title="Filter rows by Upscale / Downscale (Total Freight, Comparison vs Base Month)"><option value="ALL">Business Trend: All</option><option value="up">Upscale</option><option value="dn">Downscale</option><option value="sm">Flat</option><option value="nw">New</option><option value="ls">Lost</option></select>
           <label class="rc-inline-control"><span>Sort 1st by</span>
           <select id="momSortMeasure" title="Sort by measure (only applies when specific Hierarchy Levels are selected above)"></select>
           </label>
@@ -2514,7 +2515,8 @@ const METRIC_DEFS = [
   ['Lost','No business for more than N months (N = NBD gap, default 6), counted by calendar month','A party (consignor / consignee / customer) is Lost in the month after it has gone N full months without business: last business month + N + 1 (last business Apr, N 6 → Lost in Nov). Months are counted by month, not by GR date. If the party books again in that month it is NBD instead, and RBD from the next month. Shown as the Lost column in the NBD / RBD tables (Yield Analysis and MoM), not added to Total. Checked within the selected Pan India / Zone / Circle / Branch. The zone / branch / destination of a Lost party is taken from its last business month.','Months with business','—','tag'],
   ['Freight lost / month','SUM(Total Freight in its last N months) ÷ Active Months in those N months','The average monthly Total Freight a Lost party gave while it was active, in the N months up to its last business month (N = NBD gap). Shows how much monthly business stopped.','Total Freight','Active Months','₹'],
   ['Half-Yearly Business','SUM(Total Freight) per half-year: H1 = Apr–Sep, H2 = Oct–Mar of each financial year','Yield Analysis → Half-Yearly Business table. Columns show the current and the previous financial year. A half-year with no loaded data shows "–" (for example 2025-26 until that data is loaded) and fills in by itself once the data is in the master. Ignores the Month / Date filter; all other slicers apply.','Total Freight','—','₹'],
-  ['Uptrade / Downtrade','Avg / month current half vs Avg / month previous half','Avg / month = half-year Total Freight ÷ completed months of that half that are in the loaded data (the running calendar month is not counted, so a few days of the month do not pull the average down; its freight is still in the half-year total). Current half = the latest half-year with at least one completed month; previous half = the half-year before it. Higher = Uptrade, lower = Downtrade, equal to the shown precision (under ₹0.01 Lacs or 0.05 % apart) = Flat, no business in the previous half = New, no business in the current half = No business.','Avg / month current half','Avg / month previous half','tag'],
+  ['Upscale / Downscale','Comparison Month Total Freight − Base Month Total Freight','MoM Performance → MoM Analysis table (tick it in Measures; filter it with Business Trend). Judged on Total Freight of each row (the Hierarchy Levels picked). Higher in the Comparison Month = Upscale, lower = Downscale, equal to the shown precision (under ₹0.01 Lacs or 0.05 % apart) = Flat, no business in the Base Month = New, no business in the Comparison Month = Lost.','Total Freight (Comparison Month)','Total Freight (Base Month)','tag'],
+  ['Uptrade / Downtrade','Avg / month current half vs Avg / month previous half','Avg / month = half-year Total Freight ÷ completed months of that half that are in the loaded data (the running calendar month is not counted, so a few days of the month do not pull the average down; its freight is still in the half-year total). Current half = the latest half-year with at least one completed month; previous half = the half-year before it. Compare = Custom: Period A (base) and Period B (compare) are the From / To months you pick, and each Avg / month uses the completed months of that period, so the two periods can be of different length. Higher = Uptrade, lower = Downtrade, equal to the shown precision (under ₹0.01 Lacs or 0.05 % apart) = Flat, no business in the previous half = New, no business in the current half = No business.','Avg / month current half','Avg / month previous half','tag'],
   ['NBD / RBD','NBD if no GR in the previous N months (N = NBD gap setting, default 6)','New Business Development: the party (consignor / consignee / customer) gave no business in the previous N months and gives business again (or for the first time). It is NBD only in that first month and RBD from the next month (NBD Rules → NBD stays NBD for, default 1: first GR in Jan = NBD in Jan, RBD from Feb). Checked within the selected Pan India / Zone / Circle / Branch. After the window the business is RBD (Repeat Business). The first month of loaded data is the base: every party with business in it is RBD, and a party first seen in a later month is NBD from that month. Every GR is NBD or RBD (Total = NBD + RBD).','—','—','tag'],
 ];
 function renderMetricDefinitions(){
@@ -5165,6 +5167,18 @@ function v12DeltaClass(v,invert=false){
   const fav=invert ? v<0 : v>0;
   return fav?'mom-delta-fav':'mom-delta-adv';
 }
+/* Upscale / Downscale: Total Freight of the Comparison Month vs the Base Month (same Flat rule as Uptrade / Downtrade) */
+const V12_UD_TXT={up:'▲ Upscale',dn:'▼ Downscale',sm:'Flat',nw:'New',ls:'Lost'};
+function v12UdOf(pair){
+  const b=pair.b.total||0, c=pair.c.total||0;
+  if(Math.abs(b)<1e-9&&Math.abs(c)<1e-9) return '';
+  if(Math.abs(b)<1e-9) return 'nw';
+  if(Math.abs(c)<1e-9) return 'ls';
+  if(Math.abs(c-b)<500||Math.abs(c-b)/Math.abs(b)*100<0.05) return 'sm';
+  return c>b?'up':'dn';
+}
+function v12UdPass(pair){ const m=document.getElementById('momUdFilter')?.value||'ALL'; return m==='ALL'||v12UdOf(pair)===m; }
+function v12UdCell(pair){ const t=v12UdOf(pair); return `<td class="mom-ud" data-v12period="both" title="Total Freight ${escapeHtml(v12BaseLabel())} ${fmtRupee(pair.b.total||0)} → ${escapeHtml(v12CompLabel())} ${fmtRupee(pair.c.total||0)}">${t?`<span class="hy-tg ${t}">${V12_UD_TXT[t]}</span>`:''}</td>`; }
 function v12GpPass(agg, id){
   const mode=document.getElementById(id)?.value||'ALL';
   if(mode==='ALL')return true;
@@ -5739,10 +5753,10 @@ function v12MomData(){
     if(sk){
       groups=v12SortSelectedGroups(groups, selected.length);
     }
-    return {mode:'selected',levels:selected,items:groups.map(g=>({vals:g.vals,rows:g.rows,isSubtotal:false})).filter(g=>v12GpPass(v12MomPair(g.rows).c,'momGpIndicatorFilter')).filter(g=>v12ColFilterPass(g.rows,g.vals,selected))};
+    return {mode:'selected',levels:selected,items:groups.map(g=>({vals:g.vals,rows:g.rows,isSubtotal:false})).filter(g=>{ const p=v12MomPair(g.rows); return v12GpPass(p.c,'momGpIndicatorFilter')&&v12UdPass(p); }).filter(g=>v12ColFilterPass(g.rows,g.vals,selected))};
   }
   const nodes=v12MomTree(rows,sk,sf,dir),depth=nodes.length?Math.max(...nodes.map(n=>n.level)):0,levels=V12_HIER.slice(0,depth+1).map(h=>h[0]);
-  return {mode:'drill',levels,items:nodes.map(n=>({...n,vals:levels.map((f,i)=>i<=n.level?n.path[i]:'—')})).filter(n=>v12GpPass(v12MomPair(n.rows).c,'momGpIndicatorFilter')).filter(n=>n.leaf===false || v12ColFilterPass(n.rows,n.vals,levels))};
+  return {mode:'drill',levels,items:nodes.map(n=>({...n,vals:levels.map((f,i)=>i<=n.level?n.path[i]:'—')})).filter(n=>{ const p=v12MomPair(n.rows); return v12GpPass(p.c,'momGpIndicatorFilter')&&v12UdPass(p); }).filter(n=>n.leaf===false || v12ColFilterPass(n.rows,n.vals,levels))};
 }
 App.momSort = App.momSort || {key:'', field:'delta', dir:'desc'};
 App.momSort2 = App.momSort2 || {key:'', field:'delta', dir:'desc'};
@@ -5947,7 +5961,8 @@ function v12RenderMomTable(){
   const d=v12MomData(),defs=d.levels.map(f=>V12_HIER.find(h=>h[0]===f));
   const hierHead=defs.map((x,i)=>`<th class="hier" rowspan="2">${x[1]}</th>`).join('');
   const groupHead=V12_MOM_MEASURES.map(m=>`<th colspan="3">${m.label}<span class="unit-head">${m.unit}</span></th>`).join('')
-    + V12_IMPACT_MEASURES.map(im=>`<th rowspan="2">${im.label}<span class="unit-head">₹</span></th>`).join('');
+    + V12_IMPACT_MEASURES.map(im=>`<th rowspan="2">${im.label}<span class="unit-head">₹</span></th>`).join('')
+    + `<th rowspan="2" title="Total Freight: Comparison Month vs Base Month">Upscale / Downscale</th>`;
   const subHead=V12_MOM_MEASURES.map(m=>`<th>${escapeHtml(v12BaseLabel())}${cfIcon('mom',m.key+'__b','numeric',m.label+' — '+v12BaseLabel())}</th><th>${escapeHtml(v12CompLabel())}${cfIcon('mom',m.key+'__c','numeric',m.label+' — '+v12CompLabel())}</th><th class="delta-metric-head"><span class="delta-symbol">Δ</span><span class="delta-name">${escapeHtml(m.label)}</span></th>`).join('');
   const body=d.items.map(it=>{
     const p=v12MomPair(it.rows);
@@ -5957,10 +5972,10 @@ function v12RenderMomTable(){
       const tag=it.isSubtotal&&i===it.level?'<span class="subtotal-badge">SUBTOTAL</span>':'';
       return `<td class="hier">${b}${escapeHtml(v)}${tag}</td>`;
     }).join('');
-    return `<tr class="${it.isSubtotal?'subtotal-row':''}" data-v12path="${escapeHtml(it.vals.join('\u241F'))}">${hc}${v12MomCells(p)}</tr>`;
-  }).join('')||`<tr><td colspan="${d.levels.length+V12_MOM_MEASURES.length*3+V12_IMPACT_MEASURES.length}" style="text-align:center;padding:24px;color:#6b7686;">No rows match GP Indicator.</td></tr>`;
+    return `<tr class="${it.isSubtotal?'subtotal-row':''}" data-v12path="${escapeHtml(it.vals.join('\u241F'))}">${hc}${v12MomCells(p)}${v12UdCell(p)}</tr>`;
+  }).join('')||`<tr><td colspan="${d.levels.length+V12_MOM_MEASURES.length*3+V12_IMPACT_MEASURES.length+1}" style="text-align:center;padding:24px;color:#6b7686;">No rows match GP Indicator / Business Trend.</td></tr>`;
   const gt=v12MomPair(raw),blanks=Array(Math.max(0,d.levels.length-1)).fill('<td></td>').join('');
-  wrap.innerHTML=`<table data-v12="1" class="yield-table mom-matrix" style="min-width:${Math.max(2700,560+d.levels.length*145)}px"><thead><tr>${hierHead}${groupHead}</tr><tr>${subHead}</tr></thead><tbody>${body}</tbody><tfoot><tr><td class="hier">GRAND TOTAL</td>${blanks}${v12MomCells(gt)}</tr></tfoot></table>`;
+  wrap.innerHTML=`<table data-v12="1" class="yield-table mom-matrix" style="min-width:${Math.max(2700,560+d.levels.length*145)}px"><thead><tr>${hierHead}${groupHead}</tr><tr>${subHead}</tr></thead><tbody>${body}</tbody><tfoot><tr><td class="hier">GRAND TOTAL</td>${blanks}${v12MomCells(gt)}${v12UdCell(gt)}</tr></tfoot></table>`;
   const table=wrap.querySelector('table');
   wrap.querySelectorAll('[data-v12mom]').forEach(b=>b.onclick=e=>{
     e.stopPropagation();const k=b.dataset.v12mom;
@@ -5977,6 +5992,7 @@ function v12RenderMomTable(){
   App.structured=App.structured||{};App.structured.mom=d;
 }
 window.v12RenderMomTable = v12RenderMomTable;
+document.getElementById('momUdFilter')?.addEventListener('change',()=>v12RenderMomTable());
 const _v12OldMomPage=renderMomPage;
 renderMomPage=function(){
   _v12OldMomPage();   // its renderMomCombinedTable() now draws the v12 table directly
@@ -5998,6 +6014,8 @@ window.exportMomStructured=function(fmt){
   const d=v12MomData(),defs=d.levels.map(f=>V12_HIER.find(h=>h[0]===f)?.[1]||f),cols=[...defs];
   const hierCount=defs.length;
   V12_MOM_MEASURES.forEach(m=>cols.push(`${v12BaseLabel()} ${m.label} (${m.unit})`,`${v12CompLabel()} ${m.label} (${m.unit})`,`Δ ${m.label} (${m.unit})`));
+  cols.push('Upscale / Downscale');
+  const udTxt=p=>{ const t=v12UdOf(p); return t?V12_UD_TXT[t].replace(/^[▲▼] /,''):''; };
   const rows=d.items.map(it=>{
     const a=[...it.vals],p=v12MomPair(it.rows);
     V12_MOM_MEASURES.forEach(m=>{
@@ -6006,6 +6024,7 @@ window.exportMomStructured=function(fmt){
       else if(m.type==='lacs'){b=v12Lacs(b);c=v12Lacs(c);dd=v12Lacs(dd);}
       a.push(b,c,dd);
     });
+    a.push(udTxt(p));
     return a;
   });
   const meta=buildExportMeta();
@@ -6029,6 +6048,7 @@ window.exportMomStructured=function(fmt){
         const b=p.b[m.key]||0,c=p.c[m.key]||0,dd=c-b;
         vals.push(v12MomFormat(m,b),v12MomFormat(m,c),v12MomDeltaFormat(m,dd));
       });
+      vals.push(udTxt(p));
       return vals;
     });
     doc.autoTable({head:[cols],body:pdfRows,startY:45,styles:{fontSize:5.5,cellPadding:1.7},headStyles:{fillColor:[11,37,69]},columnStyles:colStyles});doc.save('MoM_Analysis_Selected_Level.pdf');
@@ -19507,6 +19527,12 @@ document.addEventListener('click',e=>{ const t=e.target.closest&&e.target.closes
 </script>
 <style>
 .hy-ctl{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:4px 0 10px}
+.hy-cus{flex-basis:100%;display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+.hy-cbox{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:#41536a;border:1px solid var(--border-strong);border-radius:8px;padding:5px 10px;background:#f6f9fd}
+.hy-cbox b{font-size:10.5px;text-transform:uppercase;color:#18344f;margin-right:4px}
+.hy-cvs{font-weight:800;color:#1f5fa8}
+.hy-cline{flex-basis:100%;font-size:12px;color:#0a3159;background:#e8f1fb;border:1px solid #bcd3ee;border-radius:8px;padding:6px 12px}
+.hy-cline a{color:#1f5fa8}
 .hy-ctl label{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:700;color:#41536a;text-transform:uppercase;letter-spacing:.02em}
 .hy-ctl select,.hy-ctl input{font:inherit;font-size:12px;font-weight:600;height:30px;padding:0 8px;border:1px solid var(--border-strong);border-radius:7px;background:#fff;color:#18344f;text-transform:none}
 .hy-kpis{display:flex;gap:10px;margin:0 0 10px;flex-wrap:wrap}
@@ -19521,6 +19547,7 @@ document.addEventListener('click',e=>{ const t=e.target.closest&&e.target.closes
 .hy-table tr.hy-l1 td{background:#f6f8fb}.hy-table tr.hy-l2 td{background:#fbfcfe;color:#3a4a5e}
 .hy-table tr.hy-l0 td{font-weight:700}
 .hy-tg{display:inline-block;padding:1px 9px;border-radius:10px;font-weight:800;font-size:10.5px}
+.hy-tg.ls{background:#f3e8ff;color:#7c3aed}td.mom-ud{text-align:center;white-space:nowrap}
 .hy-tg.up{background:#d8f1e1;color:#1a7f42}.hy-tg.dn{background:#fde2e0;color:#b0281c}.hy-tg.nw{background:#dbe8f7;color:#1f5fa8}.hy-tg.nb{background:#efefef;color:#6b6b6b}.hy-tg.sm{background:#eef3f9;color:#3a4a5e}
 .hy-up{color:#1a7f42;font-weight:800}.hy-dn{color:#c0392b;font-weight:800}.hy-dim{color:#9aa8b8}
 .hy-tb{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border:1px solid #bfd0e3;border-radius:4px;background:#eef4fb;color:#0b2545;font-weight:900;cursor:pointer;margin-right:6px;font-size:11px}
@@ -19563,14 +19590,17 @@ const N=v=>Math.round(v||0).toLocaleString('en-IN');
 const pv=(r,f)=>{ const v=r[f]; return v==null||v===''?'UNSPECIFIED':String(v); };
 /* half id = FY start year × 2 + (0 = H1, 1 = H2) */
 const halfOf=i=>{ const y=Math.floor(i/12), m=i%12, fy=m>=3?y:y-1; return fy*2+((m>=3&&m<=8)?0:1); };
-const hMonths=id=>{ const fy=Math.floor(id/2), s=fy*12+3+(id%2)*6; return [0,1,2,3,4,5].map(x=>s+x); };
-const hLab=id=>{ const fy=Math.floor(id/2); return 'H'+(id%2+1)+' '+fy+'-'+String(fy+1).slice(2); };
-const hSpan=id=>id%2?'Oct–Mar':'Apr–Sep';
+/* Custom compare: CUS = {-1: months of Period A, -2: months of Period B} (month indexes), null = half-year compare */
+let CUS=null;
+const mLab=i=>MN[i%12]+'-'+String(Math.floor(i/12)).slice(2);
+const hMonths=id=>{ if(id<0) return CUS&&CUS[id]||[]; const fy=Math.floor(id/2), s=fy*12+3+(id%2)*6; return [0,1,2,3,4,5].map(x=>s+x); };
+const hLab=id=>{ if(id===-1) return 'Period A'; if(id===-2) return 'Period B'; const fy=Math.floor(id/2); return 'H'+(id%2+1)+' '+fy+'-'+String(fy+1).slice(2); };
+const hSpan=id=>{ if(id<0){ const a=hMonths(id); return a.length?(a.length>1?mLab(a[0])+' to '+mLab(a[a.length-1]):mLab(a[0])):''; } return id%2?'Oct–Mar':'Apr–Sep'; };
 function panel(){
   let p=$('hy-yield'); if(p) return p;
   const sec=$('page-yield'); if(!sec) return null;
   p=document.createElement('div'); p.className='panel report-panel hy-panel'; p.id='hy-yield';
-  p.innerHTML=`<div class="panel-head"><div><h2>Half-Yearly Business — Uptrade / Downtrade</h2><div class="panel-sub">Total Freight per half-year (H1 = Apr–Sep, H2 = Oct–Mar). Avg / month of the current half vs the previous half: higher = Uptrade, lower = Downtrade. Pick the columns in Hierarchy Levels (Uptrade / Downtrade is judged on that combination); click an amount to open its GRs. The Month / Date filter does not apply, except to the Avg FY and FTL / PTL columns, which use the months picked in the Month slicer; other slicers do.</div></div></div><div class="hy-ctl" data-ctl></div><div data-kpi></div><div class="table-scroll" data-wrap style="max-height:680px"></div><div data-more></div>`;
+  p.innerHTML=`<div class="panel-head"><div><h2>Half-Yearly Business — Uptrade / Downtrade</h2><div class="panel-sub">Total Freight per half-year (H1 = Apr–Sep, H2 = Oct–Mar). Avg / month of the current half vs the previous half (or pick Compare = Custom for any Period A vs Period B): higher = Uptrade, lower = Downtrade. Pick the columns in Hierarchy Levels (Uptrade / Downtrade is judged on that combination); click an amount to open its GRs. The Month / Date filter does not apply, except to the Avg FY and FTL / PTL columns, which use the months picked in the Month slicer; other slicers do.</div></div></div><div class="hy-ctl" data-ctl></div><div data-kpi></div><div class="table-scroll" data-wrap style="max-height:680px"></div><div data-more></div>`;
   const nb=$('nbd-yield'); if(nb&&nb.parentNode===sec) sec.insertBefore(p,nb); else sec.appendChild(p);
   p.addEventListener('change',e=>{ const hv=e.target.closest('[data-hy-lv]'); if(hv){ const k=hv.dataset.hyLv; let l=ST.levels.filter(x=>x!==k); if(hv.checked) l.push(k); ST.levels=l.length?l:['party']; ST.show=200; draw(); setTimeout(()=>{ const x=p.querySelector('[data-hy-hp]'); if(x) x.classList.add('on'); },0); return; }
     const s=e.target.closest('[data-hy]'); if(!s) return; ST[s.dataset.hy]=s.value; ST.exp=new Set(); ST.show=200; draw(); });
@@ -19578,6 +19608,9 @@ function panel(){
   p.addEventListener('click',e=>{
     const k=e.target.closest('[data-hy-k]'); if(k){ ST.trend=ST.trend===k.dataset.hyK?'ALL':k.dataset.hyK; ST.show=200; draw(); return; }
     const t=e.target.closest('[data-hy-e]'); if(t){ e.stopPropagation(); const x=t.dataset.hyE; if(ST.exp.has(x)) [...ST.exp].filter(y=>y===x||y.startsWith(x+'␟')).forEach(y=>ST.exp.delete(y)); else ST.exp.add(x); draw(); return; }
+    if(e.target.closest('[data-hy-capply]')){ const g=k=>+(p.querySelector('[data-hy-c="'+k+'"]')||{}).value; const a=[g('a0'),g('a1')], b=[g('b0'),g('b1')];
+      if(a.concat(b).every(isFinite)){ ST.ca=[Math.min(...a),Math.max(...a)]; ST.cb=[Math.min(...b),Math.max(...b)]; } ST.exp=new Set(); ST.show=200; draw(); return; }
+    if(e.target.closest('[data-hy-creset]')){ e.preventDefault(); ST.cmp=''; ST.exp=new Set(); ST.show=200; draw(); return; }
     if(e.target.closest('[data-hy-clr]')){ ST.q=''; ST.trend='ALL'; ST.show=200; draw(); return; }
     const mb=e.target.closest('[data-hy-mb]'); if(mb){ e.stopPropagation(); const pop=p.querySelector('[data-hy-mp]'); const on=pop.classList.contains('on'); document.querySelectorAll('.rt-pop.on').forEach(x=>x.classList.remove('on')); if(!on) pop.classList.add('on'); return; }
     if(e.target.closest('[data-hy-mclr]')){ p.querySelectorAll('[data-hy-mp] input').forEach(i=>i.checked=false); return; }
@@ -19607,8 +19640,15 @@ function draw(){
   const has=id=>hMonths(id).some(i=>DM.has(i));
   const opts=[...new Set([...DM].map(halfOf))].filter(id=>done(id).length).sort((a,b)=>b-a);
   if(!opts.length){ wrap.innerHTML='<div class="empty-state"><h2>No completed month in the loaded data yet.</h2></div>'; kEl.innerHTML=''; more.innerHTML=''; return; }
-  let cur=+ST.cmp; if(!opts.includes(cur)){ cur=opts[0]; ST.cmp=String(cur); }
-  const prev=cur-1, fyC=Math.floor(cur/2), cols=[(fyC-1)*2,(fyC-1)*2+1,fyC*2,fyC*2+1];
+  /* Custom: Period A vs Period B, each a From / To month range (default: previous 3 vs last 3 completed months) */
+  const DMS=[...DM].sort((a,b)=>a-b), DMD=DMS.filter(i=>i<curM);
+  const okP=x=>Array.isArray(x)&&x.length===2&&x.every(v=>isFinite(v));
+  if(ST.cmp==='custom'&&!(okP(ST.ca)&&okP(ST.cb))){ const z=DMD.length?DMD[DMD.length-1]:DMS[DMS.length-1]; ST.cb=[z-2,z]; ST.ca=[z-5,z-3]; }
+  const rng=x=>{ const a=Math.min(x[0],x[1]), b=Math.max(x[0],x[1]), o=[]; for(let i=a;i<=b;i++) o.push(i); return o; };
+  let cur, prev, cols;
+  if(ST.cmp==='custom'){ CUS={'-1':rng(ST.ca),'-2':rng(ST.cb)}; cur=-2; prev=-1; cols=[-1,-2]; }
+  else { CUS=null; cur=+ST.cmp; if(!opts.includes(cur)){ cur=opts[0]; ST.cmp=String(cur); }
+    prev=cur-1; const fyC=Math.floor(cur/2); cols=[(fyC-1)*2,(fyC-1)*2+1,fyC*2,fyC*2+1]; }
   const curDone=new Set(done(cur)), nC=curDone.size, nP=done(prev).length;
   /* Avg FY: months picked in the Month slicer. Current FY = FY of the latest picked month; previous FY = the picked months
      of that FY, or the same months one year earlier. No month picked = every loaded month of the two FYs. */
@@ -19628,25 +19668,31 @@ function draw(){
   const party=ST.party, LV=ST.levels.filter(k=>HLV.some(h=>h[0]===k));
   const PL=PARTY.find(x=>x[0]===party)[1], lvName=k=>k==='party'?PL:HLV.find(h=>h[0]===k)[1], fOf=k=>k==='party'?party:k;
   const opt=(arr,v)=>arr.map(x=>`<option value="${x[0]}" ${String(v)===String(x[0])?'selected':''}>${esc(x[1])}</option>`).join('');
+  /* Period A / Period B pickers: shown only when Compare = Custom */
+  const cusHtml=()=>{ const mo=v=>DMS.map(i=>`<option value="${i}" ${i===v?'selected':''}>${mLab(i)}</option>`).join('');
+    const box=(t,k,x)=>`<div class="hy-cbox"><b>${t}</b> From <select data-hy-c="${k}0">${mo(Math.min(x[0],x[1]))}</select> To <select data-hy-c="${k}1">${mo(Math.max(x[0],x[1]))}</select></div>`;
+    const nA=done(-1).length, nB=done(-2).length;
+    return `<div class="hy-cus">${box('Period A (base)','a',ST.ca)}<span class="hy-cvs">vs</span>${box('Period B (compare)','b',ST.cb)}<button type="button" class="btn btn-sm" data-hy-capply>Apply</button></div>
+    <div class="hy-cline"><b>Comparing:</b> Period A = ${esc(hSpan(-1))} (${nA} completed month${nA===1?'':'s'}) vs Period B = ${esc(hSpan(-2))} (${nB} completed month${nB===1?'':'s'}) · judged on Avg / month · <a href="#" data-hy-creset>Reset to H2 vs H1</a></div>`; };
   p.querySelector('[data-ctl]').innerHTML=`<label>Party <select data-hy="party">${opt(PARTY,party)}</select></label>
     <span style="display:flex;align-items:center;gap:6px;font-size:11px;font-weight:700;color:#41536a;text-transform:uppercase">Hierarchy Levels <div class="rt-sel"><button type="button" class="yield-hier-btn" data-hy-hb style="text-transform:none">${esc(LV.map(lvName).join(' › '))} <span>▾</span></button><div class="rt-pop" data-hy-hp style="left:0;right:auto;width:250px"><div class="rt-help" style="text-transform:none;font-weight:600">Tick the levels in the order you want them as columns. Uptrade / Downtrade is judged on this combination.</div>${HLV.map(([k])=>{ const ix=LV.indexOf(k); return `<label><input type="checkbox" data-hy-lv="${k}" ${ix>=0?'checked':''}> <span>${esc(lvName(k))}</span>${ix>=0?`<b style="margin-left:auto;background:#1f5fa8;color:#fff;border-radius:9px;font-size:10px;padding:0 6px">${ix+1}</b>`:''}</label>`; }).join('')}<div class="rt-act"><button type="button" class="btn btn-sm btn-outline" data-hy-hclr>Clear</button></div></div></div></span>
-    <label>Compare <select data-hy="cmp">${opt(opts.map(id=>[id,hLab(id)+' vs '+hLab(id-1)]),cur)}</select></label>
+    <label>Compare <select data-hy="cmp">${opt(opts.map(id=>[id,hLab(id)+' vs '+hLab(id-1)]).concat([['custom','Custom: Period A vs Period B']]),CUS?'custom':cur)}</select></label>
     <label>Trend <select data-hy="trend">${opt(TR,ST.trend)}</select></label>
     <label>Sort <select data-hy="sort">${opt(SORT,ST.sort)}</select></label>
     <div class="rt-sel"><button type="button" class="yield-hier-btn" data-hy-mb title="Table columns + measures (measures use the months picked in the Month slicer)">Measures: ${MEASH.filter(m=>on(m[0])).length+XM.length} of ${MEASH.length+GRMeas.LIST.length} <span>▾</span></button><div class="rt-pop" data-hy-mp style="left:0;right:auto;width:280px;max-height:520px;overflow:auto"><div class="rt-help">Tick the columns and measures to show.</div><div class="rt-help" style="margin:6px 0 2px;font-weight:800;text-transform:uppercase;font-size:10px">Table columns</div><div data-hy-cg>${MEASH.map(([k,l])=>`<label><input type="checkbox" value="${k}" ${on(k)?'checked':''}> <span>${esc(k==='fy0'?'FY '+fyL(fy0)+': Avg / month + Active months':k==='fy1'?'FY '+fyL(fy1)+': Avg / month + Active months':l)}</span></label>`).join('')}</div><div class="rt-help" style="margin:8px 0 0;border-top:1px solid #dde3ea;padding-top:6px">Measures below use the months picked in the Month slicer (${esc(mTxt(XMS))}).</div><div data-hy-xg>${GRMeas.pickHtml(new Set(XM))}</div><div class="rt-act"><button type="button" class="btn btn-sm btn-outline" data-hy-mclr>Clear</button><button type="button" class="btn btn-sm btn-primary" data-hy-mok>Apply</button></div></div></div>
-    <label>Search <input data-hy-q type="search" name="hy-q-${Date.now()%1e6}" autocomplete="off" autocorrect="off" spellcheck="false" readonly onfocus="this.removeAttribute('readonly')" data-lpignore="true" data-1p-ignore="true" data-form-type="other" placeholder="Party name or any spelling" value="${esc(/@/.test(ST.q||'')?'':ST.q)}"></label>`;
+    <label>Search <input data-hy-q type="search" name="hy-q-${Date.now()%1e6}" autocomplete="off" autocorrect="off" spellcheck="false" readonly onfocus="this.removeAttribute('readonly')" data-lpignore="true" data-1p-ignore="true" data-form-type="other" placeholder="Party name or any spelling" value="${esc(/@/.test(ST.q||'')?'':ST.q)}"></label>${CUS?cusHtml():''}`;
   /* rows: every slicer except Month / Date */
-  const P=window.GRSpeed?GRSpeed.memo('hy4',[party,LV.join(','),cur,prev,cols.join(','),curM,M1.join(','),M0.join(','),XMS.join(',')],build_):build_();
+  const P=window.GRSpeed?GRSpeed.memo('hy4',[party,LV.join(','),cur,prev,cols.join(','),CUS?CUS[-1].join('.')+'|'+CUS[-2].join('.'):'',curM,M1.join(','),M0.join(','),XMS.join(',')],build_):build_();
   function build_(){
   const fr=typeof filterRowsCached==='function'?filterRowsCached({...App.filters,globalMonth:'',dateFrom:null,dateTo:null}):App.rows;
   const want=new Set(cols.concat([prev]));
   const P=new Map();
   const add=(n,h,tv,cc,i,w,f1,f0,lf,lp)=>{ if(w){ n.h[h]=(n.h[h]||0)+tv; if(cc) n.cc+=tv; if(h===cur||h===prev) n.mm[i]=(n.mm[i]||0)+tv; }
     if(f1||f0){ n.fm[i]=(n.fm[i]||0)+tv; const o=f1?0:2; if(lf) n.lt[o]=1; if(lp) n.lt[o+1]=1; } };
-  for(const r of fr){ if(!r.monthKey) continue; const i=mi(r.monthKey), h=halfOf(i), w=want.has(h), f1=FM1.has(i), f0=FM0.has(i); if(!w&&!f1&&!f0&&!FXM.has(i)) continue;
+  for(const r of fr){ if(!r.monthKey) continue; const i=mi(r.monthKey), hs=CUS?[-1,-2].filter(x=>CUS[x].includes(i)):[halfOf(i)], h=hs[0], w=hs.some(x=>want.has(x)), f1=FM1.has(i), f0=FM0.has(i); if(!w&&!f1&&!f0&&!FXM.has(i)) continue;
     const tv=r.total||0, cc=h===cur&&curDone.has(i), lf=GRFy.isF(r), lp=GRFy.isP(r);
     const vals=LV.map(k=>pv(r,fOf(k))), key=vals.join('␟');
-    let a=P.get(key); if(!a){ a=node(); a.vals=vals; a.raw=new Set(); P.set(key,a); } add(a,h,tv,cc,i,w,f1,f0,lf,lp); if(FXM.has(i)) GRMeas.add(a.x,r);
+    let a=P.get(key); if(!a){ a=node(); a.vals=vals; a.raw=new Set(); P.set(key,a); } add(a,h,tv,cc,i,w,f1,f0,lf,lp); for(let j=1;j<hs.length;j++){ const x=hs[j]; a.h[x]=(a.h[x]||0)+tv; if(x===cur&&curDone.has(i)) a.cc+=tv; } if(FXM.has(i)) GRMeas.add(a.x,r);
     const rw=r[party+'Raw']; if(rw!=null&&rw!=='') a.raw.add(String(rw).toUpperCase()); }
   return P;
   }
@@ -19672,7 +19718,7 @@ function draw(){
   const srt=ST.sort==='drop'?(a,b)=>a.d-b.d:ST.sort==='rise'?(a,b)=>b.d-a.d:(a,b)=>tot(b)-tot(a);
   list.sort(srt);
   const mKeys=id=>hMonths(id).filter(i=>DM.has(i)).map(mk);
-  const runTxt=id=>{ if(!lastD) return hSpan(id); const li=lastD.getFullYear()*12+lastD.getMonth(); if(halfOf(li)!==id||li>=hMonths(id)[5]&&li<curM) return hSpan(id); return MN[hMonths(id)[0]%12]+'–'+lastD.getDate()+' '+MN[lastD.getMonth()]; };
+  const runTxt=id=>{ if(!lastD||id<0) return hSpan(id); const li=lastD.getFullYear()*12+lastD.getMonth(); if(halfOf(li)!==id||li>=hMonths(id)[5]&&li<curM) return hSpan(id); return MN[hMonths(id)[0]%12]+'–'+lastD.getDate()+' '+MN[lastD.getMonth()]; };
   const cell=(n,id,f)=>!on('half')?'':has(id)?(n.h[id]?`<td class="hy-d${id===cols[0]?' hy-gs':''}" data-hy-f="${esc(JSON.stringify(f))}" data-hy-m="${esc(JSON.stringify(mKeys(id)))}" title="Click to open these GRs">${id===cur||id===prev?'<b>'+L(n.h[id])+'</b>':L(n.h[id])}</td>`:`<td class="${id===cols[0]?'hy-gs':''}">–</td>`):`<td class="hy-dim${id===cols[0]?' hy-gs':''}" title="No data loaded for this half-year">–</td>`;
   const tail=n=>{ const ch=n.pa>1e-9?(n.t==='sm'?0:n.d/n.pa*100):null; let h='';
     if(on('avgm')) h+=`<td class="hy-gs">${nP?(n.pa?L(n.pa):'–'):'<span class="hy-dim">–</span>'}</td><td>${n.ca?L(n.ca):'–'}</td>`;
