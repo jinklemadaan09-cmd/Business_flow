@@ -2507,7 +2507,8 @@ const METRIC_DEFS = [
   ['Avg FY Sales','SUM(Total Freight in the picked months of the FY) ÷ COUNT(those months with Total Freight ≠ 0)','Yield Analysis tables. FY = financial year of the latest month picked in the Month slicer. A month with no business is not counted (Apr–Nov picked, no business in Oct = ÷ 7). In Uptrade / Downtrade the previous FY uses the same months one year earlier unless months of that FY are picked.','Total Freight (picked FY months)','Months with business','₹'],
   ['FTL / PTL Business','Load types booked by the row','FTL/PTL = the row booked both FTL and PTL (LTL / SML) in the selected period; else FTL only or PTL only. The TOTAL row shows how many rows are in each group.','Load Type','—','tag'],
   ['Avg Monthly Sales','SUM(Total Freight) ÷ Active Months','Average sales per month, counting only the months in which the row had sales.','Total Freight','Active Months','₹'],
-  ['No. of Consignments per Month','GR Count ÷ Active Months','Average consignments (GRs) per month, over the same active months as Avg Monthly Sales.','GR Count','Active Months','GRs'],
+  ['Order Frequency pm','GR Count ÷ Active Months','Average orders (GRs) per month, over the same active months as Avg Monthly Sales (was "No. of Consignments per Month").','GR Count','Active Months','GRs'],
+  ['Avg Order Size','SUM(Total Freight) ÷ GR Count','Average Total Freight per order (one GR = one order), in Lacs. Totals and subtotals are sum ÷ sum.','Total Freight','GR Count','₹'],
   ['Rate Type','RATETYPE column: TARIFF / CONTRACTUAL / UNSCHEDULED','A GR with a blank rate type is UNSCHEDULED — its own group, not counted as Tariff.','—','—','tag'],
   ['Cross Sell','RBD party + a destination zone / circle / branch, load type (FTL ↔ LTL) or destination country not used in the previous N months','The party gave business in the previous N months (so it is not NBD), but this GR goes to a destination zone, destination branch, load type or destination country (DESTINATION COUNTRY column, used as it is; a blank value is not checked) that the party did not use in those N months. The destination is judged at the Check within level: Pan India / Zone → new destination zone, Circle → new destination circle, Branch → new destination branch (FTL ↔ LTL and country at every level). Every GR is NBD or RBD; Cross Sell is the part of RBD where the party started something new, so it is checked only after the NBD window ends. N = NBD gap setting.','—','—','tag'],
   ['Lost','No business for more than N months (N = NBD gap, default 6), counted by calendar month','A party (consignor / consignee / customer) is Lost in the month after it has gone N full months without business: last business month + N + 1 (last business Apr, N 6 → Lost in Nov). Months are counted by month, not by GR date. If the party books again in that month it is NBD instead, and RBD from the next month. Shown as the Lost column in the NBD / RBD tables (Yield Analysis and MoM), not added to Total. Checked within the selected Pan India / Zone / Circle / Branch. The zone / branch / destination of a Lost party is taken from its last business month.','Months with business','—','tag'],
@@ -2777,6 +2778,39 @@ window.GRFy=(function(){
   const amHead=()=>'Active Months FY '+lab(cur());
   return {fyOf,lab,sel,cur,avg,mix,isF,isP,flags,badge,counts,countTxt,head,amHead};
 })();
+/* ---------------- Common measures (Measures block of Uptrade / Downtrade and NBD by-party tables) ----------------
+   One accumulator per row; every ratio is sum ÷ sum. Order Frequency pm = GR Count ÷ Active Months;
+   Avg Order Size = Total Freight ÷ GR Count (one GR = one order). */
+window.GRMeas=(function(){
+  const LIST=[['n','GR Count',''],['aw','AWeight','Tons'],['cw','CWeight','Tons'],['wpc','WPC','kg/GR'],
+    ['bf','Basic Freight','Lacs'],['tf','Total Freight','Lacs'],['am','Active Months',''],['avg','Avg Monthly Sales','Lacs'],
+    ['ofq','Order Frequency pm',''],['aos','Avg Order Size','Lacs'],
+    ['te','Net Costing','Lacs'],['gp','GP','Lacs'],['gpp','GP%',''],['by','Basic Yield','₹/kg'],['gy','Gross Yield','₹/kg'],['ck','Cost per KG','₹/kg']];
+  const GROUP={n:'Volume',bf:'Revenue',te:'Profit / Yield'};
+  const acc=()=>({n:0,aw:0,cw:0,bf:0,tf:0,te:0,ms:{}});
+  const add=(a,r)=>{ const t=r.total||0; a.n++; a.aw+=r.aweight||0; a.cw+=r.cweight||0; a.bf+=r.freight||0; a.tf+=t; a.te+=r.totalexpense||0; const k=r.monthKey; if(k) a.ms[k]=(a.ms[k]||0)+t; };
+  const merge=(a,b)=>{ if(!b) return a; a.n+=b.n; a.aw+=b.aw; a.cw+=b.cw; a.bf+=b.bf; a.tf+=b.tf; a.te+=b.te; for(const k in b.ms) a.ms[k]=(a.ms[k]||0)+b.ms[k]; return a; };
+  const am=a=>{ let n=0; for(const k in a.ms) if(Math.abs(a.ms[k])>1e-9) n++; return n; };
+  const sd=(x,y)=>y?x/y:0;
+  const val=(k,a)=>{ switch(k){
+    case 'n': return a.n; case 'aw': return a.aw; case 'cw': return a.cw; case 'wpc': return sd(a.aw,a.n);
+    case 'bf': return a.bf; case 'tf': return a.tf; case 'am': return am(a); case 'avg': return sd(a.tf,am(a));
+    case 'ofq': return sd(a.n,am(a)); case 'aos': return sd(a.tf,a.n);
+    case 'te': return a.te; case 'gp': return a.tf-a.te; case 'gpp': return a.tf?(a.tf-a.te)/a.tf*100:NaN;
+    case 'by': return a.cw?a.bf/a.cw:NaN; case 'gy': return a.cw?a.tf/a.cw:NaN; case 'ck': return a.aw?a.te/a.aw:NaN; } return NaN; };
+  const unit=k=>(LIST.find(m=>m[0]===k)||[])[2]||'';
+  const fmt=(k,v)=>{ if(v==null||!isFinite(v)) return '—'; const u=unit(k);
+    if(u==='Lacs') return '₹'+(v/1e5).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
+    if(u==='Tons') return (v/1000).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
+    if(u==='₹/kg') return '₹'+v.toFixed(2); if(k==='gpp') return v.toFixed(2)+'%';
+    return Math.round(v).toLocaleString('en-IN'); };
+  const label=k=>(LIST.find(m=>m[0]===k)||[k,k])[1];
+  const head=k=>{ const u=unit(k); return label(k)+(u?'<span class="unit-head">'+u+'</span>':''); };
+  const tip={am:'Months with business (Total Freight not 0)',avg:'Total Freight ÷ Active Months',ofq:'GR Count ÷ Active Months',aos:'Total Freight ÷ GR Count (one GR = one order)',wpc:'AWeight ÷ GR Count',gpp:'GP ÷ Total Freight',by:'Basic Freight ÷ CWeight',gy:'Total Freight ÷ CWeight',ck:'Net Costing ÷ AWeight'};
+  /* checkbox list for a Measures pop-up, grouped */
+  const pickHtml=(sel,skip)=>LIST.filter(m=>!(skip||[]).includes(m[0])).map(([k,l,u])=>(GROUP[k]?`<div class="rt-help" style="margin:6px 0 2px;font-weight:800;text-transform:uppercase;font-size:10px">${GROUP[k]}</div>`:'')+`<label><input type="checkbox" value="${k}" ${sel.has(k)?'checked':''}> <span>${l}${u?' ('+u+')':''}</span></label>`).join('');
+  return {LIST,acc,add,merge,am,val,fmt,label,head,tip,pickHtml};
+})();
 function yieldAgg(rows){
   let freight=0,total=0,totalexpense=0,aweight=0,cweight=0,discAmt=0,discBeforeAmt=0,discGrCount=0;
   const mSales=new Map();   /* Total Freight per month → active months (a month with 0 sale is not counted) */
@@ -2785,7 +2819,7 @@ function yieldAgg(rows){
   const gp=total-totalexpense;
   let activeMonths=0; mSales.forEach(v=>{ if(Math.abs(v)>1e-9) activeMonths++; });
   return {freight,total,totalexpense,aweight,cweight,gp,gpp:total?gp/total*100:0,by:cweight?freight/cweight:0,gy:cweight?total/cweight:0,ck:aweight?totalexpense/aweight:0,count:rows.length,wpc:rows.length?aweight/rows.length:0,discAmt,discBeforeAmt,discPct:discBeforeAmt?discAmt/discBeforeAmt*100:0,discGrCount,
-    activeMonths, avgSales:activeMonths?total/activeMonths:0, grPerMonth:activeMonths?rows.length/activeMonths:0,
+    activeMonths, avgSales:activeMonths?total/activeMonths:0, grPerMonth:activeMonths?rows.length/activeMonths:0, ordSize:rows.length?total/rows.length:0,
     fyAvg:fyA.v, fyAvgN:fyA.n, ltMix:GRFy.mix(ltF,ltL)};
 }
 function yieldBaseRows(){ return getFilteredRows(); }
@@ -5149,13 +5183,15 @@ function amHeadHtml(tid){
   const ic=(k,l)=>(tid && typeof cfIcon==='function') ? cfIcon(tid,'m__'+k,'numeric',l) : '';
   return '<th title="Months in the selected period in which this row has sales (Total Freight not 0)">Active Months'+ic('activeMonths','Active Months')+'</th>'+
     '<th title="Total Freight ÷ Active Months">Avg Monthly Sales<span class="unit-head">Lacs</span>'+ic('avgSales','Avg Monthly Sales')+'</th>'+
-    '<th title="GR Count ÷ Active Months">No. of Consignments per Month'+ic('grPerMonth','No. of Consignments per Month')+'</th>';
+    '<th title="GR Count ÷ Active Months">Order Frequency pm'+ic('grPerMonth','Order Frequency pm')+'</th>'+
+    '<th title="Average Order Size = Total Freight ÷ GR Count (one GR = one order)">Avg Order Size<span class="unit-head">Lacs</span>'+ic('ordSize','Avg Order Size')+'</th>';
 }
 function amCellsHtml(s){
   s=s||{}; const am=s.activeMonths||0;
   return `<td class="am-cell">${am}</td>`+
     `<td class="am-cell" data-u="L" title="${fmtRupee(s.avgSales||0)} = Total Freight ÷ ${am}">${v12FmtLacs(s.avgSales||0)}</td>`+
-    `<td class="am-cell" title="${Number(s.count||0).toLocaleString('en-IN')} GRs ÷ ${am}">${Math.round(s.grPerMonth||0).toLocaleString('en-IN')}</td>`;
+    `<td class="am-cell" title="${Number(s.count||0).toLocaleString('en-IN')} GRs ÷ ${am}">${Math.round(s.grPerMonth||0).toLocaleString('en-IN')}</td>`+
+    `<td class="am-cell" data-u="L" title="${fmtRupee(s.ordSize||0)} per GR = Total Freight ÷ ${Number(s.count||0).toLocaleString('en-IN')} GRs">${v12FmtLacs(s.ordSize||0)}</td>`;
 }
 /* Avg FY Sales (selected months of the FY, months with no business not counted) + FTL / PTL Business */
 function fyHeadHtml(tid){
@@ -5225,7 +5261,7 @@ renderYieldTable=function(){
     body=groups.map(g=>{
       const s=yieldAgg(g.rows); if(!v12GpPass(s,'gpAnalysisFilter'))return '';
       if(hasYNumericFilter){
-        const ok=['aweight','cweight','wpc','freight','total','activeMonths','avgSales','grPerMonth','fyAvg','fyAvgN','totalexpense','gp','gpp','by','gy','ck','discBeforeAmt','discAmt','discPct','discGrCount','count'].every(k=>cfNumericPass('yield','m__'+k,s[k]));
+        const ok=['aweight','cweight','wpc','freight','total','activeMonths','avgSales','grPerMonth','ordSize','fyAvg','fyAvgN','totalexpense','gp','gpp','by','gy','ck','discBeforeAmt','discAmt','discPct','discGrCount','count'].every(k=>cfNumericPass('yield','m__'+k,s[k]));
         if(!ok) return '';
       }
       LTS.push(s.ltMix);
@@ -5238,7 +5274,7 @@ renderYieldTable=function(){
     body=nodes.map(n=>{
       const s=yieldAgg(n.rows); if(!v12GpPass(s,'gpAnalysisFilter'))return '';
       if(n.leaf!==false && hasYNumericFilter){
-        const ok=['aweight','cweight','wpc','freight','total','activeMonths','avgSales','grPerMonth','fyAvg','fyAvgN','totalexpense','gp','gpp','by','gy','ck','discBeforeAmt','discAmt','discPct','discGrCount','count'].every(k=>cfNumericPass('yield','m__'+k,s[k]));
+        const ok=['aweight','cweight','wpc','freight','total','activeMonths','avgSales','grPerMonth','ordSize','fyAvg','fyAvgN','totalexpense','gp','gpp','by','gy','ck','discBeforeAmt','discAmt','discPct','discGrCount','count'].every(k=>cfNumericPass('yield','m__'+k,s[k]));
         if(!ok) return '';
       }
       LTS.push(s.ltMix);
@@ -5529,8 +5565,8 @@ window.renderYieldAnalysis = renderYieldAnalysis;
 window.exportYieldStructured=function(fmt){
   const d=v12YieldStructured(),defs=d.levels.map(f=>V12_HIER.find(h=>h[0]===f)?.[1]||f);
   const hierCount=defs.length;
-  const cols=defs.concat(['GR Count','AWeight (Tons)','CWeight (Tons)','WPC (kg/GR)','Basic Freight (Lacs)','Total Freight (Lacs)','Active Months','Avg Monthly Sales (Lacs)','No. of Consignments per Month',GRFy.head()+' (Lacs)',GRFy.amHead(),'FTL / PTL Business','Net Costing (Lacs)','GP (Lacs)','GP%','Basic Yield (₹/kg)','Gross Yield (₹/kg)','Cost Per KG (₹/kg)','Without Discount Amount (Lacs)','Discount Amt (Lacs)','Discount %','Discounted GRs']);
-  const rows=d.rows.map(x=>x.vals.concat([x.agg.count,v12Tons(x.agg.aweight),v12Tons(x.agg.cweight),x.agg.wpc,v12Lacs(x.agg.freight),v12Lacs(x.agg.total),x.agg.activeMonths||0,v12Lacs(x.agg.avgSales||0),x.agg.grPerMonth||0,v12Lacs(x.agg.fyAvg||0),x.agg.fyAvgN||0,x.agg.ltMix||'',v12Lacs(x.agg.totalexpense),v12Lacs(x.agg.gp),x.agg.gpp,x.agg.by,x.agg.gy,x.agg.ck,v12Lacs(x.agg.discBeforeAmt),v12Lacs(x.agg.discAmt),x.agg.discPct,x.agg.discGrCount]));
+  const cols=defs.concat(['GR Count','AWeight (Tons)','CWeight (Tons)','WPC (kg/GR)','Basic Freight (Lacs)','Total Freight (Lacs)','Active Months','Avg Monthly Sales (Lacs)','Order Frequency pm','Avg Order Size (Lacs)',GRFy.head()+' (Lacs)',GRFy.amHead(),'FTL / PTL Business','Net Costing (Lacs)','GP (Lacs)','GP%','Basic Yield (₹/kg)','Gross Yield (₹/kg)','Cost Per KG (₹/kg)','Without Discount Amount (Lacs)','Discount Amt (Lacs)','Discount %','Discounted GRs']);
+  const rows=d.rows.map(x=>x.vals.concat([x.agg.count,v12Tons(x.agg.aweight),v12Tons(x.agg.cweight),x.agg.wpc,v12Lacs(x.agg.freight),v12Lacs(x.agg.total),x.agg.activeMonths||0,v12Lacs(x.agg.avgSales||0),x.agg.grPerMonth||0,v12Lacs(x.agg.ordSize||0),v12Lacs(x.agg.fyAvg||0),x.agg.fyAvgN||0,x.agg.ltMix||'',v12Lacs(x.agg.totalexpense),v12Lacs(x.agg.gp),x.agg.gpp,x.agg.by,x.agg.gy,x.agg.ck,v12Lacs(x.agg.discBeforeAmt),v12Lacs(x.agg.discAmt),x.agg.discPct,x.agg.discGrCount]));
   const meta=buildExportMeta();
   if(fmt==='excel'){
     const wb=XLSX.utils.book_new(),ws=XLSX.utils.aoa_to_sheet([cols,...rows]),wm=XLSX.utils.aoa_to_sheet(meta);
@@ -5560,7 +5596,8 @@ const V12_MOM_MEASURES=[
  {key:'total',label:'Total Freight',unit:'Lacs',type:'lacs',invert:false},
  {key:'activeMonths',label:'Active Months',unit:'#',type:'count',invert:false},
  {key:'avgSales',label:'Avg Monthly Sales',unit:'Lacs',type:'lacs',invert:false},
- {key:'grPerMonth',label:'No. of Consignments per Month',unit:'#',type:'count',invert:false},
+ {key:'grPerMonth',label:'Order Frequency pm',unit:'#',type:'count',invert:false},
+ {key:'ordSize',label:'Avg Order Size',unit:'Lacs',type:'lacs',invert:false},
  {key:'totalexpense',label:'Net Costing',unit:'Lacs',type:'lacs',invert:true},
  {key:'gp',label:'GP',unit:'Lacs',type:'lacs',invert:false},
  {key:'gpp',label:'GP%',unit:'%',type:'pct',invert:false},
@@ -11102,7 +11139,7 @@ const CELL_LIMIT=60000;
 function pwtAmPicker(lbl){
   const anchor=$('ywMetricUnit'); if(!anchor) return;
   let host=$('ywAmSel');
-  const opts=[['am','Active Months'],['avg','Avg Monthly '+lbl],['gr','No. of Consignments per Month'],['fy',GRFy.head()+' + '+GRFy.amHead()],['lt','FTL / PTL Business']], cur=App.yieldDayWeek.am||[];
+  const opts=[['am','Active Months'],['avg','Avg Monthly '+lbl],['gr','Order Frequency pm'],['os','Avg Order Size'],['fy',GRFy.head()+' + '+GRFy.amHead()],['lt','FTL / PTL Business']], cur=App.yieldDayWeek.am||[];
   const txt=`Extra Measures: ${cur.length?cur.length+' selected':'None'} <span>▾</span>`;
   if(host){ host.querySelector('.msel-btn').innerHTML=txt; host._o=opts; return; }
   host=document.createElement('div'); host.id='ywAmSel'; host.className='rt-sel msel'; host._o=opts;
@@ -11146,12 +11183,12 @@ function renderPWT_(){
   /* Active Months / Avg Monthly / Consignments per Month: a month counts only when the row's Total Freight in it is not 0 */
   const amAdd=/^(lacs|tons|count)$/.test(metric.type) && metric.key!=='wpc', amLbl=amAdd?metric.label:'Sales', amType=amAdd?metric.type:'lacs';
   const amOf=(list,t)=>{const m=new Map();for(const r of list){const k=r.monthKey;if(k)m.set(k,(m.get(k)||0)+(r.total||0));}let n=0;m.forEach(v=>{if(Math.abs(v)>1e-9)n++;});
-    const tot=amAdd?mval(t,metric.key):list.reduce((s,r)=>s+(r.total||0),0), fy=GRFy.avg(m), lf=GRFy.flags(list);return {n,avg:n?tot/n:0,gr:n?list.length/n:0,tot,cnt:list.length,fy,lt:GRFy.mix(lf[0],lf[1])};};
+    const tot=amAdd?mval(t,metric.key):list.reduce((s,r)=>s+(r.total||0),0), fy=GRFy.avg(m), lf=GRFy.flags(list);const tf=list.reduce((s,r)=>s+(r.total||0),0);return {n,avg:n?tot/n:0,gr:n?list.length/n:0,os:list.length?tf/list.length:0,tf,tot,cnt:list.length,fy,lt:GRFy.mix(lf[0],lf[1])};};
   /* Avg FY Sales + FTL / PTL Business are on by default; Active Months / Avg Monthly / Consignments per Month are off until ticked */
   const AMS=App.yieldDayWeek.am=App.yieldDayWeek.am||['fy','lt']; pwtAmPicker(amLbl);
   const PLT=[];   /* FTL / PTL of every row → counts in GRAND TOTAL */
-  const amHead=(AMS.includes('am')?`<th class="am-head"${rs} title="Months in which this row has sales (Total Freight not 0)">Active Months</th>`:'')+(AMS.includes('avg')?`<th class="am-head"${rs} title="${esc((amAdd?metric.label:'Total Freight'))} ÷ Active Months">Avg Monthly ${esc(amLbl)}${(amAdd?metric.unit:'Lacs')&&amType!=='count'?`<span class="unit-head">${esc(amAdd?metric.unit:'Lacs')}</span>`:''}</th>`:'')+(AMS.includes('gr')?`<th class="am-head"${rs} title="GR Count ÷ Active Months">No. of Consignments per Month</th>`:'')+(AMS.includes('fy')?`<th class="am-head"${rs} title="Total Freight in the selected months of FY ${GRFy.lab(GRFy.cur())} ÷ months of that FY with business">${esc(GRFy.head())}<span class="unit-head">Lacs</span></th><th class="am-head"${rs}>${esc(GRFy.amHead())}</th>`:'')+(AMS.includes('lt')?`<th class="am-head"${rs}>FTL / PTL Business</th>`:'');
-  const amCells=x=>(AMS.includes('am')?`<td class="am-cell">${x.n}</td>`:'')+(AMS.includes('avg')?`<td class="am-cell" data-u="${amType==='lacs'?'L':amType==='tons'?'T':''}" title="${esc(fmtCell(amType,x.tot))} ÷ ${x.n}">${fmtCell(amType,x.avg)}</td>`:'')+(AMS.includes('gr')?`<td class="am-cell" title="${x.cnt.toLocaleString('en-IN')} GRs ÷ ${x.n}">${Math.round(x.gr).toLocaleString('en-IN')}</td>`:'')+(AMS.includes('fy')?`<td class="fy-cell" data-u="L" title="${esc(fmtCell('lacs',x.fy.t))} ÷ ${x.fy.n}">${fmtCell('lacs',x.fy.v)}</td><td class="fy-cell">${x.fy.n}</td>`:'')+(AMS.includes('lt')?(x.ltCnt!=null?`<td class="fy-cell fy-cnt">${x.ltCnt}</td>`:`<td class="fy-cell">${GRFy.badge(x.lt)}</td>`):'');
+  const amHead=(AMS.includes('am')?`<th class="am-head"${rs} title="Months in which this row has sales (Total Freight not 0)">Active Months</th>`:'')+(AMS.includes('avg')?`<th class="am-head"${rs} title="${esc((amAdd?metric.label:'Total Freight'))} ÷ Active Months">Avg Monthly ${esc(amLbl)}${(amAdd?metric.unit:'Lacs')&&amType!=='count'?`<span class="unit-head">${esc(amAdd?metric.unit:'Lacs')}</span>`:''}</th>`:'')+(AMS.includes('gr')?`<th class="am-head"${rs} title="GR Count ÷ Active Months">Order Frequency pm</th>`:'')+(AMS.includes('os')?`<th class="am-head"${rs} title="Total Freight ÷ GR Count (one GR = one order)">Avg Order Size<span class="unit-head">Lacs</span></th>`:'')+(AMS.includes('fy')?`<th class="am-head"${rs} title="Total Freight in the selected months of FY ${GRFy.lab(GRFy.cur())} ÷ months of that FY with business">${esc(GRFy.head())}<span class="unit-head">Lacs</span></th><th class="am-head"${rs}>${esc(GRFy.amHead())}</th>`:'')+(AMS.includes('lt')?`<th class="am-head"${rs}>FTL / PTL Business</th>`:'');
+  const amCells=x=>(AMS.includes('am')?`<td class="am-cell">${x.n}</td>`:'')+(AMS.includes('avg')?`<td class="am-cell" data-u="${amType==='lacs'?'L':amType==='tons'?'T':''}" title="${esc(fmtCell(amType,x.tot))} ÷ ${x.n}">${fmtCell(amType,x.avg)}</td>`:'')+(AMS.includes('gr')?`<td class="am-cell" title="${x.cnt.toLocaleString('en-IN')} GRs ÷ ${x.n}">${Math.round(x.gr).toLocaleString('en-IN')}</td>`:'')+(AMS.includes('os')?`<td class="am-cell" data-u="L" title="${esc(fmtCell('lacs',x.tf))} ÷ ${x.cnt.toLocaleString('en-IN')} GRs">${fmtCell('lacs',x.os)}</td>`:'')+(AMS.includes('fy')?`<td class="fy-cell" data-u="L" title="${esc(fmtCell('lacs',x.fy.t))} ÷ ${x.fy.n}">${fmtCell('lacs',x.fy.v)}</td><td class="fy-cell">${x.fy.n}</td>`:'')+(AMS.includes('lt')?(x.ltCnt!=null?`<td class="fy-cell fy-cnt">${x.ltCnt}</td>`:`<td class="fy-cell">${GRFy.badge(x.lt)}</td>`):'');
   if(two){ head=`<tr>${hierHead}${groups.map(g=>`<th colspan="${g.n}" style="text-align:left;padding-left:14px">${esc(g.label)}${g.part?`<span class="v7-part">${esc(g.part)}</span>`:''}</th>`).join('')}<th${rs}>Grand Total</th>${amHead}</tr><tr>${P.map(p=>`<th>${esc(p.label)}</th>`).join('')}</tr>`; }
   else head=`<tr>${hierHead}${P.map(p=>`<th>${esc(p.label)}${p.sub?`<span class="v7-sub">${esc(p.sub)}${p.part?' · '+esc(p.part):''}</span>`:(p.part?`<span class="v7-part">${esc(p.part)}</span>`:'')}</th>`).join('')}<th>Grand Total</th>${amHead}</tr>`;
   const cell=(a,i,pi)=>`<td data-i="${i}" data-p="${pi}">${fmtCell(metric.type,mval(a,metric.key))}</td>`;
@@ -15383,7 +15420,7 @@ if (window.__rt) return; window.__rt=1;
 const DIMS=[['originzone','Origin Zone'],['origincircle','Origin Circle'],['origin','Branch'],['destzone','Destination Zone'],['destcircle','Destination Circle'],['destname','Destination'],['cngr','CNGR'],['cnge','CNSGNE'],['customer','Customer']];
 const MEAS=[
   ['count','GR Count',''],['cweight','CWeight','Tons'],['freight','Basic Freight','Lacs'],['total','Total Freight','Lacs'],
-  ['am','Active Months',''],['avgSales','Avg Monthly Sales','Lacs'],['grpm','No. of Consignments per Month',''],
+  ['am','Active Months',''],['avgSales','Avg Monthly Sales','Lacs'],['grpm','Order Frequency pm',''],['aos','Avg Order Size','Lacs'],
   ['fyAvg','Avg FY Sales','Lacs'],['fyAm','Active Months FY',''],['lt','FTL / PTL Business',''],
   ['totalexpense','Net Costing','Lacs'],['gp','GP','Lacs'],['gpp','GP%',''],['by','Basic Yield','₹/kg'],['gy','Gross Yield','₹/kg'],['ck','Cost Per KG','₹/kg'],['share','Share %','']];
 const ML=Object.fromEntries(MEAS.map(m=>[m[0],m]));
@@ -15402,7 +15439,7 @@ function amN(a){ let n=0; if(a&&a.ms) a.ms.forEach(v=>{ if(Math.abs(v)>1e-9) n++
 function val(a,k,totTf){
   switch(k){
     case 'fyAvg': return GRFy.avg(a.ms).v/1e5; case 'fyAm': return GRFy.avg(a.ms).n; case 'lt': return GRFy.mix(a.lf,a.ll);
-    case 'am': return amN(a); case 'avgSales': { const n=amN(a); return n?a.tf/n/1e5:0; } case 'grpm': { const n=amN(a); return n?a.count/n:0; }
+    case 'am': return amN(a); case 'avgSales': { const n=amN(a); return n?a.tf/n/1e5:0; } case 'grpm': { const n=amN(a); return n?a.count/n:0; } case 'aos': return a.count?a.tf/a.count/1e5:0;
     case 'count': return a.count; case 'cweight': return a.cw/1000; case 'freight': return a.bf/1e5; case 'total': return a.tf/1e5;
     case 'totalexpense': return a.te/1e5; case 'gp': return (a.tf-a.te)/1e5; case 'gpp': return a.tf?(a.tf-a.te)/a.tf*100:null;
     case 'by': return a.cw?a.bf/a.cw:null; case 'gy': return a.cw?a.tf/a.cw:null; case 'ck': return a.aw?a.te/a.aw:null;
@@ -15563,8 +15600,10 @@ const KEY='grpnl_msel_v1';
 let saved={}; try{ saved=JSON.parse(localStorage.getItem(KEY)||'{}')||{}; }catch(e){ saved={}; }
 const save=()=>{ try{ localStorage.setItem(KEY, JSON.stringify(saved)); }catch(e){} };
 /* Active Months / Avg Monthly Sales / Consignments per Month are optional: off until ticked in Measures */
-const OPT_OFF=['Active Months','Avg Monthly Sales','No. of Consignments per Month'];
+const OPT_OFF=['Active Months','Avg Monthly Sales','Order Frequency pm','Avg Order Size'];
 if(!saved.__amOpt){ Object.keys(saved).forEach(k=>{ if(Array.isArray(saved[k])) OPT_OFF.forEach(n=>{ if(!saved[k].includes(n)) saved[k].push(n); }); }); saved.__amOpt=1; save(); }
+/* "No. of Consignments per Month" is now "Order Frequency pm" (same choice kept); new Avg Order Size starts off */
+if(!saved.__ordOpt){ Object.keys(saved).forEach(k=>{ const a=saved[k]; if(!Array.isArray(a)) return; if(a.includes('No. of Consignments per Month')&&!a.includes('Order Frequency pm')) a.push('Order Frequency pm'); if(!a.includes('Avg Order Size')) a.push('Avg Order Size'); }); saved.__ordOpt=1; save(); }
 const hidOf=id=>saved[id]||OPT_OFF;
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function label(th){ let t=''; th.childNodes.forEach(n=>{ if(n.nodeType===3) t+=n.textContent; }); t=t.replace(/\s+/g,' ').trim(); return t || th.textContent.replace(/▾/g,'').replace(/\s+/g,' ').trim(); }
@@ -17290,8 +17329,8 @@ function wireGr(p){ p.querySelectorAll('[data-gr]').forEach(el=>el.addEventListe
 const GRT=window.__GRT=window.__GRT||{yParent:'',mParent:''};
 const MT_=v=>(v/1000).toLocaleString('en-IN',{maximumFractionDigits:1})+' MT', LAC=v=>'₹'+(v/1e5).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})+' L';
 function aggOf(rows){ const a=acc(); rows.forEach(r=>add(a,r)); return a; }
-const COLS=[['GR Count',a=>a.n.toLocaleString('en-IN')],['AWeight',a=>MT_(a.aw)],['CWeight',a=>MT_(a.cw)],['Basic Freight',a=>LAC(a.f)],['Total Freight',a=>LAC(a.t)],['Active Months',a=>String(amN(a))],['Avg Monthly Sales',a=>{const n=amN(a);return LAC(n?a.t/n:0);}],['No. of Consignments per Month',a=>{const n=amN(a);return Math.round(n?a.n/n:0).toLocaleString('en-IN');}],['Avg FY Sales',a=>LAC(GRFy.avg(a.ms).v)],['Active Months FY',a=>String(GRFy.avg(a.ms).n)],['FTL / PTL Business',a=>GRFy.badge(GRFy.mix(a.lf,a.ll))],['Net Costing',a=>LAC(a.x)],['GP',a=>LAC(a.t-a.x)],['GP%',a=>a.t?((a.t-a.x)/a.t*100).toFixed(2)+'%':'—'],['Basic Yield',a=>a.cw?'₹'+(a.f/a.cw).toFixed(2):'—'],['Gross Yield',a=>a.cw?'₹'+(a.t/a.cw).toFixed(2):'—'],['Cost/kg',a=>a.aw?'₹'+(a.x/a.aw).toFixed(2):'—']];
-const MCOLS=[['GR Count',a=>a.n,v=>Math.round(v).toLocaleString('en-IN'),0],['CWeight',a=>a.cw,MT_,0],['Total Freight',a=>a.t,LAC,0],['Active Months',a=>amN(a),v=>String(Math.round(v)),0],['Avg Monthly Sales',a=>{const n=amN(a);return n?a.t/n:0;},LAC,0],['No. of Consignments per Month',a=>{const n=amN(a);return n?a.n/n:0;},v=>Math.round(v).toLocaleString('en-IN'),0],['Net Costing',a=>a.x,LAC,1],['GP',a=>a.t-a.x,LAC,0],['GP%',a=>a.t?(a.t-a.x)/a.t*100:NaN,v=>isFinite(v)?v.toFixed(2)+'%':'—',0,'pts'],['Basic Yield',a=>a.cw?a.f/a.cw:NaN,v=>isFinite(v)?'₹'+v.toFixed(2):'—',0],['Gross Yield',a=>a.cw?a.t/a.cw:NaN,v=>isFinite(v)?'₹'+v.toFixed(2):'—',0],['Cost/kg',a=>a.aw?a.x/a.aw:NaN,v=>isFinite(v)?'₹'+v.toFixed(2):'—',1]];
+const COLS=[['GR Count',a=>a.n.toLocaleString('en-IN')],['AWeight',a=>MT_(a.aw)],['CWeight',a=>MT_(a.cw)],['Basic Freight',a=>LAC(a.f)],['Total Freight',a=>LAC(a.t)],['Active Months',a=>String(amN(a))],['Avg Monthly Sales',a=>{const n=amN(a);return LAC(n?a.t/n:0);}],['Order Frequency pm',a=>{const n=amN(a);return Math.round(n?a.n/n:0).toLocaleString('en-IN');}],['Avg Order Size',a=>LAC(a.n?a.t/a.n:0)],['Avg FY Sales',a=>LAC(GRFy.avg(a.ms).v)],['Active Months FY',a=>String(GRFy.avg(a.ms).n)],['FTL / PTL Business',a=>GRFy.badge(GRFy.mix(a.lf,a.ll))],['Net Costing',a=>LAC(a.x)],['GP',a=>LAC(a.t-a.x)],['GP%',a=>a.t?((a.t-a.x)/a.t*100).toFixed(2)+'%':'—'],['Basic Yield',a=>a.cw?'₹'+(a.f/a.cw).toFixed(2):'—'],['Gross Yield',a=>a.cw?'₹'+(a.t/a.cw).toFixed(2):'—'],['Cost/kg',a=>a.aw?'₹'+(a.x/a.aw).toFixed(2):'—']];
+const MCOLS=[['GR Count',a=>a.n,v=>Math.round(v).toLocaleString('en-IN'),0],['CWeight',a=>a.cw,MT_,0],['Total Freight',a=>a.t,LAC,0],['Active Months',a=>amN(a),v=>String(Math.round(v)),0],['Avg Monthly Sales',a=>{const n=amN(a);return n?a.t/n:0;},LAC,0],['Order Frequency pm',a=>{const n=amN(a);return n?a.n/n:0;},v=>Math.round(v).toLocaleString('en-IN'),0],['Avg Order Size',a=>a.n?a.t/a.n:0,LAC,0],['Net Costing',a=>a.x,LAC,1],['GP',a=>a.t-a.x,LAC,0],['GP%',a=>a.t?(a.t-a.x)/a.t*100:NaN,v=>isFinite(v)?v.toFixed(2)+'%':'—',0,'pts'],['Basic Yield',a=>a.cw?a.f/a.cw:NaN,v=>isFinite(v)?'₹'+v.toFixed(2):'—',0],['Gross Yield',a=>a.cw?a.t/a.cw:NaN,v=>isFinite(v)?'₹'+v.toFixed(2):'—',0],['Cost/kg',a=>a.aw?a.x/a.aw:NaN,v=>isFinite(v)?'₹'+v.toFixed(2):'—',1]];
 const gtOf=r=>{ const v=String(r.grtype==null?'':r.grtype).trim(); return v||'UNSPECIFIED'; };
 function parentSel(id,cur){ const H=(window.V12_HIER||[]).filter(h=>h[0]!=='grtype'&&h[0]!=='grno'); return `<label class="v29-control"><span>Rows</span><select id="${id}"><option value="">GR Type only</option>${H.map(h=>`<option value="${h[0]}" ${cur===h[0]?'selected':''}>${esc(h[1])} › GR Type</option>`).join('')}</select></label>`; }
 function renderGrtYield(){
@@ -18050,7 +18089,8 @@ const MEAS=[
   ['total','Total Freight (₹ L)',a=>a.tf/1e5,2],
   ['am','Active Months',a=>bizAm(a),0],
   ['avgSales','Avg Monthly Sales (₹ L)',a=>sd(a.tf,bizAm(a))/1e5,2],
-  ['grpm','No. of Consignments per Month',a=>sd(a.n,bizAm(a)),0],
+  ['grpm','Order Frequency pm',a=>sd(a.n,bizAm(a)),0],
+  ['aos','Avg Order Size (₹ L)',a=>sd(a.tf,a.n)/1e5,2],
   ['fyAvg','Avg FY Sales (₹ L)',a=>GRFy.avg(a.ms).v/1e5,2],
   ['fyAm','Active Months FY',a=>GRFy.avg(a.ms).n,0],
   ['lt','FTL / PTL Business',a=>GRFy.mix(a.lf,a.ll),0],
@@ -18088,7 +18128,7 @@ const TABLES=[
   {id:'cust',title:'Top Customers',main:null}
 ];
 const ST={};
-['yield','mom'].forEach(pg=>TABLES.forEach(t=>{ ST[pg+t.id]={scope:'pan',dir:'top',top:10,by:'cngr',levels:[],meas:measOf(pg).map(m=>m[0]).filter(k=>!['am','avgSales','grpm'].includes(k)),open:new Set()}; }));
+['yield','mom'].forEach(pg=>TABLES.forEach(t=>{ ST[pg+t.id]={scope:'pan',dir:'top',top:10,by:'cngr',levels:[],meas:measOf(pg).map(m=>m[0]).filter(k=>!['am','avgSales','grpm','aos'].includes(k)),open:new Set()}; }));
 const SEP='\u0001';
 
 /* ---------- data ---------- */
@@ -19150,9 +19190,9 @@ const S0=()=>({n:0,t:0,w:0});
 const B0=()=>({p:new Set(),n:0,t:0,w:0,F:S0(),Lt:S0()});
 const addB=(b,k,tv,cw,isF)=>{ b.n++; b.t+=tv; b.w+=cw; b.p.add(k); const s=isF?b.F:b.Lt; s.n++; s.t+=tv; s.w+=cw; };
 function aggOf(rows,TG){
-  const A={n:0,t:0,all:B0(),nbd:B0(),rbd:B0(),nj:B0(),cs:B0(),why:{dz:0,dci:0,db:0,ltL:0,ltF:0,dc:0},whyT:{dz:0,dci:0,db:0,ltL:0,ltF:0,dc:0},ftl:0,ltl:0,ms:new Map(),csMs:new Set(),nbdMs:new Set(),first:null,last:null,nbdS:null,keys:new Set(),gr:null};
+  const A={x:GRMeas.acc(),n:0,t:0,all:B0(),nbd:B0(),rbd:B0(),nj:B0(),cs:B0(),why:{dz:0,dci:0,db:0,ltL:0,ltF:0,dc:0},whyT:{dz:0,dci:0,db:0,ltL:0,ltF:0,dc:0},ftl:0,ltl:0,ms:new Map(),csMs:new Set(),nbdMs:new Set(),first:null,last:null,nbdS:null,keys:new Set(),gr:null};
   for(const r of rows){ const x=TG.get(r); if(!x) continue; const tv=r.total||0, cw=r.cweight||0, isF=String(r.loadtype||'').toUpperCase()==='FTL';
-    A.n++; A.t+=tv; addB(A.all,x.k,tv,cw,isF); addB(A[x.b],x.k,tv,cw,isF); A.keys.add(x.k);
+    A.n++; A.t+=tv; GRMeas.add(A.x,r); addB(A.all,x.k,tv,cw,isF); addB(A[x.b],x.k,tv,cw,isF); A.keys.add(x.k);
     if(x.cs){ addB(A.cs,x.k,tv,cw,isF); x.why.forEach(w=>{ A.why[w]++; A.whyT[w]+=tv; }); A.csMs.add(x.m); }
     if(x.b==='nbd'){ A.nbdMs.add(x.m); if(A.first==null||x.m<A.first){ A.first=x.m; A.last=x.last; } if(x.s!=null&&(A.nbdS==null||x.s>A.nbdS)) A.nbdS=x.s; }
     if(isF) A.ftl+=tv; else A.ltl+=tv;
@@ -19206,17 +19246,18 @@ function showLost(pg,spec,quiet){
     ${list.length>MAX?`<div class="hy-more">Showing the first ${N(MAX)} of ${N(list.length)} (largest freight lost first).</div>`:''}</div>`;
   if(!quiet) box.scrollIntoView({block:'nearest',behavior:'smooth'});
 }
-/* metrics for the NBD table: tick in "Metrics" (default Freight + GRs) */
+/* measures for the NBD by-party table: tick in "Measures" (default GRs, Freight, FTL, LTL). XMET = the common
+   measures (GRMeas) on all GRs of the row; GR Count / Total Freight / CWeight are left out (same as GRs / Freight / Chargeable Wt) */
 const MET=[['n','GRs'],['t','Freight'],['ftl','FTL Freight'],['ltl','LTL Freight'],['w','Chargeable Wt (MT)']];
 const CM=[['t','Freight'],['p','Consignors'],['n','GRs'],['F','FTL Freight'],['L','LTL Freight']];
-const XMET=[['am','Active Months'],['avg','Avg Monthly Sales'],['cpm','Consignments / Month']];
+const XMET=GRMeas.LIST.filter(m=>!['n','tf','cw'].includes(m[0])).map(m=>[m[0],m[1]+(m[2]?' ('+m[2]+')':'')]);
 const MKEY='grpnl_nbd_met_v2';
-function metOf(st){ if(Array.isArray(st.met)&&st.met.length) return st.met; let m=null; try{ m=JSON.parse(localStorage.getItem(MKEY)||'null'); }catch(e){} st.met=Array.isArray(m)&&m.some(x=>MET.some(y=>y[0]===x))?m:['n','t','ftl','ltl']; return st.met; }
+function metOf(st){ if(Array.isArray(st.met)&&st.met.length){ st.met=st.met.map(x=>x==='cpm'?'ofq':x); return st.met; } let m=null; try{ m=JSON.parse(localStorage.getItem(MKEY)||'null'); }catch(e){} st.met=Array.isArray(m)&&m.some(x=>MET.some(y=>y[0]===x))?m.map(x=>x==='cpm'?'ofq':x):['n','t','ftl','ltl']; return st.met; }
 function metPop(btn,pg){
   const pop=btn.parentNode.querySelector('.nbd-mpop'); const on=pop.classList.contains('on');
   document.querySelectorAll('.rt-pop.on').forEach(x=>x.classList.remove('on')); if(on) return;
   const sel=new Set(metOf(ST[pg]));
-  pop.innerHTML=`<div class="rt-help">Tick the columns to show in the table.</div>${MET.concat(XMET).map(m=>`<label><input type="checkbox" value="${m[0]}" ${sel.has(m[0])?'checked':''}> <span>${esc(m[1])}${XMET.includes(m)?' <i style="color:#7a8797">(Total only)</i>':''}</span></label>`).join('')}<div class="rt-act"><button type="button" class="btn btn-sm btn-outline" data-nbd-ma="def">Default</button><button type="button" class="btn btn-sm btn-primary" data-nbd-ma="ok">Apply</button></div>`;
+  pop.innerHTML=`<div class="rt-help">Tick the measures to show in the table.</div>${MET.concat(XMET).map((m,i)=>(i===MET.length?'<div class="rt-help" style="margin:6px 0 2px;font-weight:800;text-transform:uppercase;font-size:10px">All measures (all GRs of the row)</div>':'')+`<label><input type="checkbox" value="${m[0]}" ${sel.has(m[0])?'checked':''}> <span>${esc(m[1])}</span></label>`).join('')}<div class="rt-act"><button type="button" class="btn btn-sm btn-outline" data-nbd-ma="def">Default</button><button type="button" class="btn btn-sm btn-primary" data-nbd-ma="ok">Apply</button></div>`;
   const r=btn.getBoundingClientRect(); Object.assign(pop.style,{position:'fixed',top:(r.bottom+4)+'px',left:Math.max(8,Math.min(r.left,innerWidth-270))+'px',right:'auto',width:'260px',maxHeight:(innerHeight-r.bottom-20)+'px',overflow:'auto'});
   pop.classList.add('on');
 }
@@ -19244,7 +19285,7 @@ function ctlHtml(pg,st){
     const mm=metOf(st).map(x=>(MET.concat(XMET).find(y=>y[0]===x)||[x,x])[1]);
     h+=`<label>Show <select data-nbd="tag">${opt([['ALL','All'],['CS','Cross Sell only'],['CS_ltL','Cross Sell: FTL → LTL'],['CS_ltF','Cross Sell: LTL → FTL'],['CS_dz','Cross Sell: New Dest Zone'],['CS_dci','Cross Sell: New Dest Circle'],['CS_db','Cross Sell: New Dest Branch'],['CS_dc','Cross Sell: New Dest Country'],['NBD','NBD only'],['RBD','RBD only']].concat(baseOn()?[]:[['NJ','Not judged only']]),st.tag)}</select></label>
     <div class="rt-sel msel nbd-hsel"><button type="button" class="yield-hier-btn msel-btn" data-nbd-h>Hierarchy Levels: ${esc(st.levels.map(hLbl).concat([partyLbl(st)]).join(' › '))} <span>▾</span></button><div class="rt-pop msel-pop nbd-hpop"></div></div>
-    <div class="rt-sel msel nbd-hsel"><button type="button" class="yield-hier-btn msel-btn" data-nbd-mb>Metrics: ${esc(mm.join(', '))} <span>▾</span></button><div class="rt-pop msel-pop nbd-mpop"></div></div>`;
+    <div class="rt-sel msel nbd-hsel"><button type="button" class="yield-hier-btn msel-btn" data-nbd-mb>Measures: ${esc(mm.length>4?mm.length+' selected':mm.join(', '))} <span>▾</span></button><div class="rt-pop msel-pop nbd-mpop"></div></div>`;
   }
   return h;
 }
@@ -19391,7 +19432,7 @@ function renderYield_(){
     .filter(c=>st.met.includes(c[0]));
   const xm=XMET.filter(m=>st.met.includes(m[0]));
   const numCells=(a,f)=>{ const gf=Object.assign({},tagF,f); let s=COLS.map((c,i)=>cell(i?'':'nbd-gs',c[2](a),c[3]?Object.assign({},gf,c[3]):gf)).join('');
-    for(const x of xm){ const am=amN(a); s+=`<td class="nbd-a">${x[0]==='am'?am:x[0]==='avg'?L_(am?a.t/am:0):N(am?a.n/am:0)}</td>`; } return s; };
+    for(const x of xm) s+=`<td class="nbd-a">${GRMeas.fmt(x[0],GRMeas.val(x[0],a.x))}</td>`; return s; };
   const fOf=path=>{ const f={}; path.forEach((v,i)=>{ f[defs[i][0]]=v; }); return f; };
   let body='';
   for(const o of out){
@@ -19404,7 +19445,7 @@ function renderYield_(){
   }
   const T=aggOf(rows,TG);
   const head=defs.map(d=>`<th class="hier nbd-lv">${esc(d[1])}</th>`).join('')+`<th class="nbd-hc">Cross Sell?</th><th class="nbd-hc">Why</th><th class="nbd-hk">NBD / RBD</th>`
-    +COLS.map((c,i)=>`<th class="${i?'':'nbd-gs'}">${esc(c[1])}${c[0]==='n'||c[0]==='w'?'':u}</th>`).join('')+xm.map(x=>`<th class="nbd-ha">${esc(x[1])}${x[0]==='avg'?u:''}</th>`).join('');
+    +COLS.map((c,i)=>`<th class="${i?'':'nbd-gs'}">${esc(c[1])}${c[0]==='n'||c[0]==='w'?'':u}</th>`).join('')+xm.map(x=>`<th class="nbd-ha"${GRMeas.tip[x[0]]?` title="${esc(GRMeas.tip[x[0]])}"`:''}>${GRMeas.head(x[0])}</th>`).join('');
   wrap.innerHTML=`<table class="yield-table nbd-table" data-lv="${L}" style="min-width:${Math.max(1100,L*150+520+COLS.length*110+xm.length*110)}px"><thead><tr>${head}</tr></thead>
     <tbody>${body}</tbody><tfoot><tr><td class="hier">GRAND TOTAL</td>${'<td class="hier"></td>'.repeat(L-1)}<td></td><td></td><td></td>${numCells(T,{})}</tr></tfoot></table>
     ${cap?`<div class="hy-more">Showing the first ${N(MAXR)} rows (largest freight first). Excel / PDF download has every row.</div>`:''}`;
@@ -19473,6 +19514,7 @@ document.addEventListener('click',e=>{ const t=e.target.closest&&e.target.closes
 .hy-kpi.on{box-shadow:0 0 0 2px #1f5fa8 inset}
 .hy-kpi .v{font-size:18px;font-weight:800;color:#0b2545}.hy-kpi .l{font-size:10.5px;color:#5b6b7e;text-transform:uppercase;letter-spacing:.03em}.hy-kpi .s{font-size:11px;font-weight:700}
 .hy-kpi.up{border-left-color:#1a7f42}.hy-kpi.dn{border-left-color:#c0392b}.hy-kpi.nw{border-left-color:#1f5fa8}.hy-kpi.nb{border-left-color:#8896a8}
+.hy-table th.hy-xh{background:#0d5c63!important}.hy-table td.hy-xm{background:#eef8f8}.hy-table tfoot td.hy-xm{background:#dcefef}
 .hy-table th.hy-p{background:#3a4a5e!important}.hy-table th.hy-c{background:#1f5fa8!important}.hy-table th.hy-t{background:#7a4a00!important}
 .hy-table .hy-gs{border-left:2px solid #0b2545!important}
 .hy-table td.hy-d{cursor:pointer}.hy-table td.hy-d:hover{background:#e8f2ff!important;box-shadow:inset 0 0 0 1px #8db9e8}
@@ -19508,6 +19550,8 @@ const ST=window.__HY_ST=window.__HY_ST||{party:'cngr',lvl:'3',trend:'ALL',sort:'
 /* Measures (column groups) of this table; Active Months is off until ticked */
 const MEASH=[['fy0','FY (previous) Avg + Active months'],['fy1','FY (current) Avg + Active months'],['lt','FTL / PTL'],['half','Half-year business'],['avgm','Avg / month (half-year)'],['chg','Change %'],['trend','Trend'],['am','Active Months (half-year)']];
 if(!ST.meas) ST.meas=MEASH.map(m=>m[0]).filter(k=>k!=='am');
+/* Measures block: every common measure (GRMeas), on the months picked in the Month slicer; none ticked by default */
+if(!Array.isArray(ST.xm)) ST.xm=[];
 /* Hierarchy Levels (multi-select, in tick order, like the tables above). Uptrade / Downtrade is judged on the ticked
    combination, e.g. Origin Zone › Party = each zone + party pair. 'party' = the field picked in Party. */
 const HLV=[['originzone','Origin Zone'],['destzone','Destination Zone'],['origincircle','Origin Circle'],['destcircle','Destination Circle'],['party','Party'],['origin','Origin (Branch)'],['destname','Destination']];
@@ -19539,6 +19583,10 @@ function panel(){
     if(e.target.closest('[data-hy-mclr]')){ p.querySelectorAll('[data-hy-mp] input').forEach(i=>i.checked=false); return; }
     if(e.target.closest('[data-hy-mok]')){ const v=MEASH.map(m=>m[0]).filter(k=>{ const i=p.querySelector(`[data-hy-mp] input[value="${k}"]`); return i&&i.checked; }); ST.meas=v.length?v:['half']; draw(); return; }
     if(e.target.closest('[data-hy-mp]')){ e.stopPropagation(); return; }
+    const xb=e.target.closest('[data-hy-xb]'); if(xb){ e.stopPropagation(); const pop=p.querySelector('[data-hy-xp]'); const on=pop.classList.contains('on'); document.querySelectorAll('.rt-pop.on').forEach(x=>x.classList.remove('on')); if(!on) pop.classList.add('on'); return; }
+    if(e.target.closest('[data-hy-xclr]')){ p.querySelectorAll('[data-hy-xp] input').forEach(i=>i.checked=false); return; }
+    if(e.target.closest('[data-hy-xok]')){ ST.xm=[...p.querySelectorAll('[data-hy-xp] input')].filter(i=>i.checked).map(i=>i.value); draw(); return; }
+    if(e.target.closest('[data-hy-xp]')){ e.stopPropagation(); return; }
     const hb=e.target.closest('[data-hy-hb]'); if(hb){ e.stopPropagation(); const pop=p.querySelector('[data-hy-hp]'); const on=pop.classList.contains('on'); document.querySelectorAll('.rt-pop.on').forEach(x=>x.classList.remove('on')); if(!on) pop.classList.add('on'); return; }
     if(e.target.closest('[data-hy-hclr]')){ ST.levels=['party']; ST.show=200; draw(); setTimeout(()=>{ const x=p.querySelector('[data-hy-hp]'); if(x) x.classList.add('on'); },0); return; }
     if(e.target.closest('[data-hy-hp]')){ e.stopPropagation(); return; }
@@ -19548,7 +19596,7 @@ function panel(){
   });
   return p;
 }
-const node=()=>({h:{},cc:0,kids:null,mm:{},fm:{},lt:[0,0,0,0]});   /* mm: business per month index (for active months); fm: business per month of the Avg FY months; lt: FTL / PTL booked in current FY months, previous FY months */
+const node=()=>({h:{},cc:0,kids:null,mm:{},fm:{},lt:[0,0,0,0],x:GRMeas.acc()});   /* mm: business per month index (for active months); fm: business per month of the Avg FY months; lt: FTL / PTL booked in current FY months, previous FY months */
 /* equal to the shown precision (₹0.01 Lacs) or under 0.05 % apart = Flat, not Uptrade / Downtrade */
 const flat=(pa,ca)=>Math.abs(ca-pa)<500||Math.abs(ca-pa)/pa*100<0.05;
 function draw(){
@@ -19576,6 +19624,8 @@ function draw(){
   if(!selI.length){ M1=[...DM].filter(i=>fyI(i)===fy1); M0=[...DM].filter(i=>fyI(i)===fy0); }
   else if(!M0.length) M0=M1.map(i=>i-12);
   const FM1=new Set(M1), FM0=new Set(M0), has0=M0.some(i=>DM.has(i)), has1=M1.some(i=>DM.has(i));
+  /* Measures block months: the months picked in the Month slicer (none picked = every loaded month of FY fy1) */
+  const XMS=selI.length?selI:M1, FXM=new Set(XMS), XM=(ST.xm||[]).filter(k=>GRMeas.LIST.some(m=>m[0]===k));
   const fyL=fy=>fy+'-'+String(fy+1).slice(2);
   const mTxt=a=>a.length?(a.length>2?MN[a[0]%12]+'-'+String(Math.floor(a[0]/12)).slice(2)+' to '+MN[a[a.length-1]%12]+'-'+String(Math.floor(a[a.length-1]/12)).slice(2):a.map(i=>MN[i%12]+'-'+String(Math.floor(i/12)).slice(2)).join(', ')):'none';
   const M=new Set(ST.meas||[]), on=k=>M.has(k);
@@ -19587,20 +19637,21 @@ function draw(){
     <label>Compare <select data-hy="cmp">${opt(opts.map(id=>[id,hLab(id)+' vs '+hLab(id-1)]),cur)}</select></label>
     <label>Trend <select data-hy="trend">${opt(TR,ST.trend)}</select></label>
     <label>Sort <select data-hy="sort">${opt(SORT,ST.sort)}</select></label>
-    <div class="rt-sel"><button type="button" class="yield-hier-btn" data-hy-mb>Measures: ${MEASH.filter(m=>on(m[0])).length} of ${MEASH.length} <span>▾</span></button><div class="rt-pop" data-hy-mp style="left:0;right:auto;width:250px"><div class="rt-help">Tick the columns to show.</div>${MEASH.map(([k,l])=>`<label><input type="checkbox" value="${k}" ${on(k)?'checked':''}> <span>${esc(k==='fy0'?'FY '+fyL(fy0)+': Avg / month + Active months':k==='fy1'?'FY '+fyL(fy1)+': Avg / month + Active months':l)}</span></label>`).join('')}<div class="rt-act"><button type="button" class="btn btn-sm btn-outline" data-hy-mclr>Clear</button><button type="button" class="btn btn-sm btn-primary" data-hy-mok>Apply</button></div></div></div>
+    <div class="rt-sel"><button type="button" class="yield-hier-btn" data-hy-mb title="FY, half-year and trend columns of this table">Columns: ${MEASH.filter(m=>on(m[0])).length} of ${MEASH.length} <span>▾</span></button><div class="rt-pop" data-hy-mp style="left:0;right:auto;width:250px"><div class="rt-help">Tick the columns to show.</div>${MEASH.map(([k,l])=>`<label><input type="checkbox" value="${k}" ${on(k)?'checked':''}> <span>${esc(k==='fy0'?'FY '+fyL(fy0)+': Avg / month + Active months':k==='fy1'?'FY '+fyL(fy1)+': Avg / month + Active months':l)}</span></label>`).join('')}<div class="rt-act"><button type="button" class="btn btn-sm btn-outline" data-hy-mclr>Clear</button><button type="button" class="btn btn-sm btn-primary" data-hy-mok>Apply</button></div></div></div>
+    <div class="rt-sel"><button type="button" class="yield-hier-btn" data-hy-xb title="Measures on the months picked in the Month slicer">Measures: ${XM.length} of ${GRMeas.LIST.length} <span>▾</span></button><div class="rt-pop" data-hy-xp style="left:0;right:auto;width:260px;max-height:440px;overflow:auto"><div class="rt-help">Tick the measures to show. They use the months picked in the Month slicer (${esc(mTxt(XMS))}).</div>${GRMeas.pickHtml(new Set(XM))}<div class="rt-act"><button type="button" class="btn btn-sm btn-outline" data-hy-xclr>Clear</button><button type="button" class="btn btn-sm btn-primary" data-hy-xok>Apply</button></div></div></div>
     <label>Search <input data-hy-q type="search" name="hy-q-${Date.now()%1e6}" autocomplete="off" autocorrect="off" spellcheck="false" readonly onfocus="this.removeAttribute('readonly')" data-lpignore="true" data-1p-ignore="true" data-form-type="other" placeholder="Party name or any spelling" value="${esc(/@/.test(ST.q||'')?'':ST.q)}"></label>`;
   /* rows: every slicer except Month / Date */
-  const P=window.GRSpeed?GRSpeed.memo('hy4',[party,LV.join(','),cur,prev,cols.join(','),curM,M1.join(','),M0.join(',')],build_):build_();
+  const P=window.GRSpeed?GRSpeed.memo('hy4',[party,LV.join(','),cur,prev,cols.join(','),curM,M1.join(','),M0.join(','),XMS.join(',')],build_):build_();
   function build_(){
   const fr=typeof filterRowsCached==='function'?filterRowsCached({...App.filters,globalMonth:'',dateFrom:null,dateTo:null}):App.rows;
   const want=new Set(cols.concat([prev]));
   const P=new Map();
   const add=(n,h,tv,cc,i,w,f1,f0,lf,lp)=>{ if(w){ n.h[h]=(n.h[h]||0)+tv; if(cc) n.cc+=tv; if(h===cur||h===prev) n.mm[i]=(n.mm[i]||0)+tv; }
     if(f1||f0){ n.fm[i]=(n.fm[i]||0)+tv; const o=f1?0:2; if(lf) n.lt[o]=1; if(lp) n.lt[o+1]=1; } };
-  for(const r of fr){ if(!r.monthKey) continue; const i=mi(r.monthKey), h=halfOf(i), w=want.has(h), f1=FM1.has(i), f0=FM0.has(i); if(!w&&!f1&&!f0) continue;
+  for(const r of fr){ if(!r.monthKey) continue; const i=mi(r.monthKey), h=halfOf(i), w=want.has(h), f1=FM1.has(i), f0=FM0.has(i); if(!w&&!f1&&!f0&&!FXM.has(i)) continue;
     const tv=r.total||0, cc=h===cur&&curDone.has(i), lf=GRFy.isF(r), lp=GRFy.isP(r);
     const vals=LV.map(k=>pv(r,fOf(k))), key=vals.join('␟');
-    let a=P.get(key); if(!a){ a=node(); a.vals=vals; a.raw=new Set(); P.set(key,a); } add(a,h,tv,cc,i,w,f1,f0,lf,lp);
+    let a=P.get(key); if(!a){ a=node(); a.vals=vals; a.raw=new Set(); P.set(key,a); } add(a,h,tv,cc,i,w,f1,f0,lf,lp); if(FXM.has(i)) GRMeas.add(a.x,r);
     const rw=r[party+'Raw']; if(rw!=null&&rw!=='') a.raw.add(String(rw).toUpperCase()); }
   return P;
   }
@@ -19633,6 +19684,7 @@ function draw(){
     if(on('chg')) h+=`<td class="${on('avgm')?'':'hy-gs '}${ch==null?'':ch>0?'hy-up':ch<0?'hy-dn':''}">${ch==null?'—':(ch>0?'+':'')+ch.toFixed(1)+'%'}</td>`;
     if(on('trend')) h+=`<td${on('avgm')||on('chg')?'':' class="hy-gs"'}>${n.t?`<span class="hy-tg ${n.t}">${TXT[n.t]}</span>`:''}</td>`;
     if(on('am')) h+=`<td class="hy-gs hy-am">${nP?n.ap:'–'}</td><td class="hy-am">${n.ac}</td>`;
+    XM.forEach((k,j)=>{ h+=`<td class="hy-xm${j?'':' hy-gs'}">${n.x&&n.x.n?GRMeas.fmt(k,GRMeas.val(k,n.x)):'–'}</td>`; });
     return h; };
   /* FY block right after the names: Avg / month + Active months of each FY, then FTL / PTL */
   const fyc=n=>{ let h='';
@@ -19641,7 +19693,7 @@ function draw(){
     if(on('lt')) h+=`<td class="hy-gs hy-ltc">${n.ltCnt!=null?`<span style="font-size:10px;font-weight:800;white-space:nowrap">${n.ltCnt}</span>`:GRFy.badge(n.ltm)}</td>`;
     return h; };
   /* merged node of several rows (subtotal / total) */
-  const merge=arr=>{ const T=node(); const tIds=[...new Set(cols.concat([prev]))]; arr.forEach(n=>{ tIds.forEach(id=>{ if(n.h[id]) T.h[id]=(T.h[id]||0)+n.h[id]; }); T.cc+=n.cc; for(const i in n.mm) T.mm[i]=(T.mm[i]||0)+n.mm[i]; for(const i in n.fm) T.fm[i]=(T.fm[i]||0)+n.fm[i]; }); calc(T); T.ltCnt=GRFy.countTxt(arr.map(n=>n.ltm)); return T; };
+  const merge=arr=>{ const T=node(); const tIds=[...new Set(cols.concat([prev]))]; arr.forEach(n=>{ tIds.forEach(id=>{ if(n.h[id]) T.h[id]=(T.h[id]||0)+n.h[id]; }); T.cc+=n.cc; for(const i in n.mm) T.mm[i]=(T.mm[i]||0)+n.mm[i]; for(const i in n.fm) T.fm[i]=(T.fm[i]||0)+n.fm[i]; GRMeas.merge(T.x,n.x); }); calc(T); T.ltCnt=GRFy.countTxt(arr.map(n=>n.ltm)); return T; };
   let body='';
   const full=!!window.__xmFullExport;   /* download: every row */
   const shown=full?list:list.slice(0,ST.show);
@@ -19660,10 +19712,10 @@ function draw(){
   const u='<span class="unit-head">Lacs</span>', pl=PARTY.find(x=>x[0]===party)[1];
   const fyHelp=(fy,a)=>'Total Freight of '+mTxt(a)+' (FY '+fyL(fy)+') ÷ months in which the row had business; a month with no business is not counted';
   const hh=id=>`<th class="${id===cur?'hy-c':id===prev?'hy-p':''}${id===cols[0]?' hy-gs':''}">${hLab(id)}<br><span style="font-weight:600;text-transform:none">${id===cur?runTxt(id):hSpan(id)}</span>${u}</th>`;
-  wrap.innerHTML=list.length?`<table class="yield-table hy-table"><thead><tr>${LV.map(k=>`<th class="hier">${esc(lvName(k))}</th>`).join('')}${on('fy0')?`<th class="hy-fy0 hy-gs" title="${esc(fyHelp(fy0,M0))}">FY ${fyL(fy0)}<br>Avg / month${u}</th><th class="hy-fy0" title="Months of ${esc(mTxt(M0))} in which the row had business">FY ${fyL(fy0)}<br>Active months</th>`:''}${on('fy1')?`<th class="hy-fy hy-gs" title="${esc(fyHelp(fy1,M1))}">FY ${fyL(fy1)}<br>Avg / month${u}</th><th class="hy-fy" title="Months of ${esc(mTxt(M1))} in which the row had business">FY ${fyL(fy1)}<br>Active months</th>`:''}${on('lt')?`<th class="hy-lth hy-gs" title="FTL/PTL = booked both FTL and PTL (LTL) in the FY ${fyL(fy1)} months picked; else FTL only / PTL only">FTL / PTL</th>`:''}${on('half')?cols.map(hh).join(''):''}${on('avgm')?`<th class="hy-t hy-gs">Avg / month<br>${esc(hLab(prev))}${u}</th><th class="hy-t">Avg / month<br>${esc(hLab(cur))}${u}</th>`:''}${on('chg')?'<th class="hy-t">Change %</th>':''}${on('trend')?'<th class="hy-t">Trend</th>':''}${on('am')?`<th class="hy-t hy-amh hy-gs">Active months<br>${esc(hLab(prev))}</th><th class="hy-t hy-amh">Active months<br>${esc(hLab(cur))}</th>`:''}</tr></thead>
+  wrap.innerHTML=list.length?`<table class="yield-table hy-table"><thead><tr>${LV.map(k=>`<th class="hier">${esc(lvName(k))}</th>`).join('')}${on('fy0')?`<th class="hy-fy0 hy-gs" title="${esc(fyHelp(fy0,M0))}">FY ${fyL(fy0)}<br>Avg / month${u}</th><th class="hy-fy0" title="Months of ${esc(mTxt(M0))} in which the row had business">FY ${fyL(fy0)}<br>Active months</th>`:''}${on('fy1')?`<th class="hy-fy hy-gs" title="${esc(fyHelp(fy1,M1))}">FY ${fyL(fy1)}<br>Avg / month${u}</th><th class="hy-fy" title="Months of ${esc(mTxt(M1))} in which the row had business">FY ${fyL(fy1)}<br>Active months</th>`:''}${on('lt')?`<th class="hy-lth hy-gs" title="FTL/PTL = booked both FTL and PTL (LTL) in the FY ${fyL(fy1)} months picked; else FTL only / PTL only">FTL / PTL</th>`:''}${on('half')?cols.map(hh).join(''):''}${on('avgm')?`<th class="hy-t hy-gs">Avg / month<br>${esc(hLab(prev))}${u}</th><th class="hy-t">Avg / month<br>${esc(hLab(cur))}${u}</th>`:''}${on('chg')?'<th class="hy-t">Change %</th>':''}${on('trend')?'<th class="hy-t">Trend</th>':''}${on('am')?`<th class="hy-t hy-amh hy-gs">Active months<br>${esc(hLab(prev))}</th><th class="hy-t hy-amh">Active months<br>${esc(hLab(cur))}</th>`:''}${XM.map((k,j)=>`<th class="hy-xh${j?'':' hy-gs'}" title="${esc((GRMeas.tip[k]?GRMeas.tip[k]+' · ':'')+mTxt(XMS))}">${GRMeas.head(k)}</th>`).join('')}</tr></thead>
     <tbody>${body}</tbody><tfoot><tr><td class="hier">TOTAL (${N(list.length)} ${esc(rowW)})</td>${'<td class="hier"></td>'.repeat(LV.length-1)}${fyc(T)}${on('half')?cols.map(id=>has(id)?`<td${id===cols[0]?' class="hy-gs"':''}>${T.h[id]?L(T.h[id]):'–'}</td>`:`<td class="hy-dim${id===cols[0]?' hy-gs':''}">–</td>`).join(''):''}${tail(T)}</tr></tfoot></table>`
     :`<div class="empty-state"><h2>No parties for the selected Trend / Search.</h2>${ST.q||ST.trend!=='ALL'?'<button type="button" class="btn btn-sm btn-outline" data-hy-clr>Clear search and Trend</button>':''}</div>`;
-  more.innerHTML=`<div class="panel-sub" style="margin-top:6px">Avg / month = business ÷ active months (completed months with business): ${esc(hLab(cur))} has ${nC} completed month${nC===1?'':'s'} in the data (${[...curDone].sort((a,b)=>a-b).map(i=>MN[i%12]+'-'+String(Math.floor(i/12)).slice(2)).join(', ')||'none'}); the running month is in the half-year total but not in the average. "–" in a half-year column = no data loaded for that half-year yet.${on('fy0')||on('fy1')?` Avg FY ${fyL(fy1)} = ${esc(mTxt(M1))}; Avg FY ${fyL(fy0)} = ${esc(mTxt(M0))} (months picked in the Month slicer; a month with no business is not counted).`:''}</div>${!full&&list.length>ST.show?`<div class="hy-more">Showing ${N(ST.show)} of ${N(list.length)} rows · <button type="button" class="btn btn-sm btn-outline" data-hy-more>Show 200 more</button> <button type="button" class="btn btn-sm btn-outline" data-hy-more-all>Show all</button></div>`:''}`;
+  more.innerHTML=`<div class="panel-sub" style="margin-top:6px">Avg / month = business ÷ active months (completed months with business): ${esc(hLab(cur))} has ${nC} completed month${nC===1?'':'s'} in the data (${[...curDone].sort((a,b)=>a-b).map(i=>MN[i%12]+'-'+String(Math.floor(i/12)).slice(2)).join(', ')||'none'}); the running month is in the half-year total but not in the average. "–" in a half-year column = no data loaded for that half-year yet.${on('fy0')||on('fy1')?` Avg FY ${fyL(fy1)} = ${esc(mTxt(M1))}; Avg FY ${fyL(fy0)} = ${esc(mTxt(M0))} (months picked in the Month slicer; a month with no business is not counted).`:''}${XM.length?` Measures (${esc(XM.map(GRMeas.label).join(', '))}) = ${esc(mTxt(XMS))}, the months picked in the Month slicer.`:''}</div>${!full&&list.length>ST.show?`<div class="hy-more">Showing ${N(ST.show)} of ${N(list.length)} rows · <button type="button" class="btn btn-sm btn-outline" data-hy-more>Show 200 more</button> <button type="button" class="btn btn-sm btn-outline" data-hy-more-all>Show all</button></div>`:''}`;
   if(window.GRYear&&!has(cols[0])) GRYear.note(more,'');
 }
 window.renderHalfYear=function(){ try{ draw(); }catch(e){ console.error('Half-Yearly Business',e); } };
