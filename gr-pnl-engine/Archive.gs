@@ -47,6 +47,7 @@ var GRA_DEFAULTS = [
   ['ARCHIVE_MAX_CELLS', '9000000', 'Max cells in one archive sheet; above this a Part 2 is created'],
   ['DASHBOARD_MONTHS_BEFORE_FY', '7', 'Website first load: months before the current FY that always come from the engine (NBD gap + 1). Older months that are in Cloudflare R2 load on "+ Load last year".'],
   ['FREEZE_ON', 'YES', 'YES = a half-year that is archived, verified and in Cloudflare R2 with the same data leaves the engine (the engine stops reading it, so refreshes use less memory; the website reads it from R2). NO = the engine keeps every month.'],
+  ['R2_AUTO_MOVE', 'YES', 'YES = the nightly run copies each ready half-year to Cloudflare R2 and freezes it by itself (no menu click). NO = only a reminder mail; move it with the menu.'],
   ['FREEZE_AFTER_DAYS', '45', 'Days after a half-year ends before it goes to Cloudflare R2 and leaves the engine (late corrections come in this time).']
 ];
 
@@ -175,11 +176,18 @@ function GRA_run_(dry, fromMenu) {
         if (heal.rebuild.length) { GRA_scheduleContinue_(1); result.building = true; notes.push('Rebuilding: ' + heal.rebuild.join(', ')); }
         else GRA_statusMail_(s, heal);
         if (heal.fixes.length) notes.push('Fixed: ' + heal.fixes.join('; '));
-        // R2.gs: R2 is never written by this nightly run. A half-year that is ready (ended 45+ days ago, verified)
-        // gets one reminder mail; the owner moves it with the menu "Cloudflare R2: move ready half-years now".
+        // R2.gs: a half-year that is ready (ended FREEZE_AFTER_DAYS+ days ago, archived and verified) is copied to
+        // Cloudflare R2 and leaves the engine by itself (R2_AUTO_MOVE = YES), so it is never rebuilt again from the
+        // engine data. R2_AUTO_MOVE = NO: one reminder mail; the owner moves it with the menu.
         if (!heal.rebuild.length && typeof GRA_freezeRemind_ === 'function') {
-          var rm = GRA_freezeRemind_(ss, s, heal);
-          if (rm) notes.push(rm);
+          if (String(s.R2_AUTO_MOVE || 'YES').toUpperCase() === 'YES' && typeof GRA_autoMove_ === 'function') {
+            var mv = GRA_autoMove_(ss, s, heal, t0);
+            if (mv.text) notes.push(mv.text);
+            if (mv.more) { GRA_scheduleContinue_(1); result.building = true; }
+          } else {
+            var rm = GRA_freezeRemind_(ss, s, heal);
+            if (rm) notes.push(rm);
+          }
         }
       }
     } else {
