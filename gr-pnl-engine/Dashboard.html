@@ -19652,7 +19652,7 @@ function panel(){
   });
   return p;
 }
-const node=()=>({h:{},cc:0,kids:null,mm:{},fm:{},lt:[0,0,0,0],x:GRMeas.acc()});   /* mm: business per month index (for active months); fm: business per month of the Avg FY months; lt: FTL / PTL booked in current FY months, previous FY months */
+const node=()=>({h:{},cc:0,kids:null,mm:{},fm:{},lt:[0,0,0,0,0,0],x:GRMeas.acc()});   /* mm: business per month index (for active months); fm: business per month of the Avg FY months; lt: FTL / PTL booked in current FY months, previous FY months */
 /* equal to the shown precision (₹0.01 Lacs) or under 0.05 % apart = Flat, not Uptrade / Downtrade */
 const flat=(pa,ca)=>Math.abs(ca-pa)<500||Math.abs(ca-pa)/pa*100<0.05;
 function draw(){
@@ -19715,7 +19715,8 @@ function draw(){
   const want=new Set(cols.concat([prev]));
   const P=new Map();
   const add=(n,h,tv,cc,i,w,f1,f0,lf,lp)=>{ if(w){ n.h[h]=(n.h[h]||0)+tv; if(cc) n.cc+=tv; if(h===cur||h===prev) n.mm[i]=(n.mm[i]||0)+tv; }
-    if(f1||f0){ n.fm[i]=(n.fm[i]||0)+tv; const o=f1?0:2; if(lf) n.lt[o]=1; if(lp) n.lt[o+1]=1; } };
+    if(f1||f0){ n.fm[i]=(n.fm[i]||0)+tv; const o=f1?0:2; if(lf) n.lt[o]=1; if(lp) n.lt[o+1]=1; }
+    if(w){ if(lf) n.lt[4]=1; if(lp) n.lt[5]=1; } };   /* load types in the compared halves: used when the picked months have no business */
   for(const r of fr){ if(!r.monthKey) continue; const i=mi(r.monthKey), hs=CUS?[-1,-2].filter(x=>CUS[x].includes(i)):[halfOf(i)], h=hs[0], w=hs.some(x=>want.has(x)), f1=FM1.has(i), f0=FM0.has(i); if(!w&&!f1&&!f0&&!FXM.has(i)) continue;
     const tv=r.total||0, cc=h===cur&&curDone.has(i), lf=GRFy.isF(r), lp=GRFy.isP(r);
     const vals=LV.map(k=>pv(r,fOf(k))), key=vals.join('␟');
@@ -19730,7 +19731,7 @@ function draw(){
     const t=pa<=1e-9&&ca<=1e-9?'':pa<=1e-9?'nw':ca<=1e-9?'nb':flat(pa,ca)?'sm':ca>pa?'up':'dn';
     n.pa=pa; n.ca=ca; n.t=t; n.d=ca-pa;
     const fa=set=>{ let s=0,k=0; for(const i of set){ const v=n.fm[i]||0; if(Math.abs(v)>1e-9){ s+=v; k++; } } return [k?s/k:0,k]; };
-    [n.f1,n.a1]=fa(M1); [n.f0,n.a0]=fa(M0); n.ltm=(n.lt[0]||n.lt[1])?GRFy.mix(n.lt[0],n.lt[1]):GRFy.mix(n.lt[2],n.lt[3]); return n; };
+    [n.f1,n.a1]=fa(M1); [n.f0,n.a0]=fa(M0); n.ltm=(n.lt[0]||n.lt[1])?GRFy.mix(n.lt[0],n.lt[1]):(n.lt[2]||n.lt[3])?GRFy.mix(n.lt[2],n.lt[3]):GRFy.mix(n.lt[4],n.lt[5]); return n; };
   /* one row per combination of the ticked levels; Uptrade / Downtrade judged on that row */
   const all=[...P.values()].map(n=>calc(n));
   const rowW=LV.length===1?lvName(LV[0])+' rows':LV.map(lvName).join(' + ')+' rows';
