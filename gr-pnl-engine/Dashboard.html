@@ -1428,6 +1428,7 @@ function buildRowsFromAOA(aoa, mapping){
       aweight: aw, cweight: cw, freight: num(g('freight')), total: totalRev, totalexpense: totalExp
     };
     if (row.loadtype === 'SML') row.loadtype = 'LTL';
+    row.cngrtelSrc=row.cngrtel; row.cngrmailSrc=row.cngrmail; row.cngetelSrc=row.cngetel; row.cngemailSrc=row.cngemail;
     row.destcountry = dcIdx>=0 ? String(r[dcIdx]==null?'':r[dcIdx]).trim().toUpperCase() : '';   // DESTINATION COUNTRY — optional (Cross Sell)
     row.ratetype = rtIdx>=0 ? (String(r[rtIdx]==null?'':r[rtIdx]).trim().toUpperCase() || 'UNSCHEDULED') : '';   // blank rate type = UNSCHEDULED (not Tariff)
     for (let c=0;c<compCols.length;c++){ const ci=compCols[c][1]; row[compCols[c][0]] = ci>=0 ? num(r[ci]) : 0; }
@@ -1440,9 +1441,9 @@ function buildRowsFromAOA(aoa, mapping){
   Object.keys(dimSets).forEach(k=> dims[k] = [...dimSets[k]].sort());
   return { rows, months, dims, dq };
 }
-/* Consignor / Consignee contact no. + email (Hierarchy Levels). An empty value is CONTACT_BLANK
-   (a single space): it shows as a blank cell, not UNSPECIFIED, and still groups as its own row. */
-const CONTACT_BLANK=' ';
+/* Consignor / Consignee contact no. + email (Hierarchy Levels). An empty value is CONTACT_BLANK:
+   it shows as a blank cell, not UNSPECIFIED. */
+const CONTACT_BLANK='\u200B';   /* zero-width space: survives .trim(), so it never turns into UNSPECIFIED */
 const CONTACT_FIELDS=new Set(['cngrtel','cngrmail','cngetel','cngemail']);
 function contactStr(v, isMail){
   if (v==null) return CONTACT_BLANK;
@@ -1451,6 +1452,25 @@ function contactStr(v, isMail){
   if (isMail) s=s.toUpperCase();
   return s===''?CONTACT_BLANK:s;
 }
+/* A contact level never splits a row. Each table calls GRC.prep(rows, its levels) before grouping:
+   the GRs that share the table's other (non-contact) level values form one row, and every GR of that row
+   gets the row's LATEST number / email = the value on its most recent GR, or, if that one is blank, on the
+   most recent older GR that has one. So rows, totals and Uptrade / Downtrade are the same with or without
+   contact levels, and e.g. Party › Branch › Consignor CNo. shows each branch row's own latest number.
+   The file's own value stays in <field>Src. */
+const GRC={
+  has:fields=>(fields||[]).some(f=>CONTACT_FIELDS.has(f)),
+  src:(r,f)=>{ const k=f+'Src'; if(r[k]===undefined) r[k]=r[f]==null?CONTACT_BLANK:r[f]; return r[k]; },
+  latest(rows,f){ let v=CONTACT_BLANK,t=-Infinity; for(const r of rows){ const x=GRC.src(r,f); if(x===CONTACT_BLANK||x==='') continue;
+    const tt=r.grdt&&r.grdt.getTime?r.grdt.getTime():0; if(tt>=t){ t=tt; v=x; } } return v; },
+  prep(rows,fields){
+    const cf=(fields||[]).filter(f=>CONTACT_FIELDS.has(f)); if(!cf.length||!rows||!rows.length) return;
+    const nf=fields.filter(f=>!CONTACT_FIELDS.has(f)), g=new Map();
+    for(const r of rows){ const k=nf.map(f=>r[f]).join('\u241F'); let a=g.get(k); if(!a){ a=[]; g.set(k,a); } a.push(r); }
+    for(const a of g.values()) for(const f of cf){ const v=GRC.latest(a,f); for(const r of a) r[f]=v; }
+  }
+};
+window.GRC=GRC;
 function originStrOrDefault(v){ const s = (v==null?'':String(v)).trim(); return s===''?'UNSPECIFIED':s; }
 
 /* ---------------------------- FILTERING ---------------------------- */
@@ -2770,7 +2790,7 @@ function syncLoadTypeButtons(){
   document.querySelectorAll('.lt-slicer').forEach(b=>b.classList.toggle('active',(App.filters.loadtype||[]).includes(b.dataset.lt)));
 }
 function yieldPathKey(path){ return path.join('\u241F'); }
-function yieldGroup(rows, field){ const m=new Map(); for(const r of rows){ const k=r[field]||'UNSPECIFIED'; if(!m.has(k))m.set(k,[]); m.get(k).push(r); } return m; }
+function yieldGroup(rows, field){ if(CONTACT_FIELDS.has(field)) GRC.prep(rows,[field]); const m=new Map(); for(const r of rows){ const k=r[field]||'UNSPECIFIED'; if(!m.has(k))m.set(k,[]); m.get(k).push(r); } return m; }
 /* ---------------- Avg FY Sales + FTL / PTL Business (Yield Analysis tables) ----------------
    Avg FY Sales = Total Freight in the selected months of the financial year ÷ months of that FY in which
    the row had business (a month with Total Freight 0 is not counted). The FY is the one of the latest
@@ -2866,6 +2886,7 @@ function yieldBuildVisible(rows, expanded){
 }
 function yieldBuildSelectedLevelRows(rows, selectedFields){
   if(!selectedFields.length) return [];
+  GRC.prep(rows, selectedFields);
   const map=new Map();
   for(const r of rows){
     const vals=selectedFields.map(f=>r[f]||'UNSPECIFIED');
@@ -3463,6 +3484,7 @@ updateFilterVisibility();
   }
   function rowsForFilters(rows, filters){
     return rows.filter(r=>Object.entries(filters||{}).every(([k,v])=>{
+      if (CONTACT_FIELDS.has(k)) return true;   /* contact = one value per row of the table: the other fields pick the same GRs */
       const rv = String(r[k]??'').trim()||'UNSPECIFIED';
       return rv===String(v);
     }));
@@ -4617,6 +4639,7 @@ function rc7RenderAnalysis(metric,rows){
   const levels=rc7DrillLevels(), sig=levels.join('|');
   if(App.rcV7PathSig!==sig){App.rcV7Path=[];App.rcV7PathSig=sig;}
   const val=(r,f)=>String(r[f]??'').trim()||'UNSPECIFIED';
+  GRC.prep(rows, levels);
   let path=(App.rcV7Path||[]).slice(0,levels.length-1);
   let sub=rows.filter(r=>path.every((v,i)=>val(r,levels[i])===v));
   if(path.length&&!sub.length){path=[];App.rcV7Path=[];sub=rows;}
@@ -11639,6 +11662,7 @@ function renderYLT_(){
   const {P,key}=yltPeriods(months,mode), np=P.length;
   const lts=['FTL','LTL'], ltSel=(App.filters.loadtype&&App.filters.loadtype.length)?App.filters.loadtype:lts;
   const levels=App.yltLevels.slice();
+  GRC.prep(rows, levels);
   const newCell=()=>({p:P.map(()=>({FTL:acc0(),LTL:acc0()})),t:{FTL:acc0(),LTL:acc0()}});
   const root={kids:new Map(),c:newCell()};
   for(const r of rows){const pi=key(r); if(pi===undefined||pi<0) continue; const lt=r.loadtype==='FTL'?'FTL':'LTL';
@@ -11796,6 +11820,7 @@ function renderZL_(){
   const laneCol=S.cols.concat(S.rows).some(f=>/^destlane|^originlane/.test(f));
   const laneMissing=laneCol&&!(App.laneMap&&App.laneMap.loaded);
   if(note) note.innerHTML=laneMissing?'⚠ Broader Lane needs the lane map — upload it in <b>Metric Definitions → Lane map</b>. Until then lanes show as UNSPECIFIED.':'';
+  GRC.prep(rows, S.rows.concat(S.cols));
   // column leaves (combos of column levels), ordered by total
   const ckey=r=>S.cols.map(f=>val(r,f)).join('␟');
   const colTot=new Map(); for(const r of rows){const k=ckey(r);let a=colTot.get(k);if(!a){a=acc0();colTot.set(k,a);}accAdd(a,r);}
@@ -15507,6 +15532,7 @@ const dimVal=(r,d)=>String(r[d]==null?'':r[d]).trim()||'UNSPECIFIED';
 /* tree rows: [{path:[...], rows}] respecting expanded keys */
 /* every chosen level in its own column: one row per full path, a parent name only on its first row */
 function flatRows(rows, levels){
+  GRC.prep(rows, levels);
   const out=[];
   const walk=(rs,depth,path)=>{
     const g=new Map(); rs.forEach(r=>{ const k=dimVal(r,levels[depth]); if(!g.has(k)) g.set(k,[]); g.get(k).push(r); });
@@ -15521,6 +15547,7 @@ function flatRows(rows, levels){
 let FLAT_N=0; function flatCells(n){ let h=''; for(let j=0;j<FLAT_N;j++) h+=`<td class="hier">${j<n.path.length?esc(n.path[j]):'—'}</td>`; return h; }
 function treeRows(rows, levels, exp){
   const out=[]; if(!levels.length) return out;
+  GRC.prep(rows, levels);
   const walk=(rs,depth,path)=>{
     const g=new Map(); rs.forEach(r=>{ const k=dimVal(r,levels[depth]); if(!g.has(k)) g.set(k,[]); g.get(k).push(r); });
     [...g.entries()].sort((a,b)=>b[1].reduce((s,r)=>s+(r.total||0),0)-a[1].reduce((s,r)=>s+(r.total||0),0)).forEach(([k,list])=>{
@@ -16320,6 +16347,7 @@ Object.defineProperty(VIEWS,'custom',{enumerable:false,get(){
 function leafSegs(A){
   const lv=VIEWS.custom.levels.map(l=>l[0]), vary=lv.filter(f=>!RCX_BASE.has(f)), key=vary.join(',');
   A.__leaf=A.__leaf||{}; if(A.__leaf[key]) return A.__leaf[key];
+  if (GRC.has(lv)){ const all=[]; A.D.segs.forEach(sg=>{ for(const r of sg.rows) all.push(r); }); GRC.prep(all, lv); }
   const out=[], isGP=A.metric==='gp', ONE_C=new Set(['new','newLanes']), ONE_B=new Set(['lost','stoppedLanes']);
   A.D.segs.forEach(s=>{
     const r0=s.rows[0], base={}; RCX_BASE.forEach(f=>base[f]=fv(r0,f));
@@ -18195,6 +18223,7 @@ function split(cr,pr,f){
   return [...new Set([...gc.keys(),...gp.keys()])].map(k=>({k,c:gc.get(k)||[],p:gp.get(k)||[]})).map(e=>(e.v=tf(e.c),e)).sort((a,b)=>b.v-a.v||tf(b.p)-tf(a.p));
 }
 function combos(cr,pr,fields){
+  if (GRC.has(fields)) GRC.prep(cr.concat(pr), fields);
   const key=r=>fields.map(f=>r[f]==null||r[f]===''?'UNSPECIFIED':r[f]).join(SEP);
   const m=new Map(); const put=(r,w)=>{ const k=key(r); let g=m.get(k); if(!g){ g={vals:k.split(SEP),c:[],p:[]}; m.set(k,g); } g[w].push(r); };
   cr.forEach(r=>put(r,'c')); pr.forEach(r=>put(r,'p'));
@@ -19464,6 +19493,7 @@ function renderYield_(){
   const lv=st.levels.filter(f=>!PF.includes(f));
   const defs=lv.map(f=>[f,hLbl(f)]).concat([[st.party,partyLbl(st)]]), L=defs.length;
   const out=[]; let cap=false; const MAXR=window.__xmFullExport?Infinity:3000;
+  GRC.prep(rows, defs.map(x=>x[0]));
   const walk=(rs,d,path)=>{ const gs=groups(rs,defs[d][0]);
     for(const x of gs){ if(out.length>=MAXR){ cap=true; return; } const pth=path.concat([x.v]);
       if(d<L-1){ walk(x.rs,d+1,pth); out.push({path:pth,d,a:x.a,sub:true}); } else out.push({path:pth,d,a:x.a}); } };
@@ -19531,6 +19561,7 @@ function renderMom(){
     return SG.slice(0,-1).map(one).join('')+lostG(f)+one(SG[SG.length-1]); };
   const grp=(rs,f)=>{ const m=new Map(); for(const r of rs){ const k=pv(r,f); let a=m.get(k); if(!a){ a=[]; m.set(k,a); } a.push(r); } return [...m.entries()].map(([v,r])=>({v,rs:r,t:r.reduce((s,x)=>s+(x.monthKey===C?(x.total||0):0),0)})).sort((x,y)=>y.t-x.t); };
   let body=''; let n=0;
+  GRC.prep(all, sd.map(x=>x[0]));
   const walk=(rs,d,path)=>{ for(const x of grp(rs,sd[d][0])){ if(n++>3000) return; const pth=path.concat([x.v]), f={}; pth.forEach((v,i)=>f[sd[i][0]]=v);
       if(d<SL-1){ walk(x.rs,d+1,pth); body+=`<tr class="nbd-st">${sd.map((y,i)=>`<td class="hier">${i<=d?esc(pth[i])+(i===d?' Total':''):''}</td>`).join('')}${cells(x.rs,f)}</tr>`; }
       else body+=`<tr>${sd.map((y,i)=>`<td class="hier">${esc(pth[i])}</td>`).join('')}${cells(x.rs,f)}</tr>`; } };
@@ -19722,6 +19753,7 @@ function draw(){
   const add=(n,h,tv,cc,i,w,f1,f0,lf,lp)=>{ if(w){ n.h[h]=(n.h[h]||0)+tv; if(cc) n.cc+=tv; if(h===cur||h===prev) n.mm[i]=(n.mm[i]||0)+tv; }
     if(f1||f0){ n.fm[i]=(n.fm[i]||0)+tv; const o=f1?0:2; if(lf) n.lt[o]=1; if(lp) n.lt[o+1]=1; }
     if(w){ if(lf) n.lt[4]=1; if(lp) n.lt[5]=1; } };   /* load types in the compared halves: used when the picked months have no business */
+  GRC.prep(fr, LV.map(fOf));
   for(const r of fr){ if(!r.monthKey) continue; const i=mi(r.monthKey), hs=CUS?[-1,-2].filter(x=>CUS[x].includes(i)):[halfOf(i)], h=hs[0], w=hs.some(x=>want.has(x)), f1=FM1.has(i), f0=FM0.has(i); if(!w&&!f1&&!f0&&!FXM.has(i)) continue;
     const tv=r.total||0, cc=h===cur&&curDone.has(i), lf=GRFy.isF(r), lp=GRFy.isP(r);
     const vals=LV.map(k=>pv(r,fOf(k))), key=vals.join('␟');
