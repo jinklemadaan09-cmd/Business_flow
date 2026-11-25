@@ -332,6 +332,22 @@ function engineFreezeCheck_(count, newly, fz) {
   return 'Freeze check: ' + lines.join('; ') + ' → taken back';
 }
 
+/**
+ * Nightly archive run (R2_AUTO_MOVE = YES), at the end of a clean run (archive up to date with the engine, nothing
+ * to rebuild): copies each ready half-year to R2, then freezes the ones R2 has with the same data. Same steps as
+ * the menu "Cloudflare R2: move ready half-years now". Returns { text, more } (more = time ran out, continue later).
+ */
+function GRA_autoMove_(ss, s, heal, t0) {
+  if (String(s.FREEZE_ON || 'NO').toUpperCase() !== 'YES' || !R2_cfg_()) return { text: '', more: false };
+  if (Date.now() - t0 > GRA_TIME_BUDGET_MS - 60 * 1000) return { text: 'R2 move: continues in the next step (time limit)', more: true };
+  var fz = engineFrozen_(), todo = (heal.periods || []).filter(function (x) { return x.ok && !fz[x.key] && R2_readyHalf_(x.key, s); });
+  if (!todo.length) return { text: '', more: false };
+  var sync = GRA_r2Sync_(ss, s, t0, false);
+  var more = /not sent yet/.test(sync || '');
+  var fr = GRA_freeze_(ss, s, heal);
+  return { text: [sync, fr].filter(String).join(' | '), more: more };
+}
+
 /** Nightly archive run: one mail per half-year that is ready to move to R2 (nothing is uploaded). */
 function GRA_freezeRemind_(ss, s, heal) {
   if (String(s.FREEZE_ON || 'NO').toUpperCase() !== 'YES' || !R2_cfg_()) return '';
