@@ -19678,13 +19678,17 @@ function draw(){
     prev=cur-1; const fyC=Math.floor(cur/2); cols=[(fyC-1)*2,(fyC-1)*2+1,fyC*2,fyC*2+1]; }
   const curDone=new Set(done(cur)), nC=curDone.size, nP=done(prev).length;
   /* Avg FY: months picked in the Month slicer. Current FY = FY of the latest picked month; previous FY = the picked months
-     of that FY, or the same months one year earlier. No month picked = every loaded month of the two FYs. */
+     of that FY, or the same months one year earlier. No month picked = every loaded month of the two FYs.
+     Only one month picked = FY to date (April .. that month). */
   const fyI=i=>{ const y=Math.floor(i/12), m=i%12; return m>=3?y:y-1; };
   const selI=GRFy.sel().map(mi).filter(i=>isFinite(i)).sort((a,b)=>a-b);
   const lastDM=Math.max(...DM);
   const fy1=fyI(selI.length?selI[selI.length-1]:lastDM), fy0=fy1-1;
   let M1=selI.filter(i=>fyI(i)===fy1), M0=selI.filter(i=>fyI(i)===fy0);
   if(!selI.length){ M1=[...DM].filter(i=>fyI(i)===fy1); M0=[...DM].filter(i=>fyI(i)===fy0); }
+  else if(selI.length===1){ /* one month picked (the default): FY to date = April .. that month, so a row with no GR in
+       that one month is not blank; previous FY = the same months a year earlier */
+    const e=selI[0], s0=(fy1*12)+3; M1=[]; for(let i=s0;i<=e;i++) M1.push(i); M0=M1.map(i=>i-12); }
   else if(!M0.length) M0=M1.map(i=>i-12);
   const FM1=new Set(M1), FM0=new Set(M0), has0=M0.some(i=>DM.has(i)), has1=M1.some(i=>DM.has(i));
   /* Measures block months: the completed months of the two compared half-years (same months as Avg / month), so every
