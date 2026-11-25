@@ -5,14 +5,15 @@
  * sees the same lanes and targets (no per-browser upload).
  *
  *  LANE_ORIGIN   Origin | Origin Circle | Booking Lane
- *  LANE_DEST     Destination | Destination Circle | Broader Lane (L1) | Broader Lane (L2) | Broader Lane (L3)
+ *  LANE_DEST     (old broader lanes L1/L2/L3: no longer used by the dashboard, kept only so old data is not lost)
  *  LANE_TARGETS  one row per target (see LANE_TARGET_HEADERS_). Many target files can live here
  *                side by side: each file is one Target_Set. Uploading a file again replaces only
  *                that set's rows. Rows can also be typed / pasted straight into the sheet.
  *
  * Levels (which master field a target row is matched on):
  *   Origin_Level  LANE (Booking Lane, default) | CIRCLE | ZONE | BRANCH | ALL
- *   Dest_Level    LANE2 (Broader Lane L2, default) | LANE1 | LANE3 | CIRCLE | ZONE | DESTINATION | ALL
+ *   Dest_Level    COUNTRY (Destination Country, default) | ZONE | CIRCLE | DESTINATION | ALL
+ *                 (old LANE / LANE1 / LANE2 / LANE3 rows are matched on Destination Circle)
  * Per           WEEK (default) | MONTH | DAY — the target is scaled to the days of the period shown.
  * Weights are in MT and money in Lacs in the sheet; the dashboard gets kg and ₹.
  *
@@ -212,7 +213,7 @@ function laneReadSheets_() {
       var t = {
         set: txt(g(r, 0)) || 'Targets',
         oLevel: laneKey_(g(r, 2)) || 'LANE', origin: txt(g(r, 3)) || 'ALL',
-        dLevel: laneKey_(g(r, 4)) || 'LANE2', dest: txt(g(r, 5)) || 'ALL',
+        dLevel: laneKey_(g(r, 4)) || 'COUNTRY', dest: txt(g(r, 5)) || 'ALL',
         loadType: laneKey_(g(r, 6)), per: laneKey_(g(r, 7)) || 'WEEK',
         from: day(g(r, 8)), to: day(g(r, 9)),
         count: num(g(r, 10)),
