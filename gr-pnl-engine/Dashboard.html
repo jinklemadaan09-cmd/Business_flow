@@ -2791,7 +2791,11 @@ window.GRFy=(function(){
   const badge=m=>m?`<span class="lt-mix ${m==='FTL/PTL'?'b':m==='FTL only'?'f':'l'}">${m}</span>`:'<span style="color:#9aa8b8">–</span>';
   /* TOTAL row: how many rows are in each group */
   const counts=list=>{ const c={'FTL/PTL':0,'FTL only':0,'PTL only':0}; list.forEach(m=>{ if(c[m]!=null) c[m]++; }); return c; };
-  const countTxt=list=>{ const c=counts(list); return [['FTL/PTL','FTL/PTL'],['FTL only','FTL'],['PTL only','PTL']].filter(([k])=>c[k]).map(([k,l])=>l+' '+c[k].toLocaleString('en-IN')).join(' · ')||'–'; };
+  /* TOTAL / subtotal row: the same 3 values, judged on the whole group (any FTL + any PTL = FTL/PTL);
+     how many rows are in each group shows on hover */
+  const countTxt=list=>{ const c=counts(list); const f=c['FTL/PTL']||c['FTL only'], l=c['FTL/PTL']||c['PTL only'];
+    const tip=[['FTL/PTL','FTL/PTL'],['FTL only','FTL only'],['PTL only','PTL only']].filter(([k])=>c[k]).map(([k,l])=>l+': '+c[k].toLocaleString('en-IN')+' rows').join(' · ');
+    return `<span title="${tip}">${badge(mix(f,l))}</span>`; };
   const head=()=>'Avg FY Sales '+lab(cur());
   const amHead=()=>'Active Months FY '+lab(cur());
   return {fyOf,lab,sel,cur,avg,mix,isF,isP,flags,badge,counts,countTxt,head,amHead};
@@ -19754,7 +19758,7 @@ function draw(){
   const fyc=n=>{ let h='';
     if(on('fy0')) h+=`<td class="hy-gs hy-fyc">${has0?(n.f0?L(n.f0):'–'):'<span class="hy-dim" title="No data loaded for these months">–</span>'}</td><td class="hy-fyc hy-am">${has0?n.a0:'–'}</td>`;
     if(on('fy1')) h+=`<td class="hy-gs hy-fyc">${has1?(n.f1?'<b>'+L(n.f1)+'</b>':'–'):'<span class="hy-dim">–</span>'}</td><td class="hy-fyc hy-am">${has1?n.a1:'–'}</td>`;
-    if(on('lt')) h+=`<td class="hy-gs hy-ltc">${n.ltCnt!=null?`<span style="font-size:10px;font-weight:800;white-space:nowrap">${n.ltCnt}</span>`:GRFy.badge(n.ltm)}</td>`;
+    if(on('lt')) h+=`<td class="hy-gs hy-ltc">${n.ltCnt!=null?n.ltCnt:GRFy.badge(n.ltm)}</td>`;
     return h; };
   /* merged node of several rows (subtotal / total) */
   const merge=arr=>{ const T=node(); const tIds=[...new Set(cols.concat([prev]))]; arr.forEach(n=>{ tIds.forEach(id=>{ if(n.h[id]) T.h[id]=(T.h[id]||0)+n.h[id]; }); T.cc+=n.cc; for(const i in n.mm) T.mm[i]=(T.mm[i]||0)+n.mm[i]; for(const i in n.fm) T.fm[i]=(T.fm[i]||0)+n.fm[i]; GRMeas.merge(T.x,n.x); }); calc(T); T.ltCnt=GRFy.countTxt(arr.map(n=>n.ltm)); return T; };
