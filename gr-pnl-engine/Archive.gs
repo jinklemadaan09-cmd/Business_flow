@@ -235,8 +235,15 @@ function GRA_checkSize_(ss, s) {
     if (!worst || pct > worst.pct) worst = { pct: pct, cells: cells, name: b.getName(), url: b.getUrl(), biggest: biggest };
   });
   var warn = Number(s.WARN_PCT) || 70, urgent = Number(s.URGENT_PCT) || 85;
+  // One mail a day at most: a run that continues in steps (GRA_continue every few minutes) or a menu click checks
+  // the size again, but mails only on the first check of the day, or when the level goes up (Warning -> URGENT).
+  var props = PropertiesService.getScriptProperties();
+  var last = JSON.parse(props.getProperty('GRA_SIZE_MAIL') || 'null') || {};
+  var today = GRA_todayIso_();
   if (worst.pct >= warn) {
     var lvl = worst.pct >= urgent ? 'URGENT' : 'Warning';
+    if (last.day === today && (last.lvl === lvl || last.lvl === 'URGENT')) return parts.join('; ');
+    props.setProperty('GRA_SIZE_MAIL', JSON.stringify({ day: today, lvl: lvl }));
     GRA_mail_(s, 'GR sheet ' + lvl + ': ' + worst.pct.toFixed(1) + '% full',
       '<p><b>' + GRA_esc_(worst.name) + '</b> has ' + GRA_fmt_(worst.cells) + ' cells, <b>' +
       worst.pct.toFixed(1) + '%</b> of the Google limit of 10,000,000. Largest tab: ' + GRA_esc_(worst.biggest) + '.</p>' +
