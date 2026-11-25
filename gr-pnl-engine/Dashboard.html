@@ -606,7 +606,7 @@ window.GRYear = (function(){
   <div class="f-group" id="fg_cngr"></div>
   <div class="f-group" id="fg_cnge"></div>
   <div class="f-group" id="fg_customer"></div>
-  <div class="f-group" id="fg_destlane1" style="border-left:1px solid var(--border-strong);padding-left:12px;margin-left:4px;"></div>
+  <div class="f-group" id="fg_destcountry" style="border-left:1px solid var(--border-strong);padding-left:12px;margin-left:4px;"></div>
   <div class="f-group" id="fgGrnoGroup"><label>GR Number</label><input type="search" id="fgGrnoSearch" name="grno-filter-x" readonly onfocus="this.removeAttribute('readonly')" onpointerdown="this.removeAttribute('readonly')" onblur="this.setAttribute('readonly','')" placeholder="Search GRNO…" autocomplete="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-form-type="other"></div>
   <div class="f-group" id="fg_company"></div>
 </div>
@@ -1227,7 +1227,7 @@ function escapeHtml(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&'
 const App = {
   rows: [], fileName: '', loadedAt: null, mapping: {}, months: [],
   dims: { loadtype:[], origin:[], origincircle:[], destname:[], destcircle:[], cngr:[], cnge:[], customer:[], company:[] },
-  filters: { dateFrom:null, dateTo:null, globalMonth:'', loadtype:['FTL','LTL'], originzone:[], destzone:[], origincircle:[], destcircle:[], origin:[], destname:[], deliverypoint:[], grtype:[], cngr:[], cnge:[], customer:[], company:[], destlane1:[], grnoSearch:'' },
+  filters: { dateFrom:null, dateTo:null, globalMonth:'', loadtype:['FTL','LTL'], originzone:[], destzone:[], origincircle:[], destcircle:[], origin:[], destname:[], deliverypoint:[], grtype:[], cngr:[], cnge:[], customer:[], company:[], destcountry:[], grnoSearch:'' },
   baseMonth: null, compMonth: null,
   dataQuality: null,
   grDrillContext: null,
@@ -2019,7 +2019,7 @@ function finalizeLoad(){
     const { rows, months, dims, dq } = buildRowsFromAOA(App.pending.aoa, App.mapping);
     App.rows = rows; App.months = months; App.dims = dims; App.dataQuality = dq;
     App.fileName = App.pending.fileName; App.loadedAt = new Date();
-    App.filters = { dateFrom:null, dateTo:null, globalMonth:(months.length?months[months.length-1].key:''), loadtype:['FTL','LTL'], originzone:[], destzone:[], origincircle:[], destcircle:[], origin:[], destname:[], deliverypoint:[], grtype:[], cngr:[], cnge:[], customer:[], company:[], destlane1:[], grnoSearch:'' };
+    App.filters = { dateFrom:null, dateTo:null, globalMonth:(months.length?months[months.length-1].key:''), loadtype:['FTL','LTL'], originzone:[], destzone:[], origincircle:[], destcircle:[], origin:[], destname:[], deliverypoint:[], grtype:[], cngr:[], cnge:[], customer:[], company:[], destcountry:[], grnoSearch:'' };
     if (months.length >= 2){ App.baseMonth = months[months.length-2].key; App.compMonth = months[months.length-1].key; }
     else if (months.length === 1){ App.baseMonth = months[0].key; App.compMonth = months[0].key; }
     App.pageIndex = { by:1, gy:1, cost:1, rc:1, trend:1, gr:1 };
@@ -2068,7 +2068,7 @@ function updateHeaderStats(){
 }
 function renderDataQuality(){} /* placeholder: replaced by a newer version further down */
 function resetFilters(){
-  App.filters = { dateFrom:null, dateTo:null, globalMonth:'', loadtype:['FTL','LTL'], originzone:[], destzone:[], origincircle:[], destcircle:[], origin:[], destname:[], deliverypoint:[], grtype:[], cngr:[], cnge:[], customer:[], company:[], destlane1:[], grnoSearch:'' };
+  App.filters = { dateFrom:null, dateTo:null, globalMonth:'', loadtype:['FTL','LTL'], originzone:[], destzone:[], origincircle:[], destcircle:[], origin:[], destname:[], deliverypoint:[], grtype:[], cngr:[], cnge:[], customer:[], company:[], destcountry:[], grnoSearch:'' };
   App.grDrillContext = null;
   document.getElementById('dateFrom').value=''; document.getElementById('dateTo').value=''; document.getElementById('selGlobalMonth').value=''; document.getElementById('fgGrnoSearch').value=''; syncLoadTypeButtons();
   FILTER_DIMS.forEach(d=>{ populateMultiSelectList(d,''); updateMsButtonLabel(d); });
@@ -7133,7 +7133,7 @@ window._attachExcelFilters=_attachExcelFilters;
      ORIGIN_LANE / DESTINATION_LANE / target workbook)
    - New "Lane" hierarchy group (reuses the existing
      Hierarchy Levels engine — no new drill logic)
-   - "Broader Lane (L1)" filter slicer
+   - "Destination Country" filter slicer (DESTCOUNTRY column of the master; broader lanes L1/L2/L3 are gone)
    - Top Lanes page (all-lanes overview, full measures+targets
      table, single-lane Month/Week/Day trend)
    - Manage Lane Targets editable UI (Metric Definitions page)
@@ -7145,12 +7145,14 @@ App.laneTargets = { metricKeys:['count','aweight'], rows:[], flat:[] }; // rows 
 App.laneServer = { available:false, canEdit:false, loaded:false, loadedAt:null };
 App.laneUI = { mode:'month', selectedLane:null };
 
-FILTER_DIMS.push('destlane1');
-FILTER_LABELS.destlane1 = 'Broader Lane (L1)';
-App.filters.destlane1 = [];
-App.dims.destlane1 = [];
-YIELD_HIER.push(['originlane','Origin Lane'],['destlane1','Dest Lane (L1)'],['destlane2','Dest Lane (L2)'],['destlane3','Dest Lane (L3)']);
-const LANE_HIER_FIELDS = new Set(['originlane','destlane1','destlane2','destlane3']);
+FILTER_DIMS.push('destcountry');
+FILTER_LABELS.destcountry = 'Destination Country';
+App.filters.destcountry = [];
+App.dims.destcountry = [];
+/* Destination Country heads the destination levels (Country → Zone → Circle → Destination) */
+{ const iz=YIELD_HIER.findIndex(h=>h[0]==='destzone'); YIELD_HIER.splice(iz<0?YIELD_HIER.length:iz, 0, ['destcountry','Destination Country']); }
+YIELD_HIER.push(['originlane','Origin Lane']);
+const LANE_HIER_FIELDS = new Set(['originlane']);
 YIELD_HIER.push(['cngrtel','Consignor CNo.'],['cngrmail','Consignor Email'],['cngetel','Consignee CNo.'],['cngemail','Consignee Email']);
 
 const LANE_METRIC_CATALOG = [
@@ -7199,17 +7201,19 @@ function laneNorm(s){ return String(s||'').replace(/\s+/g,' ').trim().toUpperCas
 
 /* ---- TARGET LEVELS: which master field a target row is matched on ---- */
 const LANE_O_LEVELS = { LANE:'originlane', BOOKINGLANE:'originlane', ORIGINLANE:'originlane', CIRCLE:'origincircle', ZONE:'originzone', BRANCH:'origin', ORIGIN:'origin', LOCATION:'origin', ALL:null };
-const LANE_D_LEVELS = { LANE:'destlane2', LANE2:'destlane2', L2:'destlane2', LANE1:'destlane1', L1:'destlane1', BROADERLANE:'destlane1', LANE3:'destlane3', L3:'destlane3', CIRCLE:'destcircle', ZONE:'destzone', DESTINATION:'destname', LOCATION:'destname', ALL:null };
-const LANE_LEVEL_LABEL = { originlane:'Lane', origincircle:'Circle', originzone:'Zone', origin:'Branch', destlane1:'Lane L1', destlane2:'Lane', destlane3:'Lane L3', destcircle:'Circle', destzone:'Zone', destname:'Destination' };
+/* Broader lanes (L1/L2/L3) are gone. Old target rows saved at a lane level are matched on Destination Circle
+   (their values were circle names such as ASSAM - NE, NEPAL CIRCLE); re-upload them at COUNTRY / CIRCLE level. */
+const LANE_D_LEVELS = { COUNTRY:'destcountry', DESTCOUNTRY:'destcountry', DESTINATIONCOUNTRY:'destcountry', LANE:'destcircle', LANE2:'destcircle', L2:'destcircle', LANE1:'destcircle', L1:'destcircle', BROADERLANE:'destcircle', LANE3:'destcircle', L3:'destcircle', CIRCLE:'destcircle', ZONE:'destzone', DESTINATION:'destname', LOCATION:'destname', ALL:null };
+const LANE_LEVEL_LABEL = { originlane:'Lane', origincircle:'Circle', originzone:'Zone', origin:'Branch', destcountry:'Country', destcircle:'Circle', destzone:'Zone', destname:'Destination' };
 const LANE_TARGET_METRICS = ['count','cweight','aweight','freight','total'];
 function laneLvKey(s){ return String(s||'').toUpperCase().replace(/[^A-Z0-9]/g,''); }
 function laneOField(t){ const k=laneLvKey(t.oLevel)||'LANE'; return (k in LANE_O_LEVELS) ? LANE_O_LEVELS[k] : 'originlane'; }
-function laneDField(t){ const k=laneLvKey(t.dLevel)||'LANE2'; return (k in LANE_D_LEVELS) ? LANE_D_LEVELS[k] : 'destlane2'; }
+function laneDField(t){ const k=laneLvKey(t.dLevel)||'COUNTRY'; return (k in LANE_D_LEVELS) ? LANE_D_LEVELS[k] : 'destcountry'; }
 function laneIsAll(v){ const s=laneNorm(v); return !s || s==='ALL' || s==='*'; }
 function laneLabel(t){
   const of=laneOField(t), df=laneDField(t);
   const o = (!of||laneIsAll(t.origin)) ? 'All origins' : t.origin+(of!=='originlane'?' ('+LANE_LEVEL_LABEL[of]+')':'');
-  const d = (!df||laneIsAll(t.dest)) ? 'All destinations' : t.dest+(df!=='destlane2'?' ('+LANE_LEVEL_LABEL[df]+')':'');
+  const d = (!df||laneIsAll(t.dest)) ? 'All destinations' : t.dest+(df!=='destcountry'?' ('+LANE_LEVEL_LABEL[df]+')':'');
   return o+' \u2192 '+d+(t.loadType?' \u00b7 '+t.loadType:'');
 }
 function laneById(id){ return App.laneTargets.rows.find(x=>x.id===id) || null; }
@@ -7221,7 +7225,7 @@ function laneSetTargets(flat){
     const of=laneOField(x), df=laneDField(x);
     const key=[of||'ALL', (!of||laneIsAll(x.origin))?'ALL':laneNorm(x.origin), df||'ALL', (!df||laneIsAll(x.dest))?'ALL':laneNorm(x.dest), x.loadType||''].join('|');
     let g=groups.get(key);
-    if (!g){ g={ id:'L'+groups.size, origin:String(x.origin||'ALL').trim(), dest:String(x.dest||'ALL').trim(), oLevel:x.oLevel||'LANE', dLevel:x.dLevel||'LANE2', loadType:x.loadType||'', versions:[] }; groups.set(key,g); }
+    if (!g){ g={ id:'L'+groups.size, origin:String(x.origin||'ALL').trim(), dest:String(x.dest||'ALL').trim(), oLevel:x.oLevel||'LANE', dLevel:x.dLevel||'COUNTRY', loadType:x.loadType||'', versions:[] }; groups.set(key,g); }
     const targets={}; LANE_TARGET_METRICS.forEach(k=>{ if (x[k]!=null && x[k]!=='' && isFinite(x[k])) targets[k]=Number(x[k]); });
     g.versions.push({ set:x.set||'', per:laneLvKey(x.per)||'WEEK', from:x.from||'', to:x.to||'', targets });
   });
@@ -7348,7 +7352,7 @@ function laneParseTargetSheets(wb, fileName){
   const base = String(fileName||'Targets').replace(/\.[^.]+$/,'').trim() || 'Targets';
   const sets = new Map(), clean = v=>{ const s=v==null?'':String(v).replace(/\s+/g,' ').trim(); return (s==='#N/A')?'':s; };
   const O_ALIASES = [['ORIGIN_LEVEL',null],['ORIGIN LANE','LANE'],['BOOKING LANE','LANE'],['ORIGIN CIRCLE','CIRCLE'],['ORIGIN ZONE','ZONE'],['ORIGIN BRANCH','BRANCH'],['BRANCH','BRANCH'],['ORIGIN LOCATION','BRANCH'],['ORIGIN','LANE']];
-  const D_ALIASES = [['DESTINATION LANE (L1)','LANE1'],['BROADER LANE (L1)','LANE1'],['DESTINATION LANE (L3)','LANE3'],['BROADER LANE (L3)','LANE3'],['DESTINATION LANE','LANE2'],['DEST LANE','LANE2'],['BROADER LANE (L2)','LANE2'],['BROADER LANE','LANE2'],['BRODER LANE','LANE2'],['DESTINATION CIRCLE','CIRCLE'],['DEST CIRCLE','CIRCLE'],['DESTINATION ZONE','ZONE'],['DEST ZONE','ZONE'],['DESTINATION LOCATION','DESTINATION'],['DESTNAME','DESTINATION'],['DELIVERY LOCATION','DESTINATION'],['DESTINATION','LANE2']];
+  const D_ALIASES = [['DESTINATION COUNTRY','COUNTRY'],['DEST COUNTRY','COUNTRY'],['DESTCOUNTRY','COUNTRY'],['COUNTRY','COUNTRY'],['DESTINATION CIRCLE','CIRCLE'],['DEST CIRCLE','CIRCLE'],['DESTINATION ZONE','ZONE'],['DEST ZONE','ZONE'],['DESTINATION LOCATION','DESTINATION'],['DESTNAME','DESTINATION'],['DELIVERY LOCATION','DESTINATION'],['DESTINATION','DESTINATION']];
   for (const sheetName of wb.SheetNames){
     const aoa = sheetToAOA(wb.Sheets[sheetName]); if (aoa.length<2) continue;
     for (let hi=0; hi<Math.min(5,aoa.length-1); hi++){
@@ -7358,7 +7362,7 @@ function laneParseTargetSheets(wb, fileName){
       const col = n=>H.indexOf(n);
       const iOL=col('ORIGIN_LEVEL'), iDL=col('DEST_LEVEL');
       let iO=-1, oLv='LANE'; for (const [a,l] of O_ALIASES){ if (a==='ORIGIN_LEVEL') continue; const i=col(a); if (i!==-1){ iO=i; oLv=l; break; } }
-      let iD=-1, dLv='LANE2'; for (const [a,l] of D_ALIASES){ const i=col(a); if (i!==-1){ iD=i; dLv=l; break; } }
+      let iD=-1, dLv='COUNTRY'; for (const [a,l] of D_ALIASES){ const i=col(a); if (i!==-1){ iD=i; dLv=l; break; } }
       if (iO===-1 && iD===-1) continue;
       const iSet=col('TARGET_SET'), iAct=col('ACTIVE'), iLT=H.findIndex(x=>x==='LOAD_TYPE'||x==='LOAD TYPE'||x==='LOADTYPE'), iPer=col('PER'), iFrom=H.findIndex(x=>/^(FROM_DATE|FROM DATE|FROM|VALID FROM|EFFECTIVE FROM)$/.test(x)), iTo=H.findIndex(x=>/^(TO_DATE|TO DATE|TO|VALID TO|EFFECTIVE TO)$/.test(x)), iNotes=col('NOTES');
       const defSet = /^SHEET\d*$/.test(sheetName.trim().toUpperCase()) ? base : sheetName.trim();
@@ -7393,7 +7397,7 @@ function laneParseTargetSheets(wb, fileName){
 function laneFlatFromSheetRow(r){
   const n=v=> (v===''||v==null) ? null : Number(v);
   const lt=String(r[6]||'').toUpperCase();
-  return { set:r[0], oLevel:String(r[2]||'LANE').toUpperCase(), origin:r[3]||'ALL', dLevel:String(r[4]||'LANE2').toUpperCase(), dest:r[5]||'ALL',
+  return { set:r[0], oLevel:String(r[2]||'LANE').toUpperCase(), origin:r[3]||'ALL', dLevel:String(r[4]||'COUNTRY').toUpperCase(), dest:r[5]||'ALL',
     loadType: lt==='SML'?'LTL':(lt==='ALL'?'':lt), per:r[7]||'WEEK', from:r[8]||'', to:r[9]||'',
     count:n(r[10]), cweight:n(r[11])==null?null:n(r[11])*1000, aweight:n(r[12])==null?null:n(r[12])*1000,
     freight:n(r[13])==null?null:n(r[13])*100000, total:n(r[14])==null?null:n(r[14])*100000, notes:r[15]||'' };
@@ -7420,25 +7424,7 @@ function parseLaneMappingWorkbook(wb, fileName){
       }
     }
   }
-  const dest = [];     // [destination, circle, L1, L2, L3]
-  if (destWs){
-    const aoa = sheetToAOA(destWs);
-    if (aoa.length){
-      const h = aoa[0];
-      const iDest = headerIdx(h, ['Destination']);
-      const iCircle = headerIdx(h, ['Destination Circle']);
-      const iL1 = headerIdx(h, ['Broader Lane (L1)','BRODER LANE','BROADER LANE']);
-      const iL2 = headerIdx(h, ['Broader Lane (L2)','BRODER LANE (2)','BROADER LANE (2)']);
-      const iL3 = headerIdx(h, ['Broader Lane (L3)','BRODER LANE (3)','BROADER LANE (3)']);
-      if (iDest!==-1){
-        for (let i=1;i<aoa.length;i++){
-          const r = aoa[i]; if(!r) continue;
-          const d = clean(r[iDest]); if(!d) continue;
-          dest.push([d, iCircle!==-1?clean(r[iCircle]):'', iL1!==-1?clean(r[iL1]):'', iL2!==-1?clean(r[iL2]):'', iL3!==-1?clean(r[iL3]):'']);
-        }
-      }
-    }
-  }
+  const dest = [];     // broader lanes (L1/L2/L3) are no longer used: the LANE_DEST sheet is ignored
   const targetSets = laneParseTargetSheets(wb, fileName);
   return { origin, dest, targetSets, foundOrigin:origin.length>0, foundDest:dest.length>0 };
 }
@@ -7448,14 +7434,15 @@ function applyLaneLookup(rows){
   for (const r of rows){
     const bl = App.laneMap.origin.get(laneNorm(r.origin));
     r.originlane = bl || 'UNSPECIFIED';
-    const dl = App.laneMap.dest.get(laneNorm(r.destname));
-    r.destlane1 = (dl && dl.l1) || 'UNSPECIFIED';
-    r.destlane2 = (dl && dl.l2) || 'UNSPECIFIED';
-    r.destlane3 = (dl && dl.l3) || 'UNSPECIFIED';
   }
-  const dl1 = new Set(); rows.forEach(r=>dl1.add(r.destlane1));
-  return [...dl1].sort();
 }
+/* Destination Country = the master's DESTCOUNTRY column (from the DSR); blank → UNSPECIFIED */
+function applyDestCountry(rows){
+  const set = new Set();
+  for (const r of rows){ const c=String(r.destcountry==null?'':r.destcountry).replace(/\s+/g,' ').trim().toUpperCase(); r.destcountry = c || 'UNSPECIFIED'; set.add(r.destcountry); }
+  return [...set].sort();
+}
+window.applyDestCountry = applyDestCountry;
 window.applyLaneLookup = applyLaneLookup;
 
 /* ---- apply lane structure + targets to the dashboard ---- */
@@ -7464,9 +7451,8 @@ function laneApplyData(origin, dest, flatTargets){
   if (dest && dest.length){ App.laneMap.dest = new Map(dest.map(r=>[laneNorm(r[0]), { l1:r[2]||null, l2:r[3]||null, l3:r[4]||null }])); App.laneMap.destRows = dest; }
   if ((origin && origin.length) || (dest && dest.length)){ App.laneMap.loaded = true; App.laneMap.loadedAt = new Date(); saveLaneMapToStorage(); }
   if (flatTargets){ laneSetTargets(flatTargets); saveLaneTargetsToStorage(); }
-  if (App.rows && App.rows.length){ const dl1=applyLaneLookup(App.rows); if(dl1) App.dims.destlane1=dl1; }
+  if (App.rows && App.rows.length) applyLaneLookup(App.rows);
   updateLaneMapStatus();
-  try{ populateMultiSelectList('destlane1',''); updateMsButtonLabel('destlane1'); }catch(e){}
   try{ renderYieldHierarchySelector(); }catch(e){}
   try{ if (App.rows && App.rows.length) renderActivePage(); }catch(e){}
   try{ renderLaneTargetsTable(); }catch(e){}
@@ -7535,7 +7521,7 @@ function updateLaneMapStatus(){
   const nT = (App.laneTargets.rows||[]).length;
   const where = App.laneServer.loaded ? 'shared' : 'this browser only';
   if (!App.laneMap.loaded && !nT){ el.textContent = 'Lane map: not loaded'; el.title=''; }
-  else el.textContent = `Lane map (${where}): ${App.laneMap.origin.size} origins, ${App.laneMap.dest.size} destinations, ${nT} target lanes`;
+  else el.textContent = `Lane map (${where}): ${App.laneMap.origin.size} origins, ${nT} target lanes`;
   el.title = App.laneServer.loaded ? 'Saved on the server — every user sees the same lanes and targets' : 'Saved only in this browser. The owner can upload the file to share it with everyone.';
   const src = document.getElementById('laneTargetsSource');
   [src].concat(Array.from(document.querySelectorAll('.lane-src-badge'))).forEach(function(x){ if(!x) return;
@@ -7550,8 +7536,9 @@ const _laneOldBuildRows = window.buildRowsFromAOA;
 if (typeof _laneOldBuildRows === 'function'){
   window.buildRowsFromAOA = function(...args){
     const result = _laneOldBuildRows.apply(this, args);
-    const dl1 = applyLaneLookup(result.rows);
-    if (dl1 && result.dims) result.dims.destlane1 = dl1;
+    applyLaneLookup(result.rows);
+    const dc = applyDestCountry(result.rows);
+    if (result.dims) result.dims.destcountry = dc;
     return result;
   };
 }
@@ -7986,10 +7973,10 @@ function renderLaneTargetsTable(){
   const flat = App.laneTargets.flat || [];
   const keys = App.laneTargets.metricKeys;
   const bySet = new Map(); flat.forEach(t=>{ const k=t.set||'—'; if(!bySet.has(k)) bySet.set(k,[]); bySet.get(k).push(t); });
-  const info = `<div class="panel-sub" style="margin:0 0 8px;">Lane structure: <b>${App.laneMap.origin.size}</b> origins → booking lane, <b>${App.laneMap.dest.size}</b> destinations → broader lane L1 / L2 / L3. ` +
+  const info = `<div class="panel-sub" style="margin:0 0 8px;">Lane structure: <b>${App.laneMap.origin.size}</b> origins → booking lane; destinations are matched on Destination Country / Zone / Circle / Destination. ` +
     (App.laneServer.loaded ? 'Shared from the server.' : (App.laneServer.available ? 'Nothing shared yet — the owner can upload the lane file to share it.' : 'Saved in this browser.')) +
     (App.laneServer.canEdit ? ' You can upload and delete target sets for everyone.' : '') + '</div>';
-  if (!flat.length){ wrap.innerHTML = info + '<div class="empty-state" style="display:block;padding:18px;"><h2 style="font-size:13px;">No targets yet</h2><p>Upload the lane file (FINAL_LANES_DATA) or any target file with columns like <i>Origin Lane, Destination Lane, TARGET CN/wk, TARGET CWeight MT/wk</i>.</p></div>'; return; }
+  if (!flat.length){ wrap.innerHTML = info + '<div class="empty-state" style="display:block;padding:18px;"><h2 style="font-size:13px;">No targets yet</h2><p>Upload the lane file (FINAL_LANES_DATA) or any target file with columns like <i>Origin Lane, Destination Country, TARGET CN/wk, TARGET CWeight MT/wk</i>.</p></div>'; return; }
   const head = '<tr><th>Target set</th><th>Origin</th><th>Origin level</th><th>Destination</th><th>Dest level</th><th>Load type</th><th>Per</th><th>From</th><th>To</th>'+keys.map(k=>`<th>Target ${escapeHtml(LANE_SHEET_UNIT[k].col)}</th>`).join('')+'</tr>';
   let body = '';
   bySet.forEach((list, set)=>{
@@ -8006,7 +7993,7 @@ function renderLaneTargetsTable(){
     catch(e){ alert('Could not delete: '+e.message); }
   });
 }
-/* Excel in the upload format: README + LANE_ORIGIN + LANE_DEST + LANE_TARGETS (current data) */
+/* Excel in the upload format: README + LANE_ORIGIN + LANE_TARGETS (current data) */
 function downloadLaneSheet(){
   const wb = XLSX.utils.book_new();
   const readme = [
@@ -8020,14 +8007,14 @@ function downloadLaneSheet(){
     ['Active','YES / NO (blank = YES)'],
     ['Origin_Level','LANE (booking lane) · CIRCLE · ZONE · BRANCH · ALL'],
     ['Origin','Value at that level, exactly as in the data (e.g. DELHI-NCR, NORTH ZONE RO, DELHI-DARYAGANJ). ALL = every origin'],
-    ['Dest_Level','LANE2 (broader lane L2) · LANE1 · LANE3 · CIRCLE · ZONE · DESTINATION · ALL'],
-    ['Destination','Value at that level (e.g. ASSAM - NE, NEPAL CIRCLE, GUWAHATI). ALL = every destination'],
+    ['Dest_Level','COUNTRY (default) · ZONE · CIRCLE · DESTINATION · ALL'],
+    ['Destination','Value at that level (e.g. NEPAL, BHUTAN, ASSAM - NE, GUWAHATI). ALL = every destination'],
     ['Load_Type','FTL / LTL / blank = both'],
     ['Per','WEEK · MONTH · DAY — the target is scaled to the days of the period on screen'],
     ['From_Date / To_Date','Optional, dd-mm-yyyy. A new row with a later From_Date replaces the older target from that date'],
     ['GR_Count · CWeight_MT · AWeight_MT · Basic_Freight_Lacs · Total_Freight_Lacs','Target values; leave blank where there is no target'],
     [''],
-    ['Other target files also work: any sheet with an origin column (Origin Lane / Origin Zone / Origin Circle / Branch), a destination column (Destination Lane / Destination Zone / Destination Circle / Destination) and target columns such as "TARGET CN/wk", "TARGET CWeight MT/month".']
+    ['Other target files also work: any sheet with an origin column (Origin Lane / Origin Zone / Origin Circle / Branch), a destination column (Destination Country / Destination Zone / Destination Circle / Destination) and target columns such as "TARGET CN/wk", "TARGET CWeight MT/month".']
   ];
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(readme), 'README');
   const o = [['Origin','Origin Circle','Booking Lane']];
@@ -8035,13 +8022,8 @@ function downloadLaneSheet(){
   if (App.laneMap.originRows) App.laneMap.originRows.forEach(r=>o.push([r[0], r[1]||(circ.get(laneNorm(r[0]))!=='UNSPECIFIED'&&circ.get(laneNorm(r[0])))||'', r[2]]));
   else App.laneMap.origin.forEach((lane,k)=>o.push([k, circ.get(k)||'', lane]));
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(o), 'LANE_ORIGIN');
-  const dc = new Map(); (App.rows||[]).forEach(r=>{ if(!dc.has(laneNorm(r.destname))) dc.set(laneNorm(r.destname), r.destcircle); });
-  const d = [['Destination','Destination Circle','Broader Lane (L1)','Broader Lane (L2)','Broader Lane (L3)']];
-  if (App.laneMap.destRows) App.laneMap.destRows.forEach(r=>d.push([r[0], r[1]||(dc.get(laneNorm(r[0]))!=='UNSPECIFIED'&&dc.get(laneNorm(r[0])))||'', r[2]||'', r[3]||'', r[4]||'']));
-  else App.laneMap.dest.forEach((v,k)=>d.push([k, dc.get(k)||'', v.l1||'', v.l2||'', v.l3||'']));
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(d), 'LANE_DEST');
   const dd = s=>{ if(!s) return ''; const [y,m,dy]=s.split('-'); return `${dy}-${m}-${y}`; };
-  const t = [LANE_SHEET_COLS].concat((App.laneTargets.flat||[]).map(x=>[x.set||'', 'YES', x.oLevel||'LANE', x.origin, x.dLevel||'LANE2', x.dest, x.loadType||'', x.per||'WEEK', dd(x.from), dd(x.to),
+  const t = [LANE_SHEET_COLS].concat((App.laneTargets.flat||[]).map(x=>[x.set||'', 'YES', x.oLevel||'LANE', x.origin, x.dLevel||'COUNTRY', x.dest, x.loadType||'', x.per||'WEEK', dd(x.from), dd(x.to),
     x.count==null?'':x.count, x.cweight==null?'':x.cweight/1000, x.aweight==null?'':x.aweight/1000, x.freight==null?'':x.freight/100000, x.total==null?'':x.total/100000, x.notes||'']));
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(t), 'LANE_TARGETS');
   XLSX.writeFile(wb, 'LANE_STRUCTURE_AND_TARGETS.xlsx');
@@ -8157,7 +8139,7 @@ if (App._defUnlocked) renderLaneTargetsTable();
   font-size:10px!important;
   border-radius:7px!important;
 }
-#filterBar #fg_destlane1{
+#filterBar #fg_destcountry{
   border-left:0!important;
   padding-left:0!important;
   margin-left:0!important;
@@ -8801,7 +8783,7 @@ table.datatable tbody tr:hover .sticky-hier{background:#edf5fc!important;}
   function renderWeeklyHier(){
     const host=document.getElementById('momWeeklyHierOptions'),btn=document.getElementById('momWeeklyHierBtn');if(!host||!btn)return;
     const sel=new Set(App.momWeeklyHierarchyLevels||[]);
-    const LANE_FIELDS=new Set(['originlane','destlane1','destlane2','destlane3']);
+    const LANE_FIELDS=new Set(['originlane']);
     const geo=window.V12_HIER.filter(h=>!LANE_FIELDS.has(h[0])),lane=window.V12_HIER.filter(h=>LANE_FIELDS.has(h[0]));
     const optHtml=([f,l])=>`<label class="yield-hier-option"><input type="checkbox" value="${f}" ${sel.has(f)?'checked':''}><span>${esc(l)}</span></label>`;
     host.innerHTML=
@@ -11727,15 +11709,16 @@ window.renderYieldLoadType=function(){try{renderYLT();}catch(e){console.error('L
 /* =====================================================================
    Top Lanes → ZONE WISE BUSINESS
    Rows    = hierarchy (default Origin / Booking Zone, + drill)
-   Columns = hierarchy too (default Broader Lane L1 → Bangladesh, Bhutan, NPL, EZ, NE, ROI …)
+   Columns = hierarchy too (default Destination Country → INDIA, NEPAL, BHUTAN, BANGLADESH)
    Period  = Month · Quarter-wise · Last 3 Months · Last 6 Months · FY Till Date
    ⋯ menu (Excel / PDF / Focus) and ▾ sort / filter come from the shared table enhancers.
    ===================================================================== */
-App.zl=App.zl||{period:'month',measure:'total',rows:['originzone'],cols:['destlane1'],expand:new Set()};
+App.zl=App.zl||{period:'month',measure:'total',rows:['originzone'],cols:['destcountry'],expand:new Set()};
+App.zl.rows=App.zl.rows.filter(f=>!/^destlane/.test(f)); App.zl.cols=App.zl.cols.map(f=>/^destlane/.test(f)?'destcountry':f);
 const ZL_PERIODS={month:'Month',quarter:'Quarter-wise',l3:'Last 3 Months',l6:'Last 6 Months',fytd:'FY Till Date'};
 function zlFields(){
   const out=[], seen=new Set(), add=(f,l)=>{if(!seen.has(f)){seen.add(f);out.push([f,l]);}};
-  add('originzone','Origin / Booking Zone'); add('destlane1','Broader Lane (L1)'); add('loadtype','Load Type (FTL / LTL)'); add('company','Company');
+  add('originzone','Origin / Booking Zone'); add('destcountry','Destination Country'); add('loadtype','Load Type (FTL / LTL)'); add('company','Company');
   (window.V12_HIER||[]).forEach(([f,l])=>{ if(f!=='grno') add(f,l); });
   return out;
 }
@@ -11817,9 +11800,11 @@ function renderZL_(){
   const badge=$('zlBadge'); if(badge) badge.textContent=B.length?`${B[0].label}${B.length>1?' → '+B[B.length-1].label:''}${B[B.length-1].part?' · '+B[B.length-1].part:''}${unitTxt(m.unit)?' · '+unitTxt(m.unit):''}`:'';
   const note=$('zlNote');
   if(!rows.length){wrap.innerHTML='<div class="empty-state"><h2>No records for the selected filters / period.</h2></div>';if(note)note.innerHTML='';return;}
-  const laneCol=S.cols.concat(S.rows).some(f=>/^destlane|^originlane/.test(f));
-  const laneMissing=laneCol&&!(App.laneMap&&App.laneMap.loaded);
-  if(note) note.innerHTML=laneMissing?'⚠ Broader Lane needs the lane map — upload it in <b>Metric Definitions → Lane map</b>. Until then lanes show as UNSPECIFIED.':'';
+  const used=S.cols.concat(S.rows);
+  const laneMissing=used.includes('originlane')&&!(App.laneMap&&App.laneMap.loaded);
+  const countryMissing=used.includes('destcountry')&&!rows.some(r=>r.destcountry&&r.destcountry!=='UNSPECIFIED');
+  if(note) note.innerHTML=countryMissing?'⚠ Destination Country is not in the master data yet (DESTCOUNTRY column from the DSR). Until it is added, every row shows as UNSPECIFIED.'
+    :(laneMissing?'⚠ Origin Lane needs the lane map — upload it in <b>Metric Definitions → Lane map</b>. Until then lanes show as UNSPECIFIED.':'');
   GRC.prep(rows, S.rows.concat(S.cols));
   // column leaves (combos of column levels), ordered by total
   const ckey=r=>S.cols.map(f=>val(r,f)).join('␟');
@@ -14128,14 +14113,14 @@ function buildDeck(opts){
 
 
   /* ======================================================================
-     ZONE WISE BUSINESS slides (Booking Zone × Product / Broader Lane)
+     ZONE WISE BUSINESS slides (Booking Zone × Product / Destination Country)
      ====================================================================== */
   const PN = p => p==='LTL' ? 'PTL' : p;
   const prodOf = r => String(r.loadtype||'').toUpperCase()==='FTL' ? 'FTL' : 'LTL';
-  const laneOf = r => { const s=String(r.destlane1==null?'':r.destlane1).trim(); return s || 'UNSPECIFIED'; };
+  const laneOf = r => { const s=String(r.destcountry==null?'':r.destcountry).trim(); return s || 'UNSPECIFIED'; };
   const LAC = v => ok(v)&&v ? (v/1e5).toFixed(2) : '—';
   const lacTxt = v => '₹'+(v/1e5).toFixed(2)+' L';
-  const laneLoaded = () => { try{ return !!(App.laneMap && App.laneMap.loaded); }catch(e){ return false; } };
+  const laneLoaded = () => { try{ return (App.rows||[]).some(r=>r.destcountry&&r.destcountry!=='UNSPECIFIED'); }catch(e){ return false; } };
   /* tf per key for a set of months; keyFn may return several keys */
   function tfBy(months, keyFn){
     const ms=new Set(months), m=new Map();
@@ -14161,7 +14146,7 @@ function buildDeck(opts){
   const cellC = (t,x) => ({ text:t, options:Object.assign({ align:'center' }, x||{}) });
   const totSt = { bold:true, fill:{ color:TOT } };
   const gStyle = c => ({ bold:true, color:gColor(c) });
-  function noteLane(s){ if(!laneLoaded()) s.addText('⚠ Broader Lane map is not loaded in the dashboard (Metric Definitions → Lane map) — lanes show as UNSPECIFIED.', { x:0.45, y:5.62, w:12.4, h:0.3, fontFace:F, fontSize:10, color:RED, isTextBox:true }); }
+  function noteLane(s){ if(!laneLoaded()) s.addText('⚠ Destination Country is not in the master data yet (DESTCOUNTRY column from the DSR) — shown as UNSPECIFIED.', { x:0.45, y:5.62, w:12.4, h:0.3, fontFace:F, fontSize:10, color:RED, isTextBox:true }); }
   function capLanes(keys, n){ return keys.length>n ? { keep:keys.slice(0,n-1), other:true } : { keep:keys, other:false }; }
 
   /* ---- 1) Zone × Product, selected month vs last month ---- */
@@ -14184,10 +14169,10 @@ function buildDeck(opts){
     crux(s, cands);
   }
 
-  /* ---- 2) Zone × Broader Lane, selected month ---- */
+  /* ---- 2) Zone × Destination Country, selected month ---- */
   function sZoneLane(){
     const s=pres.addSlide();
-    header(s, 'ZONE WISE BROADER LANE BUSINESS', `${SEG_NAME.ALL}  ·  Total Freight ₹ Lakh  ·  ${mShort(month)}${TILL_TXT}`);
+    header(s, 'ZONE WISE DESTINATION COUNTRY BUSINESS', `${SEG_NAME.ALL}  ·  Total Freight ₹ Lakh  ·  ${mShort(month)}${TILL_TXT}`);
     const cur=tfBy([month], zlKeys), prev=tfBy([LM], zlKeys);
     laneSlide(s, cur, prev, `MoM Variance % (vs ${mShort(LM)})`, 1, 1);
   }
@@ -14213,7 +14198,7 @@ function buildDeck(opts){
     noteLane(s);
     const cands=[];
     for(const l of cols){ if(l==='OTHERS') continue; const b=val(cur,'ALL',l)||0, a=val(prev,'ALL',l); if(!a || a<(tfOf(prev,'ALL|TOTAL')||0)*0.02) continue;
-      cands.push(cMove(`${l} lane`, b/cn, a/pn, lacTxt, { w:1.2 })); }
+      cands.push(cMove(`${l}`, b/cn, a/pn, lacTxt, { w:1.2 })); }
     for(const z of zones){ const b=tfOf(cur,z+'|TOTAL')||0, a=tfOf(prev,z+'|TOTAL'); if(!a) continue; cands.push(cMove(`${z}`, b/cn, a/pn, lacTxt)); }
     crux(s, cands);
   }
@@ -14268,10 +14253,10 @@ function buildDeck(opts){
     crux(s, cands);
   }
 
-  /* ---- 5) Zone × Broader Lane, current quarter ---- */
+  /* ---- 5) Zone × Destination Country, current quarter ---- */
   function sZoneLaneQ(){
     const s=pres.addSlide(), c=curQ(), p=prevQ();
-    header(s, 'ZONE WISE BROADER LANE BUSINESS — QUARTER', `${SEG_NAME.ALL}  ·  ₹ Lakh  ·  ${c?c.label:''}  ·  FY ${FY_TXT.slice(3,10)}${TILL_TXT}`);
+    header(s, 'ZONE WISE DESTINATION COUNTRY BUSINESS — QUARTER', `${SEG_NAME.ALL}  ·  ₹ Lakh  ·  ${c?c.label:''}  ·  FY ${FY_TXT.slice(3,10)}${TILL_TXT}`);
     const cur=tfBy(c?c.months:[], zlKeys), prev=tfBy(p?p.months:[], zlKeys);
     const cn=c&&c.partial?c.months.length:1, pn=c&&c.partial&&p?p.months.length:1;
     laneSlide(s, cur, prev, p?`QoQ Variance % (vs ${p.q})${c.partial?' avg/mo':''}`:'QoQ Variance %', cn, pn);
@@ -15977,7 +15962,7 @@ window.addEventListener('resize',()=>$$('.yield-hier-panel.open').forEach(schedu
 
 
 /* ===================== B2 · same 2-block layout in every Hierarchy panel ===================== */
-const LANE_F=new Set(['originlane','destlane1','destlane2','destlane3']);
+const LANE_F=new Set(['originlane']);
 function normalizeHier(p){
   const labels=[...p.querySelectorAll('label')].filter(l=>l.querySelector('input[type=checkbox]'));
   if(labels.length<4) return;
@@ -16334,7 +16319,7 @@ const VIEWS = {
 /* Hierarchy levels = exactly the Yield Analysis list (window.V12_HIER), same picker.
    0 selected → + Drill along the default order; 1+ selected → all levels shown together. */
 const RCX_FIELDS = ()=> (window.V12_HIER||[]).map(h=>[h[0],h[1]]);
-const RCX_BASE = new Set(['originzone','origincircle','origin','destzone','destcircle','destname','customer','originlane','destlane1','destlane2','destlane3','loadtype']);
+const RCX_BASE = new Set(['originzone','origincircle','origin','destzone','destcircle','destname','customer','originlane','destcountry','loadtype']);
 const fv = (r,f)=>{ const v=r[f]; return v==null||v===''?'UNSPECIFIED':String(v); };
 Object.defineProperty(VIEWS,'custom',{enumerable:false,get(){
   const all=RCX_FIELDS(), lv=(RCX.levels||[]).filter(k=>all.some(f=>f[0]===k)), plus=!lv.length;
@@ -18186,7 +18171,7 @@ const measOf=pg=>MEAS.filter(m=>pg!=='mom'||!YO.has(m[0]));
 const mName=m=>m[0]==='fyAvg'?GRFy.head()+' (₹ L)':m[0]==='fyAm'?GRFy.amHead():m[1];
 /* same levels as the Hierarchy Levels control on Yield Analysis and MoM */
 const HIER=()=>(typeof YIELD_HIER!=='undefined'?YIELD_HIER:[]);
-const LANE_ONLY=new Set(['originlane','destlane1','destlane2','destlane3']);
+const LANE_ONLY=new Set(['originlane']);
 const MAIN_LABEL={origin:'Branch',cngr:'Consignor',cnge:'Consignee',customer:'Customer'};
 const LL=f=>(App.mapping&&App.mapping[f])||MAIN_LABEL[f]||(HIER().find(h=>h[0]===f)||[f,f])[1];
 const BY=[['cngr','Consignor'],['cnge','Consignee'],['customer','Customer']];
@@ -18744,7 +18729,7 @@ function exportGrData(opt){
     const head=aoa[0].map(h=>String(h||'').trim());
     const idx=extra.map(([f])=>M[f]?head.indexOf(M[f]):-1);
     /* lane columns are worked out in the dashboard, not in the master: join them by GR NO */
-    const LANES=[['originlane','ORIGIN LANE'],['destlane1','DEST LANE (L1)'],['destlane2','DEST LANE (L2)'],['destlane3','DEST LANE (L3)']].filter(([f])=>App.rows.some(r=>r[f]!=null&&r[f]!==''));
+    const LANES=[['originlane','ORIGIN LANE']].filter(([f])=>App.rows.some(r=>r[f]!=null&&r[f]!==''));
     const gi=M.grno?head.indexOf(M.grno):-1, byGr=new Map();
     if (LANES.length&&gi>=0) App.rows.forEach(r=>byGr.set(String(r.grno),r));
     /* each GROUP column sits right after its name column */
@@ -19200,7 +19185,7 @@ function history(party,scope){
   const src=App.rows||[], key=party+'|'+scope+'|'+(window.GRDataVer||0);
   if(H.src===src && H.key===key && H.map) return H;
   const map=new Map(); let first=Infinity, hasC=false;
-  for(const r of src){ if(r.destcountry){ hasC=true; break; } }
+  for(const r of src){ if(r.destcountry&&r.destcountry!=='UNSPECIFIED'){ hasC=true; break; } }
   const dk=DEST_BY_SCOPE[scope]||'dz';
   const dims=DIMS.filter(d=>(d[0]!=='dc'||hasC)&&(!['dz','dci','db'].includes(d[0])||d[0]===dk));
   for(const r of src){ if(!r.monthKey) continue; const i=mi(r.monthKey); if(i<first) first=i;
