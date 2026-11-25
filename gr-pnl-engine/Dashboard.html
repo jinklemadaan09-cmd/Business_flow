@@ -1202,6 +1202,10 @@ const CORE_FIELDS = [
   ['cngr','CNGR',['cngr','consignor']],
   ['cnge','CNSGNE',['cnge','cnsgne','consignee']],
   ['cngrpan','Consignor PAN',['consignor unique id','consignoruniqueid','consignor pan','consignorpan','cngrpan','consignor gst no']],
+  ['cngrtel','Consignor CNo.',['consignor cno','consignor cno.','consignorcno','cngr cno','cngrcno','cngrtelno','cngr tel no','consignor tel no','consignor telno','consignor contact','consignor contact no','consignor mobile','consignor mobile no','consignor phone','consignor phone no']],
+  ['cngrmail','Consignor Email',['consignor email','consignoremail','consignor mail','consignor email id','cngremail','cngr email','cngrmail']],
+  ['cngetel','Consignee CNo.',['consignee cno','consignee cno.','consigneecno','consginee cno','consginee cno.','cnge cno','cngecno','cngetelno','cnge tel no','consignee tel no','consignee telno','consignee contact','consignee contact no','consignee mobile','consignee mobile no','consignee phone','consignee phone no']],
+  ['cngemail','Consignee Email',['consignee email','consigneeemail','consginee email','consignee mail','consignee email id','cngeemail','cnge email','cngemail']],
   ['customer','Customer',['customername','customer name','customer']],
   ['company','Company',['company']],
   ['goods','Goods',['goods','goods desc','goods description','commodity','material','item description','item','description','goodsdescription','goodsdesc']],
@@ -1420,6 +1424,7 @@ function buildRowsFromAOA(aoa, mapping){
       origincircle: originStrOrDefault(g('origincircle')), destname: originStrOrDefault(destV),
       destcircle: originStrOrDefault(g('destcircle')), deliverypoint: originStrOrDefault(g('deliverypoint')), cngr: originStrOrDefault(cngrV), cnge: originStrOrDefault(g('cnge')), customer: originStrOrDefault(g('customer')), company: originStrOrDefault(g('company')), goods: originStrOrDefault(g('goods')),
       cngrpan: String(g('cngrpan')==null?'':g('cngrpan')).trim().toUpperCase(),
+      cngrtel: contactStr(g('cngrtel')), cngrmail: contactStr(g('cngrmail'),true), cngetel: contactStr(g('cngetel')), cngemail: contactStr(g('cngemail'),true),
       aweight: aw, cweight: cw, freight: num(g('freight')), total: totalRev, totalexpense: totalExp
     };
     if (row.loadtype === 'SML') row.loadtype = 'LTL';
@@ -1434,6 +1439,17 @@ function buildRowsFromAOA(aoa, mapping){
   const dims = {};
   Object.keys(dimSets).forEach(k=> dims[k] = [...dimSets[k]].sort());
   return { rows, months, dims, dq };
+}
+/* Consignor / Consignee contact no. + email (Hierarchy Levels). An empty value is CONTACT_BLANK
+   (a single space): it shows as a blank cell, not UNSPECIFIED, and still groups as its own row. */
+const CONTACT_BLANK=' ';
+const CONTACT_FIELDS=new Set(['cngrtel','cngrmail','cngetel','cngemail']);
+function contactStr(v, isMail){
+  if (v==null) return CONTACT_BLANK;
+  let s = (typeof v==='number' && isFinite(v)) ? String(Math.round(v)) : String(v).trim();
+  if (/^(0|-+|\.|na|n\.?\/?a\.?|null|nil|none|unspecified|not available)$/i.test(s)) s='';
+  if (isMail) s=s.toUpperCase();
+  return s===''?CONTACT_BLANK:s;
 }
 function originStrOrDefault(v){ const s = (v==null?'':String(v)).trim(); return s===''?'UNSPECIFIED':s; }
 
@@ -3989,7 +4005,8 @@ updateFilterVisibility();
 const RC7_HIER=[
   ['originzone','Origin Zone'],['destzone','Destination Zone'],['origincircle','Origin Circle'],
   ['destcircle','Destination Circle'],['origin','Origin'],['destname','Destination'],
-  ['cngr','CNGR'],['cnge','CNSGNE'],['customer','Customer'],['goods','Goods'],['grno','GR']
+  ['cngr','CNGR'],['cnge','CNSGNE'],['customer','Customer'],['goods','Goods'],['grno','GR'],
+  ['cngrtel','Consignor CNo.'],['cngrmail','Consignor Email'],['cngetel','Consignee CNo.'],['cngemail','Consignee Email']
 ];
 const RC7_METRICS={
   basicYield:{label:'Basic Yield',kind:'ratio',num:'freight',weight:'cweight',rateLabel:'Due to Rate',volumeLabel:'Due to Mix',invert:false,unit:'rate'},
@@ -7107,6 +7124,7 @@ App.filters.destlane1 = [];
 App.dims.destlane1 = [];
 YIELD_HIER.push(['originlane','Origin Lane'],['destlane1','Dest Lane (L1)'],['destlane2','Dest Lane (L2)'],['destlane3','Dest Lane (L3)']);
 const LANE_HIER_FIELDS = new Set(['originlane','destlane1','destlane2','destlane3']);
+YIELD_HIER.push(['cngrtel','Consignor CNo.'],['cngrmail','Consignor Email'],['cngetel','Consignee CNo.'],['cngemail','Consignee Email']);
 
 const LANE_METRIC_CATALOG = [
   {key:'count',  label:'GR Count',      type:'count', unit:''},
@@ -7518,14 +7536,17 @@ renderYieldHierarchySelector = function(){
   const selected = new Set(App.yieldHierarchyLevels||[]);
   [['yieldHierOptions'],['ywHierOptions']].forEach(([hostId])=>{
     const host = document.getElementById(hostId); if(!host) return;
-    const geo = YIELD_HIER.filter(h=>!LANE_HIER_FIELDS.has(h[0]));
+    const geo = YIELD_HIER.filter(h=>!LANE_HIER_FIELDS.has(h[0])&&!CONTACT_FIELDS.has(h[0]));
     const lane = YIELD_HIER.filter(h=>LANE_HIER_FIELDS.has(h[0]));
+    const contact = YIELD_HIER.filter(h=>CONTACT_FIELDS.has(h[0]));
     const optHtml = (field,label)=>`<label class="yield-hier-option"><input type="checkbox" value="${field}" ${selected.has(field)?'checked':''}> <span>${label}</span></label>`;
     host.innerHTML =
       '<div style="font-size:10px;font-weight:700;color:#8a92a3;text-transform:uppercase;letter-spacing:.4px;padding:2px 4px;">Geographic</div>'+
       geo.map(([f,l])=>optHtml(f,l)).join('')+
       '<div style="font-size:10px;font-weight:700;color:#8a92a3;text-transform:uppercase;letter-spacing:.4px;padding:6px 4px 2px;border-top:1px solid var(--border);margin-top:4px;">Lane</div>'+
-      lane.map(([f,l])=>optHtml(f,l)).join('');
+      lane.map(([f,l])=>optHtml(f,l)).join('')+
+      '<div style="font-size:10px;font-weight:700;color:#8a92a3;text-transform:uppercase;letter-spacing:.4px;padding:6px 4px 2px;border-top:1px solid var(--border);margin-top:4px;">Contact</div>'+
+      contact.map(([f,l])=>optHtml(f,l)).join('');
     host.querySelectorAll('input').forEach(cb=>cb.onchange=()=>{
       const set = new Set(App.yieldHierarchyLevels||[]);
       cb.checked?set.add(cb.value):set.delete(cb.value);
@@ -15933,13 +15954,15 @@ function normalizeHier(p){
   const sig=labels.map(l=>l.querySelector('input').value).join(',');
   if(host.dataset.uxg===sig && host.classList.contains('ux-hgrid') && host.querySelector(':scope > .ux-hh')) return;
   host.dataset.uxg=sig; host.classList.add('ux-hgrid');
-  [...host.children].forEach(c=>{ if(c.tagName!=='LABEL' && /^(geographic|lane)$/i.test(c.textContent.trim())) c.remove(); });
+  [...host.children].forEach(c=>{ if(c.tagName!=='LABEL' && /^(geographic|lane|contact)$/i.test(c.textContent.trim())) c.remove(); });
   host.querySelectorAll(':scope > .ux-hh').forEach(x=>x.remove());
   labels.forEach(l=>l.classList.add('yield-hier-option'));
-  const geo=labels.filter(l=>!LANE_F.has(l.querySelector('input').value)), lane=labels.filter(l=>LANE_F.has(l.querySelector('input').value));
+  const CON_F=new Set(['cngrtel','cngrmail','cngetel','cngemail']), vOf=l=>l.querySelector('input').value;
+  const geo=labels.filter(l=>!LANE_F.has(vOf(l))&&!CON_F.has(vOf(l))), lane=labels.filter(l=>LANE_F.has(vOf(l))), contact=labels.filter(l=>CON_F.has(vOf(l)));
   const h1=document.createElement('div'); h1.className='ux-hh'; h1.textContent='Geographic'; host.appendChild(h1);
   geo.forEach(l=>host.appendChild(l));
   if(lane.length){ const h2=document.createElement('div'); h2.className='ux-hh lane'; h2.textContent='Lane'; host.appendChild(h2); lane.forEach(l=>host.appendChild(l)); }
+  if(contact.length){ const h3=document.createElement('div'); h3.className='ux-hh lane'; h3.textContent='Contact'; host.appendChild(h3); contact.forEach(l=>host.appendChild(l)); }
 }
 function normalizeAll(){ $$('.yield-hier-panel').forEach(p=>{ try{ normalizeHier(p); }catch(e){} }); }
 let nt=null;
@@ -18185,7 +18208,7 @@ function panel(pg,t){
 function mainField(t,st){ return t.main||st.by; }
 /* levels that can be ticked, and the + drill order (the levels after the name column, down to GR) */
 function levelOpts(t,st){ const m=mainField(t,st); return HIER().filter(([f])=>f!==m); }
-function drillLevels(t,st){ const H=HIER().filter(([f])=>!LANE_ONLY.has(f)), i=H.findIndex(h=>h[0]===mainField(t,st)); return H.slice(i+1); }
+function drillLevels(t,st){ const H=HIER().filter(([f])=>!LANE_ONLY.has(f)&&!(typeof CONTACT_FIELDS!=='undefined'&&CONTACT_FIELDS.has(f))), i=H.findIndex(h=>h[0]===mainField(t,st)); return H.slice(i+1); }
 function controls(pg,t,st){
   const pick=(k,label,opts)=>`<div class="biz-dd" data-dd="${k}"><button type="button">${esc(label)}</button><div class="biz-pop">${opts.map(([v,l])=>`<div class="biz-opt${String(st[k])===String(v)?' sel':''}" data-k="${k}" data-v="${v}">${esc(l)}</div>`).join('')}${k==='top'?`<div class="biz-num">Type: <input type="number" min="1" step="1" data-topnum placeholder="e.g. 12" value="${[5,10,20,0].includes(+st.top)?'':st.top}"></div>`:''}</div></div>`;
   let h=pick('scope','Scope: '+(st.scope==='zone'?'Zone Wise':'Pan India'),[['pan','Pan India'],['zone','Zone Wise']]);
@@ -19581,7 +19604,7 @@ if(!ST.meas) ST.meas=MEASH.map(m=>m[0]).filter(k=>k!=='am');
 if(!Array.isArray(ST.xm)) ST.xm=[];
 /* Hierarchy Levels (multi-select, in tick order, like the tables above). Uptrade / Downtrade is judged on the ticked
    combination, e.g. Origin Zone › Party = each zone + party pair. 'party' = the field picked in Party. */
-const HLV=[['originzone','Origin Zone'],['destzone','Destination Zone'],['origincircle','Origin Circle'],['destcircle','Destination Circle'],['party','Party'],['origin','Origin (Branch)'],['destname','Destination']];
+const HLV=[['originzone','Origin Zone'],['destzone','Destination Zone'],['origincircle','Origin Circle'],['destcircle','Destination Circle'],['party','Party'],['origin','Origin (Branch)'],['destname','Destination'],['cngrtel','Consignor CNo.'],['cngrmail','Consignor Email'],['cngetel','Consignee CNo.'],['cngemail','Consignee Email']];
 if(!Array.isArray(ST.levels)||!ST.levels.length) ST.levels=['party','origin'];
 const mi=k=>{ const p=String(k).split('-'); return (+p[0])*12+(+p[1]-1); };
 const mk=i=>Math.floor(i/12)+'-'+String(i%12+1).padStart(2,'0');
