@@ -603,49 +603,68 @@ function GRA_trimMirror_(ss, s, dry) {
   var head = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(String);
   var di = GRA_col_(head, s.DATE_COLUMN), ki = GRA_col_(head, s.KEY_COLUMN);
   if (di < 0 || ki < 0) return 'Mirror: ' + s.DATE_COLUMN + ' / ' + s.KEY_COLUMN + ' not found, trim skipped';
-  var n = sh.getLastRow() - 1;
-  var dates = sh.getRange(2, di + 1, n, 1).getValues(), keys = sh.getRange(2, ki + 1, n, 1).getValues();
-  var cutoff = GRA_cutoffIso_(s), keySets = {}, drop = [], notArchived = 0, dropHalves = {};
-  for (var r = 0; r < n; r++) {
-    var iso = GRA_iso_(dates[r][0]);
-    if (!iso || iso >= cutoff) continue;
-    var hk = GRA_halfOf_(iso).key;
-    if (keySets[hk] === undefined) keySets[hk] = GRA_archivedKeys_(ss, hk);
-    if (keySets[hk] && keySets[hk][GRA_norm_(keys[r][0])]) { drop.push(r + 2); dropHalves[hk] = 1; } else notArchived++;
-  }
-  var refill = dry ? false : GRA_noteRefill_(cutoff, Object.keys(dropHalves));
-  var msg = 'Mirror: ' + GRA_fmt_(drop.length) + ' rows older than ' + cutoff + (dry ? ' will be removed' : ' removed') +
-            (notArchived ? ', ' + GRA_fmt_(notArchived) + ' older rows kept because they are not in an archive' : '');
-  if (refill) {
-    msg += ' | ENGINE IS REFILLING THE MIRROR: add the GRA_mirrorFilter hook to the engine';
+  var cutoff = GRA_cutoffIso_(s), keySets = {};
+  // Rows to remove: older than the cutoff AND their GR NO is in the verified archive of their half-year.
+  var scan = function () {
+    var n = sh.getLastRow() - 1;
+    var dates = sh.getRange(2, di + 1, n, 1).getValues(), keys = sh.getRange(2, ki + 1, n, 1).getValues();
+    var out = { drop: [], notArchived: 0, halves: {} };
+    for (var r = 0; r < n; r++) {
+      var iso = GRA_iso_(dates[r][0]);
+      if (!iso || iso >= cutoff) continue;
+      var hk = GRA_halfOf_(iso).key;
+      if (keySets[hk] === undefined) keySets[hk] = GRA_archivedKeys_(ss, hk);
+      if (keySets[hk] && keySets[hk][GRA_norm_(keys[r][0])]) { out.drop.push(r + 2); out.halves[hk] = 1; } else out.notArchived++;
+    }
+    return out;
+  };
+  var found = scan();
+  var msg = function (f, verb) {
+    return 'Mirror: ' + GRA_fmt_(f.drop.length) + ' rows older than ' + cutoff + ' ' + verb +
+      (f.notArchived ? ', ' + GRA_fmt_(f.notArchived) + ' older rows kept because they are not in an archive' : '');
+  };
+  if (dry || !found.drop.length) return msg(found, dry ? 'will be removed' : 'removed');
+  // the engine also writes this tab: hold its lock only for the sort + delete
+  var eng = LockService.getScriptLock();
+  if (!eng.tryLock(30000)) return msg(found, 'to remove (next run, engine busy)');
+  try {
+    // The engine writes rows in GR NO order, so the old rows are spread all over the tab and deleting them one
+    // block at a time (thousands of deleteRows calls) ran past the 6-minute limit. Sorted by date, they sit in a
+    // few blocks at the top and go in a few calls.
+    sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).sort({ column: di + 1, ascending: true });
+    SpreadsheetApp.flush();
+    found = scan();
+    var drop = found.drop;
+    if (drop.length) {
+      var runs = [], start = drop[0], prev = drop[0];
+      for (var i = 1; i <= drop.length; i++) {
+        if (i < drop.length && drop[i] === prev + 1) { prev = drop[i]; continue; }
+        runs.push([start, prev - start + 1]);
+        if (i < drop.length) { start = prev = drop[i]; }
+      }
+      for (var j = runs.length - 1; j >= 0; j--) sh.deleteRows(runs[j][0], runs[j][1]);
+      SpreadsheetApp.flush();
+    }
+  } finally { eng.releaseLock(); }
+  // Noted only after the rows are really gone, so a run that stopped half way (or was skipped) is not taken for an
+  // engine refill on the next run.
+  var out = msg(found, 'removed');
+  if (GRA_noteRefill_(cutoff, Object.keys(found.halves))) {
+    out += ' | ENGINE IS REFILLING THE MIRROR: add the GRA_mirrorFilter hook to the engine';
     GRA_mail_(s, 'GR Archive: the mirror is being refilled',
       '<p>Old rows that were removed from the mirror tab were written back by the engine refresh. Add <code>rows = GRA_mirrorFilter(headers, rows)</code> to the engine code that writes the mirror.</p>');
   }
-  if (dry || !drop.length) return msg;
-  // the engine also writes this tab: hold its lock only for the few seconds of the delete
-  var eng = LockService.getScriptLock();
-  if (!eng.tryLock(30000)) return msg.replace(' removed', ' to remove (next run, engine busy)');
-  try {
-  // delete contiguous runs from the bottom up
-  var runs = [], start = drop[0], prev = drop[0];
-  for (var i = 1; i <= drop.length; i++) {
-    if (i < drop.length && drop[i] === prev + 1) { prev = drop[i]; continue; }
-    runs.push([start, prev - start + 1]);
-    if (i < drop.length) { start = prev = drop[i]; }
-  }
-  for (var j = runs.length - 1; j >= 0; j--) sh.deleteRows(runs[j][0], runs[j][1]);
-  } finally { eng.releaseLock(); }
-  return msg;
+  return out;
 }
 
 /** True when rows of a half-year that was already trimmed (same cutoff) show up again (engine refill). */
 function GRA_noteRefill_(cutoff, halves) {
   var p = PropertiesService.getScriptProperties();
-  var done = JSON.parse(p.getProperty('GRA_TRIMMED') || 'null') || {};
+  var done = JSON.parse(p.getProperty('GRA_TRIMMED_V2') || 'null') || {};
   if (done.cutoff !== cutoff) done = { cutoff: cutoff, halves: [] };
   var again = halves.some(function (h) { return done.halves.indexOf(h) >= 0; });
   halves.forEach(function (h) { if (done.halves.indexOf(h) < 0) done.halves.push(h); });
-  p.setProperty('GRA_TRIMMED', JSON.stringify(done));
+  p.setProperty('GRA_TRIMMED_V2', JSON.stringify(done));
   return again;
 }
 
