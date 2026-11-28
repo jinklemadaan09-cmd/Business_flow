@@ -85,17 +85,24 @@ function GRA_openFolder() {
 
 /**
  * Hook for the engine: call it just before the engine writes the DASHBOARD_MASTER mirror, so the mirror
- * only ever gets the recent months (plus any older half-year that is not archived yet).
+ * only ever gets the recent months (plus any older GR that is not in a verified archive yet).
  *   rows = GRA_mirrorFilter(headers, rows);
  */
 function GRA_mirrorFilter(headers, rows) {
   var ss = GRA_engineSs_(), s = GRA_settings_(ss);
   var di = GRA_col_(headers, s.DATE_COLUMN);
   if (di < 0) return rows;
-  var cutoff = GRA_cutoffIso_(s), archived = GRA_archivedHalves_(ss);
+  var ki = GRA_col_(headers, s.KEY_COLUMN);
+  if (ki < 0) return rows;
+  // An old row leaves the sheet only when its own GR NO is in the verified archive of its half-year (same rule as
+  // the mirror trim). A late GR added after the archive was built stays until the rebuilt archive holds it.
+  var cutoff = GRA_cutoffIso_(s), keySets = {};
   return rows.filter(function (r) {
     var iso = GRA_iso_(r[di]);
-    return !iso || iso >= cutoff || !archived[GRA_halfOf_(iso).key];
+    if (!iso || iso >= cutoff) return true;
+    var hk = GRA_halfOf_(iso).key;
+    if (keySets[hk] === undefined) keySets[hk] = GRA_archivedKeys_(ss, hk);
+    return !(keySets[hk] && keySets[hk][GRA_norm_(r[ki])]);
   });
 }
 
@@ -672,12 +679,6 @@ function GRA_cutoffIso_(s) {
   var keep = Math.max(1, Number(s.KEEP_MONTHS) || 6), d = new Date();
   var first = new Date(d.getFullYear(), d.getMonth() - (keep - 1), 1);
   return Utilities.formatDate(first, Session.getScriptTimeZone(), 'yyyy-MM-dd');
-}
-
-function GRA_archivedHalves_(ss) {
-  var out = {};
-  GRA_registry_(ss).forEach(function (x) { if (x.status === 'CURRENT') out[x.key] = 1; });
-  return out;
 }
 
 /**
